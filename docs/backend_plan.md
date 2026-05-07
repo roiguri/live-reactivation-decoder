@@ -629,7 +629,7 @@ ReactivationDecoder_App/
 │
 ├── tools/
 │   └── lslproxy/
-│       └── LSLproxy.exe           # Fixed path for the LSLReceiver to launch the proxy
+│       └── LSLProxy.exe           # Fixed path for the LSLReceiver to launch the proxy
 │
 ├── src/
 │   ├── main.py                    # Application entry point (Launches the PyQt UI)
