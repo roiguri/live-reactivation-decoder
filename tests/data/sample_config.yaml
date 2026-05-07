@@ -1,0 +1,46 @@
+experiment_info:
+  name: test_experiment
+
+preprocessing:
+  bandpass:
+    l_freq: 1.0
+    h_freq: 40.0
+    method: iir
+    notch: 50.0
+  resample:
+    target_rate: 250
+  ica:
+    n_components: 20
+    method: fastica
+    random_state: 42
+  epochs:
+    tmin: -0.2
+    tmax: 0.8
+    baseline: [null, 0]
+    reject: 1.0e-4
+  autoreject:
+    random_state: 42
+
+decoders:
+  model: LDA
+  params:
+    solver: lsqr
+    shrinkage: auto
+  cv:
+    k: 5
+  tasks:
+    - name: red decoder
+      pos_labels: [red]
+      neg_labels: [green, yellow]
+    - name: yellow decoder
+      pos_labels: [yellow]
+      neg_labels: [green, red]
+
+markers_mapping:
+  events:
+    - id: 1
+      name: red
+    - id: 2
+      name: green
+    - id: 3
+      name: yellow
