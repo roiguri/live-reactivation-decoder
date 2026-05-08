@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import time
@@ -12,6 +13,9 @@ try:
     import pylsl
 except ImportError:  # pragma: no cover - handled explicitly at runtime
     pylsl = None
+
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_STREAM_NAME = "NeuroneStream"
@@ -117,6 +121,11 @@ class LSLReceiver:
         self.inlet = None
         self._last_trigger_code = 0
 
+        logger.info(
+            f"LSLReceiver initialized: stream='{self.stream_name}', type='{self.stream_type}', "
+            f"proxy_path='{self.proxy_path}', launch_proxy={self.launch_proxy}"
+        )
+
     def _require_pylsl(self):
         if pylsl is None:
             raise RuntimeError("pylsl is required for LSLReceiver.")
@@ -124,6 +133,7 @@ class LSLReceiver:
 
     def _start_proxy_process(self) -> None:
         if self.proxy_process is not None and self.proxy_process.poll() is None:
+            logger.debug("LSL proxy already running, skipping launch")
             return
 
         if not self.proxy_path.exists():
@@ -135,13 +145,26 @@ class LSLReceiver:
                 "Run this on the decoding machine or set launch_proxy=False."
             )
 
+        logger.info(f"Starting LSL proxy: {self.proxy_path}")
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         self.proxy_process = subprocess.Popen(
             [str(self.proxy_path)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             creationflags=creationflags,
         )
+        logger.debug(f"LSL proxy spawned with PID {self.proxy_process.pid}")
+
+        # Wait briefly for proxy to initialize and check if it died immediately
+        time.sleep(0.5)
+        if self.proxy_process.poll() is not None:
+            # Proxy died immediately - capture diagnostics
+            _, stderr = self.proxy_process.communicate(timeout=1.0)
+            stderr_text = stderr.decode("utf-8", errors="replace") if stderr else "(no error output)"
+            raise RuntimeError(
+                f"LSL proxy executable failed to start. Exit code: {self.proxy_process.returncode}. "
+                f"Error output: {stderr_text}"
+            )
 
     def _resolve_stream(self, timeout_sec: float):
         pylsl_module = self._require_pylsl()
@@ -176,26 +199,65 @@ class LSLReceiver:
     def set_stream(self, stream_name: str) -> None:
         self.stream_name = stream_name
 
-    def start(self) -> bool:
+    def start(self) -> None:
         if self.launch_proxy:
             self._start_proxy_process()
 
+        logger.info(
+            f"Resolving LSL stream '{self.stream_name}' (type='{self.stream_type}', "
+            f"timeout={self.resolve_timeout_sec}s)"
+        )
         deadline = time.monotonic() + self.resolve_timeout_sec
         resolved_stream = None
+        attempt_count = 0
 
         while time.monotonic() < deadline:
             remaining = max(0.1, deadline - time.monotonic())
             resolved_stream = self._resolve_stream(timeout_sec=min(0.5, remaining))
+            attempt_count += 1
             if resolved_stream is not None:
+                logger.debug(f"Stream resolved on attempt {attempt_count}")
                 break
+            logger.debug(f"Attempt {attempt_count} failed, retrying...")
 
         if resolved_stream is None:
-            return False
+            raise RuntimeError(
+                f"Stream '{self.stream_name}' not found after {self.resolve_timeout_sec}s "
+                f"({attempt_count} attempts). Check that NeurOne is streaming and LSLProxy is running."
+            )
+
+        # Validate stream properties before connecting
+        stream_info = resolved_stream
+        nominal_rate = stream_info.nominal_srate()
+        channel_count = stream_info.channel_count()
+
+        logger.debug(
+            f"Stream properties: {channel_count} channels @ {nominal_rate} Hz, "
+            f"type='{stream_info.type()}', source='{stream_info.source_id()}'"
+        )
+
+        expected_channels = self.eeg_channel_count + 1  # EEG + trigger channel
+        if nominal_rate != 1000:
+            raise ValueError(
+                f"Expected 1000 Hz stream, got {nominal_rate} Hz. "
+                f"Check NeurOne hardware configuration."
+            )
+
+        if channel_count != expected_channels:
+            raise ValueError(
+                f"Expected {expected_channels} channels (64 EEG + 1 trigger), got {channel_count}. "
+                f"Check NeurOne channel configuration."
+            )
+
+        logger.info(
+            f"Connected to stream '{stream_info.name()}': "
+            f"{channel_count} channels @ {nominal_rate} Hz"
+        )
 
         pylsl_module = self._require_pylsl()
         self.inlet = pylsl_module.StreamInlet(resolved_stream, recover=True)
         self._last_trigger_code = 0
-        return True
+        logger.info("LSLReceiver started successfully")
 
     def pull_new_data(self) -> tuple[np.ndarray, np.ndarray, list[int]]:
         if self.inlet is None:
@@ -211,12 +273,22 @@ class LSLReceiver:
                 break
 
             timestamps_array = np.asarray(timestamps, dtype=float)
-            eeg_chunk, chunk_markers, self._last_trigger_code = split_eeg_and_markers(
-                samples,
-                eeg_channel_count=self.eeg_channel_count,
-                trigger_channel_index=self.trigger_channel_index,
-                previous_trigger_code=self._last_trigger_code,
-            )
+
+            try:
+                eeg_chunk, chunk_markers, self._last_trigger_code = split_eeg_and_markers(
+                    samples,
+                    eeg_channel_count=self.eeg_channel_count,
+                    trigger_channel_index=self.trigger_channel_index,
+                    previous_trigger_code=self._last_trigger_code,
+                )
+            except ValueError as e:
+                # Graceful degradation: skip malformed chunk and continue
+                chunk_shape = np.asarray(samples).shape if len(samples) > 0 else "empty"
+                logger.warning(f"Malformed chunk received: {e}. Chunk shape: {chunk_shape}. Skipping.")
+                continue
+
+            if len(chunk_markers) > 0:
+                logger.debug(f"Detected markers: {chunk_markers}")
 
             timestamps_parts.append(timestamps_array)
             eeg_parts.append(eeg_chunk)
@@ -229,19 +301,30 @@ class LSLReceiver:
                 [],
             )
 
+        total_samples = sum(part.shape[0] for part in eeg_parts)
+        logger.debug(f"Pulled {total_samples} samples, {len(markers)} markers")
+
         return np.concatenate(timestamps_parts), np.vstack(eeg_parts), markers
 
     def stop(self) -> None:
+        logger.info("Stopping LSLReceiver")
+
         if self.inlet is not None and hasattr(self.inlet, "close_stream"):
             self.inlet.close_stream()
+            logger.debug("LSL inlet closed")
         self.inlet = None
 
         if self.proxy_process is not None:
             if self.proxy_process.poll() is None:
+                logger.debug("Terminating LSL proxy process")
                 self.proxy_process.terminate()
                 try:
                     self.proxy_process.wait(timeout=2.0)
+                    logger.debug("LSL proxy terminated gracefully")
                 except subprocess.TimeoutExpired:
+                    logger.warning("LSL proxy did not terminate gracefully, killing process")
                     self.proxy_process.kill()
                     self.proxy_process.wait(timeout=2.0)
             self.proxy_process = None
+
+        logger.info("LSLReceiver stopped")

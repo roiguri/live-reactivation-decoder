@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from unittest.mock import MagicMock, Mock
+
 import numpy as np
 import pytest
 
@@ -105,3 +107,79 @@ def test_stop_closes_inlet_when_present():
 
     assert inlet.closed is True
     assert receiver.inlet is None
+
+
+def test_pull_new_data_skips_malformed_chunks_gracefully(caplog):
+    """Test that malformed chunks are logged and skipped, allowing data reception to continue."""
+    # Good chunk followed by malformed chunk (wrong shape) followed by another good chunk
+    good_chunk1 = _chunk_from_trigger_values([0, 1 << 8])
+    malformed_chunk = np.zeros((2, 63), dtype=float)  # Wrong channel count!
+    good_chunk2 = _chunk_from_trigger_values([0, 2 << 8])
+
+    inlet = FakeInlet(
+        [
+            (good_chunk1, [1.0, 1.001]),
+            (malformed_chunk, [1.002, 1.003]),  # This will be skipped
+            (good_chunk2, [1.004, 1.005]),
+        ]
+    )
+    receiver = LSLReceiver(launch_proxy=False)
+    receiver.inlet = inlet
+
+    timestamps, eeg_chunk, markers = receiver.pull_new_data()
+
+    # Should have data from good chunks only (2 + 2 samples)
+    assert timestamps.shape[0] == 4
+    assert eeg_chunk.shape == (4, 64)
+    assert markers == [1, 2]
+
+    # Should have logged a warning about the malformed chunk
+    assert "Malformed chunk received" in caplog.text
+    assert "Skipping" in caplog.text
+
+
+def test_start_raises_runtime_error_when_stream_not_found():
+    """Test that start() raises RuntimeError with helpful message when stream cannot be resolved."""
+    receiver = LSLReceiver(stream_name="NonExistentStream", launch_proxy=False)
+
+    # Mock _resolve_stream to always return None (stream not found)
+    receiver._resolve_stream = Mock(return_value=None)
+
+    with pytest.raises(RuntimeError, match="Stream 'NonExistentStream' not found"):
+        receiver.start()
+
+
+def test_start_raises_value_error_when_sample_rate_wrong():
+    """Test that start() raises ValueError when stream has wrong sample rate."""
+    receiver = LSLReceiver(stream_name="TestStream", launch_proxy=False)
+
+    # Mock stream with wrong sample rate
+    mock_stream = MagicMock()
+    mock_stream.nominal_srate.return_value = 500  # Wrong! Should be 1000
+    mock_stream.channel_count.return_value = 65
+    mock_stream.name.return_value = "TestStream"
+    mock_stream.type.return_value = "EEG"
+    mock_stream.source_id.return_value = "test_source"
+
+    receiver._resolve_stream = Mock(return_value=mock_stream)
+
+    with pytest.raises(ValueError, match="Expected 1000 Hz stream, got 500 Hz"):
+        receiver.start()
+
+
+def test_start_raises_value_error_when_channel_count_wrong():
+    """Test that start() raises ValueError when stream has wrong channel count."""
+    receiver = LSLReceiver(stream_name="TestStream", launch_proxy=False)
+
+    # Mock stream with wrong channel count
+    mock_stream = MagicMock()
+    mock_stream.nominal_srate.return_value = 1000
+    mock_stream.channel_count.return_value = 32  # Wrong! Should be 65
+    mock_stream.name.return_value = "TestStream"
+    mock_stream.type.return_value = "EEG"
+    mock_stream.source_id.return_value = "test_source"
+
+    receiver._resolve_stream = Mock(return_value=mock_stream)
+
+    with pytest.raises(ValueError, match="Expected 65 channels"):
+        receiver.start()
