@@ -10,6 +10,7 @@ See [docs/backend_plan.md](docs/backend_plan.md) for the authoritative component
 
 ```
 online_decoder/
+├── scripts/            — Root-local helper entrypoints for dev/integration tasks
 ├── src/backend/
 │   ├── core/           — SettingsManager, Pydantic config models
 │   ├── offline_phase/  — OfflinePreprocessor, ModelEvaluator, ModelTrainer
@@ -32,6 +33,7 @@ online_decoder/
 # From online_decoder/ root
 pytest tests/
 pytest tests/ -v --cov=src   # with coverage
+python scripts/characterize_lsl.py --duration 10
 ```
 
 ## Config Schema
@@ -42,6 +44,7 @@ The experiment config lives in `experiment_config.yaml`. Schema is defined in `s
 
 Update CLAUDE.md when:
 - A new backend component directory is added under `src/backend/`
+- A new top-level workflow directory is added (for example `scripts/`)
 - A new project-wide convention is established (error handling, logging, naming, etc.)
 - The config schema structure changes significantly
 - New tooling is added that affects the development workflow
