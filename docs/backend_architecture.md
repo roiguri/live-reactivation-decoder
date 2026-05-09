@@ -18,11 +18,11 @@ Last reconciled with code on **2026-05-10**.
 
 **Offline phase implementation status (as of last reconciliation):**
 - ✅ `SettingsManager` + Pydantic config models (`src/backend/core/`)
-- ✅ `OfflinePreprocessor` (`src/backend/offline_phase/preprocessor.py`)
+- ✅ `OfflinePreprocessor` (`src/backend/offline_phase/preprocessor.py`) — accepts a pre-loaded `mne.io.Raw` via constructor; two-step pipeline: `run_step1_prepare_ica()` and `run_step2_finish_pipeline()`
 - ✅ `ModelEvaluator` (`src/backend/offline_phase/evaluator.py`)
 - ✅ `ModelTrainer` (`src/backend/offline_phase/trainer.py`)
 - ✅ Shared utilities (`src/backend/offline_phase/utils.py`) — `build_classifier`, `get_task_data`
-- 🔲 `OfflinePhaseOrchestrator` — planned; will own state management, bundling, and persistence
+- ✅ `OfflineOrchestrator` (`src/backend/offline_phase/orchestrator.py`) — single frontend entry point for Phase 1; owns state management, bundling, and `decoder_pipeline.joblib` export
 
 # Reactivation Decoder: Application Architecture Plan
 ## 1. System Overview & Frontend Integration
@@ -37,17 +37,18 @@ Because EEG processing and live inference are computationally demanding, mixing 
 ## 2. Phase 1: Offline Training
 **Context:** This phase occurs during the subject's break. Latency is not an issue here. The goal is to clean a large block of recorded .vhdr data, evaluate where the brain signal is strongest, let the user manually reject artifacts, and compile a final set of predictive models.
 
-**Status (2026-05-09):** `SettingsManager`, `OfflinePreprocessor`, `ModelEvaluator`, `ModelTrainer`, and shared `utils.py` are implemented. `OfflinePhaseOrchestrator` is planned but not committed — it will be the single frontend-facing entry point for Phase 1.
+**Status (2026-05-09):** `SettingsManager`, `OfflinePreprocessor`, `ModelEvaluator`, `ModelTrainer`, shared `utils.py`, and `OfflineOrchestrator` are all implemented.
 
 ### Data Flow & Communication
 
-1. UI initializes `SettingsManager` and passes its outputs to `OfflinePhaseOrchestrator`.
-2. UI calls `orchestrator.run_step1_prepare_ica()`. Internally calls `OfflinePreprocessor`. Returns suggested bad components.
-3. UI presents these components. The researcher selects which to drop.
-4. UI calls `orchestrator.run_step2_finish_pipeline(exclude_components)`. Preprocessor finishes; orchestrator stores `epochs` and `online_state` internally.
-5. UI calls `orchestrator.run_evaluation()`. Internally calls `ModelEvaluator`. Returns AUC/TGM arrays for plotting.
-6. The researcher clicks a specific timepoint on the graph.
-7. UI calls `orchestrator.run_training(timepoint, output_dir)`. Internally calls `ModelTrainer`, then bundles the returned models with the stored `online_state` and saves `decoder_pipeline.joblib`. Returns spatial patterns and `mne.Info` for topomap display.
+1. UI initializes `SettingsManager` and `OfflineOrchestrator`.
+2. UI calls `orchestrator.set_file_path(data_dir)` then `orchestrator.load_raw_data()` to load the EEG file from disk.
+3. UI calls `orchestrator.run_step1_prepare_ica()`. Internally creates `OfflinePreprocessor` (with raw injected) and delegates. Returns ICA object and auto-suggested artifact components.
+4. UI presents ICA components. The researcher selects which to drop.
+5. UI calls `orchestrator.run_step2_finish_pipeline(exclude_components)`. Preprocessor finishes; orchestrator stores `epochs` internally.
+6. UI calls `orchestrator.run_evaluation()`. Internally calls `ModelEvaluator`. Returns AUC/TGM arrays for plotting.
+7. The researcher clicks a specific timepoint on the graph.
+8. UI calls `orchestrator.run_training(timepoint)`. Internally calls `ModelTrainer`, bundles models with preprocessor's `online_state`, and saves `decoder_pipeline.joblib`. Returns spatial patterns and `mne.Info` for topomap display.
 
 ### Component Map
 #### **1. Configuration Schema (`config_models.py`)**
@@ -70,7 +71,7 @@ Because EEG processing and live inference are computationally demanding, mixing 
 
 * **Role:** The Heavy Cleaner. Loads continuous data, applies zero-phase filters, calculates ICA, and epochs the data. Crucially, it records exactly what it did (the online_state) so Phase 2 can replicate the spatial transforms.
 
-* **Inputs:** .vhdr file path, preprocessing settings.
+* **Inputs:** Pre-loaded `mne.io.Raw` object (via constructor), preprocessing settings. File I/O is the caller's responsibility (`OfflineOrchestrator._load_eeg_raw()`).
 
 * **Outputs:** Cleaned mne.Epochs and online_state (ICA weights, dropped channels).
 
@@ -90,13 +91,13 @@ Because EEG processing and live inference are computationally demanding, mixing 
 
 * **Outputs:** Fitted models (dict), spatial patterns (dict of ndarrays), mne.Info. Does **not** write to disk.
 
-#### **6. OfflinePhaseOrchestrator** *(planned)*
+#### **6. OfflineOrchestrator**
 
-* **Role:** The Façade. The single backend entry point for the Phase 1 UI. Holds intermediate state (epochs, online_state, eval results) between user-triggered steps, calls the individual backend classes in the correct order, and owns the final bundling and `decoder_pipeline.joblib` export.
+* **Role:** The Façade. The single backend entry point for the Phase 1 UI. Owns file I/O (raw loading), holds intermediate state (epochs, eval results) between user-triggered steps, calls the individual backend classes in the correct order, and owns the final bundling and `decoder_pipeline.joblib` export.
 
-* **Inputs:** data directory, SettingsManager.
+* **Inputs:** `SettingsManager`, output directory. Caller sets data directory via `set_file_path()`.
 
-* **Outputs:** Per-step return dicts shaped for the UI's specific display needs.
+* **Outputs:** Per-step return dicts shaped for the UI's specific display needs. Final `online_state` dict available via `get_online_state_for_live_phase()`.
 
 ### Components Interface
 ```python
@@ -317,79 +318,59 @@ class SettingsManager:
 
 class OfflinePreprocessor:
     """
-    Executes the offline cleaning pipeline for a single subject and session.
-    Designed for a two-step execution to allow manual GUI intervention during ICA.
+    Executes the offline cleaning pipeline for a single subject recording.
+    Designed for two-step execution to allow manual ICA artifact rejection between steps.
+    Caller is responsible for loading raw data and passing it via the constructor.
 
     **Status:** ✅ Implemented in `src/backend/offline_phase/preprocessor.py`
     """
 
-    def __init__(self, subject_dir: Path, session: str, preprocessing_settings: Dict[str, Any]):
-        self.subject_dir = Path(subject_dir)
-        self.session = session
-        self.subject_id = self.subject_dir.name
+    def __init__(
+        self,
+        data_dir: Path,
+        preprocessing_settings: dict[str, Any],
+        raw: Optional[mne.io.Raw] = None,
+    ) -> None:
+        self.data_dir = Path(data_dir)
+        self.subject_id = self.data_dir.name
         self.settings = preprocessing_settings
-
-        self.vhdr: Optional[Path] = self._find_vhdr()
-        self.raw: Optional[mne.io.Raw] = None
+        self.raw: Optional[mne.io.Raw] = raw
         self.epochs: Optional[mne.Epochs] = None
         self.ica: Optional[mne.preprocessing.ICA] = None
 
-    def run_step1_prepare_ica(self) -> List[int]:
+    def run_step1_prepare_ica(self) -> list[int]:
         """
-        Executes the first half of the preprocessing pipeline up to ICA fitting.
+        First half of the pipeline: filter, resample, bad-channel detection,
+        average reference, ICA fit + auto-detection of EOG/ECG components.
 
-        Steps taken:
-        1. Load Raw: Finds and loads the .vhdr file, applying a 10-20 montage.
-        2. Filter: Applies bandpass (IIR) and notch filters.
-        3. Resample: Downsamples the continuous data to the target rate.
-        4. Detect Bad Channels: Flags flat/noisy channels via Z-scores and interpolates them.
-        5. Reference: Re-references the EEG data to the average of all channels.
-        6. Fit ICA: Fits the ICA model on a temporarily 1Hz-highpassed copy of the data.
-        7. Auto-detect Artifacts: Uses MNE's find_bads_eog and find_bads_ecg to find noisy components.
+        Raises:
+            RuntimeError: if raw has not been set before calling.
 
         Returns:
-            List[int]: The indices of the auto-detected EOG/ECG components (suggestions for the user).
+            Suggested EOG/ECG component indices for user review.
         """
         pass
 
-    def run_step2_finish_pipeline(self,
-                                  exclude_components: List[int],
-                                  event_mapping: Dict[int, str],
-                                  output_dir: Path) -> None:
+    def run_step2_finish_pipeline(
+        self,
+        exclude_components: list[int],
+        event_mapping: dict[str, int],
+        output_dir: Path,
+    ) -> None:
         """
-        Executes the second half of the pipeline using the finalized ICA components.
-
-        Steps taken:
-        8. Apply ICA: Removes the specified components from the continuous continuous raw data.
-        9. Epoch: Slices the continuous data around triggers (using event_mapping),
-           applying tmin, tmax, baseline correction, and hard amplitude rejection.
-        10. AutoReject: Runs AutoReject to repair or drop remaining bad epochs.
-        11. Save: Exports the finalized mne.Epochs to a .fif file.
+        Second half of the pipeline: apply ICA, epoch, AutoReject, save .fif.
 
         Args:
-            exclude_components: The final list of ICA indices to remove (user overrides included).
-            event_mapping: Dictionary mapping integer trigger IDs to event names.
-            output_dir: Path to save the final .fif file.
+            exclude_components: Final ICA component indices to remove.
+            event_mapping: {event_name: trigger_id} — MNE convention.
+            output_dir: Directory to write the .fif epochs file.
         """
         pass
 
-    def export_online_state(self) -> Dict[str, Any]:
+    def export_online_state(self) -> dict[str, Any]:
         """
         Extracts the exact spatial transformations (interpolated channels, ICA weights,
         average reference projection) so they can be injected into the Live Inference Engine.
-        """
-        pass
-
-    def _find_vhdr(self) -> Optional[Path]:
-        """
-        Scans the subject_dir/session directory for a .vhdr file.
-        Logs a warning and returns the first match if multiple are found.
-        """
-        pass
-
-    def _load_raw(self) -> mne.io.Raw:
-        """
-        Loads the BrainVision file into memory and applies a standard 10-20 montage.
         """
         pass
 
@@ -554,68 +535,97 @@ class ModelTrainer:
         pass
 
 
-# ── Planned: OfflinePhaseOrchestrator ────────────────────────────────────────
-
-class OfflinePhaseOrchestrator:
+class OfflineOrchestrator:
     """
-    Façade over the Phase 1 backend classes. The single entry point for the
-    Phase 1 UI. Holds intermediate state (epochs, online_state, eval_results)
-    between user-triggered steps, and owns the final artifact bundling and export.
+    Façade over the Phase 1 backend classes. Single entry point for the Phase 1 UI.
+    Owns file I/O, holds intermediate state between user-triggered steps, and
+    bundles the final decoder_pipeline.joblib export.
 
-    **Status:** 🔲 Planned, not committed.
+    **Status:** ✅ Implemented in `src/backend/offline_phase/orchestrator.py`
+
+    Typical call sequence:
+        set_file_path(data_dir)
+        load_raw_data()
+        ica, suggested = run_step1_prepare_ica()
+        # user reviews ICA components, selects excluded_components
+        stats = run_step2_finish_pipeline(excluded_components)
+        eval_results = run_evaluation()
+        # user clicks timepoint on TGM plot
+        result = run_training(timepoint)
+        online_state = get_online_state_for_live_phase()
     """
 
-    def __init__(self, data_dir: Path, settings_manager: "SettingsManager") -> None:
+    def __init__(self, settings_manager: SettingsManager, output_dir: Path) -> None:
+        pass
+
+    def set_file_path(self, data_dir: str | Path) -> None:
+        """Store the data directory containing the subject's .vhdr file."""
+        pass
+
+    def load_raw_data(self) -> None:
         """
-        Args:
-            data_dir: Directory containing the subject's raw .vhdr file.
-            settings_manager: Validated settings instance.
+        Load the raw EEG file from disk.
+
+        Raises:
+            ValueError: if set_file_path() has not been called.
+            FileNotFoundError: if no .vhdr file exists in the data directory.
         """
         pass
 
-    def run_step1_prepare_ica(self) -> Dict[str, Any]:
+    def run_step1_prepare_ica(self) -> tuple[mne.preprocessing.ICA, list[int]]:
         """
-        Delegates to OfflinePreprocessor.run_step1_prepare_ica().
+        Run signal preprocessing and fit ICA.
 
         Returns:
-            {"suggested_components": list[int]}
+            (ica_obj, suggested_components)
+
+        Raises:
+            RuntimeError: if load_raw_data() has not been called.
         """
         pass
 
-    def run_step2_finish_pipeline(self, exclude_components: List[int]) -> Dict[str, Any]:
+    def run_step2_finish_pipeline(self, excluded_components: list[int]) -> dict[str, Any]:
         """
-        Delegates to OfflinePreprocessor.run_step2_finish_pipeline(), then
-        stores epochs and online_state internally for subsequent steps.
+        Apply ICA, epoch, and run AutoReject.
 
         Returns:
-            {"n_epochs": int, "event_counts": dict[str, int], "channel_names": list[str]}
+            {"n_epochs": int}
+
+        Raises:
+            RuntimeError: if run_step1_prepare_ica() has not been called.
         """
         pass
 
-    def run_evaluation(self) -> Dict[str, Any]:
+    def run_evaluation(self) -> dict[str, Any]:
         """
-        Delegates to ModelEvaluator.run_evaluation() using stored epochs.
+        Run temporal generalization CV to surface the best decoding timepoint.
 
         Returns:
-            The full evaluator result dict (times, AUC curves, TGMs, suggested_timepoint).
+            Full evaluator result dict (times, AUC curves, TGMs, suggested_timepoint).
+
+        Raises:
+            RuntimeError: if run_step2_finish_pipeline() has not been called.
         """
         pass
 
-    def run_training(self, timepoint: float, output_dir: Path) -> Dict[str, Any]:
+    def run_training(self, timepoint: float) -> dict[str, Any]:
         """
-        Delegates to ModelTrainer.run_training(), then bundles the returned models
-        with the stored online_state and saves decoder_pipeline.joblib.
-
-        Args:
-            timepoint: Time in seconds selected by the researcher.
-            output_dir: Directory to write decoder_pipeline.joblib.
+        Train classifiers at the given timepoint, bundle online state, save joblib.
 
         Returns:
-            {
-                "model_filepath":   Path,
-                "spatial_patterns": {task_name: np.ndarray},
-                "mne_info":         mne.Info,
-            }
+            {"model_filepath": Path, "spatial_patterns": dict, "mne_info": mne.Info}
+
+        Raises:
+            RuntimeError: if run_evaluation() has not been called.
+        """
+        pass
+
+    def get_online_state_for_live_phase(self) -> dict[str, Any]:
+        """
+        Return the bundled online state from RAM (bypasses disk I/O).
+
+        Raises:
+            RuntimeError: if run_training() has not been called.
         """
         pass
 ```
@@ -1221,7 +1231,7 @@ online_decoder/
 │       │   ├── preprocessor.py    # OfflinePreprocessor - Implemented
 │       │   ├── evaluator.py       # ModelEvaluator - Implemented
 │       │   ├── trainer.py         # ModelTrainer - Implemented
-│       │   └── orchestrator.py    # OfflinePhaseOrchestrator - Planned
+│       │   └── orchestrator.py    # OfflineOrchestrator - Implemented
 │       │
 │       └── online_phase/          # Phase 2 Classes
 │           ├── lsl_receiver.py        # LSLReceiver - Implemented
@@ -1250,7 +1260,8 @@ online_decoder/
     │   ├── conftest.py
     │   ├── test_preprocessor.py
     │   ├── test_evaluator.py
-    │   └── test_trainer.py
+    │   ├── test_trainer.py
+    │   └── test_orchestrator.py
     └── online_phase/
         ├── test_lsl_receiver.py
         ├── test_lsl_receiver_integration.py

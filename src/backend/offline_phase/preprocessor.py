@@ -16,33 +16,34 @@ class OfflinePreprocessor:
     Executes the offline cleaning pipeline for a single subject recording.
     Designed for two-step execution to allow manual ICA artifact rejection between steps.
 
+    Caller is responsible for loading raw data and passing it via the constructor.
+
     Step 1 — run_step1_prepare_ica():
-        1. Load raw BrainVision file and apply montage.
-        2. Band-pass + notch filter.
-        3. Resample to target rate.
-        4. Detect and interpolate bad channels.
-        5. Re-reference to average.
-        6. Fit ICA and auto-detect EOG/ECG components.
+        1. Band-pass + notch filter.
+        2. Resample to target rate.
+        3. Detect and interpolate bad channels.
+        4. Re-reference to average.
+        5. Fit ICA and auto-detect EOG/ECG components.
         Returns suggested component indices for user review.
 
     Step 2 — run_step2_finish_pipeline():
-        7. Apply ICA with user-confirmed component exclusions.
-        8. Epoch around stimulus triggers.
-        9. AutoReject to repair/drop bad epochs.
-        10. Save cleaned epochs to .fif.
+        6. Apply ICA with user-confirmed component exclusions.
+        7. Epoch around stimulus triggers.
+        8. AutoReject to repair/drop bad epochs.
+        9. Save cleaned epochs to .fif.
     """
 
     def __init__(
         self,
         data_dir: Path,
         preprocessing_settings: dict[str, Any],
+        raw: Optional[mne.io.Raw] = None,
     ) -> None:
         self.data_dir = Path(data_dir)
         self.subject_id = self.data_dir.name
         self.settings = preprocessing_settings
 
-        self.vhdr: Optional[Path] = self._find_vhdr()
-        self.raw: Optional[mne.io.Raw] = None
+        self.raw: Optional[mne.io.Raw] = raw
         self.epochs: Optional[mne.Epochs] = None
         self.ica: Optional[mne.preprocessing.ICA] = None
         self._bad_channels: list[str] = []
@@ -53,31 +54,29 @@ class OfflinePreprocessor:
     def run_step1_prepare_ica(self) -> list[int]:
         """
         First half of the pipeline:
-            1. Load raw BrainVision file and apply montage.
-            2. Band-pass + notch filter.
-            3. Resample to target rate.
-            4. Detect and interpolate bad channels.
-            5. Re-reference to average.
-            6. Fit ICA and auto-detect EOG/ECG artifact components.
+            1. Band-pass + notch filter.
+            2. Resample to target rate.
+            3. Detect and interpolate bad channels.
+            4. Re-reference to average.
+            5. Fit ICA and auto-detect EOG/ECG artifact components.
 
         Returns:
             Suggested EOG/ECG component indices for the user to review.
 
         Raises:
-            FileNotFoundError: if no .vhdr file was found in data_dir.
+            RuntimeError: if raw data has not been provided (via constructor or direct assignment).
         """
-        if self.vhdr is None:
-            raise FileNotFoundError(
-                f"No .vhdr file found in {self.data_dir}"
+        if self.raw is None:
+            raise RuntimeError(
+                "raw must be set before calling run_step1_prepare_ica(). "
+                "Pass raw to the constructor or assign self.raw directly."
             )
 
-        self.raw = self._load_raw()
         self._filter()
         self._resample()
         self._detect_bad_channels()
         self._reference()
         suggested = self._fit_ica()
-
         logger.info("ICA fitted. Suggested components: %s", suggested)
         return suggested
 
@@ -151,45 +150,6 @@ class OfflinePreprocessor:
         }
 
     # ── Private: Stage 1 ─────────────────────────────────────────────────────
-
-    def _find_vhdr(self) -> Optional[Path]:
-        vhdrs = list(self.data_dir.glob("*.vhdr"))
-        if not vhdrs:
-            logger.warning("No .vhdr found in %s", self.data_dir)
-            return None
-        if len(vhdrs) > 1:
-            logger.warning(
-                "Multiple .vhdr files in %s, using %s", self.data_dir, vhdrs[0].name
-            )
-        return vhdrs[0]
-
-    def _load_raw(self) -> mne.io.Raw:
-        # TODO: recordings that exceed available RAM will raise MemoryError here.
-        # Consider supporting mne memmap preload (preload="path/to/file.bin") so
-        # the OS pages signal data from disk without a contiguous RAM allocation.
-        raw = mne.io.read_raw_brainvision(self.vhdr, preload=True, verbose=False)
-        montage = mne.channels.make_standard_montage("standard_1020")
-        raw.set_montage(montage, match_case=False, on_missing="warn")
-
-        # TODO: consider this code part - added due to issues with emg channel in test data
-        # Keep only EEG channels with a known montage position plus physiological
-        # reference channels (EOG/ECG) needed for ICA artifact detection.
-        # Everything else (e.g. EMG recorded as EEG type, stim, misc) is dropped.
-        montage_names = {ch.lower() for ch in montage.ch_names}
-        eeg_picks = [
-            i for i in mne.pick_types(raw.info, eeg=True)
-            if raw.ch_names[i].lower() in montage_names
-        ]
-        eog_picks = mne.pick_types(raw.info, eog=True).tolist()
-        ecg_picks = mne.pick_types(raw.info, ecg=True).tolist()
-        keep = sorted(set(eeg_picks) | set(eog_picks) | set(ecg_picks))
-        dropped = [raw.ch_names[i] for i in range(len(raw.ch_names)) if i not in keep]
-        if dropped:
-            logger.info("Dropping non-EEG/EOG/ECG channels: %s", dropped)
-        raw.pick(keep)
-        # End TODO
-
-        return raw
 
     def _filter(self) -> None:
         bp = self.settings["bandpass"]

@@ -16,46 +16,31 @@ import pytest
 from backend.offline_phase.preprocessor import OfflinePreprocessor
 
 
-# ── Stage 1: File discovery ────────────────────────────────────────────────
+# ── Stage 1: Init ─────────────────────────────────────────────────────────
 
-class TestStage1FindVhdr:
-    def test_finds_single_vhdr(self, tmp_path):
-        data_dir = tmp_path / "Sub_001"
-        data_dir.mkdir()
-        vhdr = data_dir / "test.vhdr"
-        vhdr.touch()
-
-        p = OfflinePreprocessor(data_dir, {})
-        assert p.vhdr == vhdr
-
-    def test_returns_none_when_missing(self, tmp_path):
-        data_dir = tmp_path / "Sub_001"
-        data_dir.mkdir()
-        p = OfflinePreprocessor(data_dir, {})
-        assert p.vhdr is None
-
-    def test_uses_first_when_multiple(self, tmp_path, caplog):
-        data_dir = tmp_path / "Sub_001"
-        data_dir.mkdir()
-        (data_dir / "a.vhdr").touch()
-        (data_dir / "b.vhdr").touch()
-
-        import logging
-        with caplog.at_level(logging.WARNING):
-            p = OfflinePreprocessor(data_dir, {})
-        assert p.vhdr is not None
-        assert "multiple" in caplog.text.lower()
-
-    def test_raises_when_no_vhdr_on_step1(self, make_preprocessor):
-        # vhdr is None → run_step1 must raise FileNotFoundError
-        with pytest.raises(FileNotFoundError):
-            make_preprocessor.run_step1_prepare_ica()
-
+class TestStage1Init:
     def test_subject_id_is_folder_name(self, tmp_path):
         data_dir = tmp_path / "Sub_042"
         data_dir.mkdir()
         p = OfflinePreprocessor(data_dir, {})
         assert p.subject_id == "Sub_042"
+
+    def test_raw_none_by_default(self, tmp_path):
+        data_dir = tmp_path / "Sub_001"
+        data_dir.mkdir()
+        p = OfflinePreprocessor(data_dir, {})
+        assert p.raw is None
+
+    def test_raw_set_when_passed(self, tmp_path, synthetic_raw):
+        data_dir = tmp_path / "Sub_001"
+        data_dir.mkdir()
+        p = OfflinePreprocessor(data_dir, {}, raw=synthetic_raw)
+        assert p.raw is synthetic_raw
+
+    def test_raises_on_step1_without_raw(self, make_preprocessor):
+        assert make_preprocessor.raw is None
+        with pytest.raises(RuntimeError, match="raw must be set"):
+            make_preprocessor.run_step1_prepare_ica()
 
 
 # ── Stage 2: Signal cleaning chain ────────────────────────────────────────
@@ -174,9 +159,9 @@ class TestStage3ICAFit:
         p._fit_ica()
         assert p.ica.exclude == []
 
-    def test_step1_raises_without_vhdr(self, make_preprocessor):
-        assert make_preprocessor.vhdr is None
-        with pytest.raises(FileNotFoundError):
+    def test_step1_raises_without_raw(self, make_preprocessor):
+        assert make_preprocessor.raw is None
+        with pytest.raises(RuntimeError):
             make_preprocessor.run_step1_prepare_ica()
 
     def test_step2_raises_before_step1(self, make_preprocessor):

@@ -15,7 +15,7 @@ online_decoder/
 ├── scripts/            — Characterization, replay, and smoke-test helpers
 ├── src/backend/
 │   ├── core/           — SettingsManager and Pydantic config models
-│   ├── offline_phase/  — utils, OfflinePreprocessor, ModelEvaluator, ModelTrainer
+│   ├── offline_phase/  — utils, OfflinePreprocessor, ModelEvaluator, ModelTrainer, OfflineOrchestrator
 │   └── online_phase/   — LSLReceiver and online inference package scaffold
 ├── tests/
 │   ├── core/           — Config validation tests
