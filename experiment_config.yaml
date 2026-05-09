@@ -1,8 +1,9 @@
 experiment_info:
   name: Reactivation_Study_V1
 
+random_state: 42
+
 preprocessing:
-  random_state: 42
   bandpass:
     l_freq: 0.1
     h_freq: 40.0
@@ -24,7 +25,6 @@ preprocessing:
     baseline: [null, 0]   # null = start of epoch
 
 decoders:
-  random_state: 42
   model: LDA          # LDA | Logistic | SVM
   params:             # valid keys depend on model (see config_models.py _VALID_PARAMS_BY_MODEL)
     solver: lsqr

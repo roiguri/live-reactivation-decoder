@@ -94,10 +94,10 @@ def synthetic_epochs() -> mne.EpochsArray:
                            verbose=False)
 
 
-def _make_evaluator_settings(**overrides) -> dict:
+def _make_evaluator_settings(random_state: int = 42, **overrides) -> dict:
     """Build a DecoderSettings dict with merged classifier defaults via Pydantic."""
     from backend.core.config_models import DecoderSettings
-    return DecoderSettings(**overrides).model_dump()
+    return {"random_state": random_state, **DecoderSettings(**overrides).model_dump()}
 
 
 @pytest.fixture

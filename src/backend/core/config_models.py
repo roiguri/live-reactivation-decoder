@@ -64,7 +64,6 @@ class RejectCriteriaSettings(BaseModel):
 class PreprocessingSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    random_state: int = 42
     bandpass: BandpassSettings = Field(default_factory=BandpassSettings)
     resample: ResampleSettings = Field(default_factory=ResampleSettings)
     reject_criteria: RejectCriteriaSettings = Field(default_factory=RejectCriteriaSettings)
@@ -117,7 +116,6 @@ class DecoderSettings(BaseModel):
     scale_method: Literal["standard", "median"] | None = "standard"
     cv:           CVSettings = Field(default_factory=CVSettings)
     tasks:        list[DecoderTask] = Field(default_factory=list)
-    random_state: int = 42
 
     @model_validator(mode="after")
     def _validate_and_apply_defaults(self) -> DecoderSettings:
@@ -155,6 +153,7 @@ class ExperimentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     experiment_info: ExperimentInfo
+    random_state: int = 42
     preprocessing: PreprocessingSettings = Field(default_factory=PreprocessingSettings)
     decoders: DecoderSettings = Field(default_factory=DecoderSettings)
     markers_mapping: MarkersMapping

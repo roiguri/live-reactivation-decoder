@@ -157,7 +157,6 @@ class PreprocessingSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    random_state: int = 42
     bandpass: BandpassSettings = Field(default_factory=BandpassSettings)
     resample: ResampleSettings = Field(default_factory=ResampleSettings)
     reject_criteria: RejectCriteriaSettings = Field(default_factory=RejectCriteriaSettings)
@@ -216,7 +215,6 @@ class DecoderSettings(BaseModel):
     scale_method: Literal["standard", "median"] | None = "standard"
     cv:           CVSettings = Field(default_factory=CVSettings)
     tasks:        list[DecoderTask] = Field(default_factory=list)
-    random_state: int = 42
 
 
 class EventEntry(BaseModel):
@@ -259,6 +257,7 @@ class ExperimentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     experiment_info: ExperimentInfo
+    random_state: int = 42
     preprocessing: PreprocessingSettings = Field(default_factory=PreprocessingSettings)
     decoders: DecoderSettings = Field(default_factory=DecoderSettings)
     markers_mapping: MarkersMapping
@@ -283,13 +282,13 @@ class SettingsManager:
 
     def get_preprocessing_params(self) -> dict[str, Any]:
         """
-        Returns the 'preprocessing' block as a plain dict.
+        Returns the 'preprocessing' block as a plain dict, with top-level random_state injected.
         """
         pass
 
     def get_decoder_settings(self) -> dict[str, Any]:
         """
-        Returns the 'decoders' block as a plain dict.
+        Returns the 'decoders' block as a plain dict, with top-level random_state injected.
         """
         pass
 
@@ -452,7 +451,8 @@ class ModelEvaluator:
             epochs: Cleaned mne.Epochs object.
             decoder_settings: Dict from SettingsManager.get_decoder_settings().
                               Required keys: 'model', 'params', 'scale_method',
-                              'cv' ({'k': int}), 'random_state', 'tasks'.
+                              'cv' ({'k': int}), 'random_state' (injected from
+                              top-level ExperimentConfig.random_state by SettingsManager), 'tasks'.
         """
         self.epochs = epochs
         self.settings = decoder_settings

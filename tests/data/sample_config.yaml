@@ -1,8 +1,9 @@
 experiment_info:
   name: test_experiment
 
+random_state: 42
+
 preprocessing:
-  random_state: 42
   bandpass:
     l_freq: 1.0
     h_freq: 40.0
