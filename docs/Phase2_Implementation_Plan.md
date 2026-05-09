@@ -12,7 +12,8 @@ LSLReceiver -> StreamWorker -> OnlinePreprocessor -> LiveInferenceEngine -> logs
 
 - Input stream: 1000 Hz EEG from LSL, expected as 64 EEG channels plus one trigger channel.
 - Runtime unit: 40-sample micro-batches, approximately 40 ms at 1000 Hz.
-- Model-facing output: 250 Hz features, approximately 10 predictions per 40 ms batch.
+- Model-facing output: features at the locked Phase 1 target rate; prediction
+  count per micro-batch depends on the target rate.
 - Critical invariant: filtering state and decimation phase persist across batches.
 - Obsolete approach: do not reintroduce `RingBuffer` or full-window reprocessing.
 
@@ -28,10 +29,11 @@ LSLReceiver -> StreamWorker -> OnlinePreprocessor -> LiveInferenceEngine -> logs
 - `[x]` Config schema and `SettingsManager` are implemented.
 - `[x]` `LSLReceiver` is implemented and unit-tested.
 - `[~]` Replay, smoke-test, and opt-in integration tooling exists.
+- `[~]` `OfflinePreprocessor` exists and exports an initial `online_state`.
 - `[ ]` `OnlinePreprocessor` is missing.
 - `[ ]` `LiveInferenceEngine` is missing.
 - `[ ]` `StreamWorker` is missing.
-- `[!]` Phase 1 artifact and `online_state` schema must be locked before `OnlinePreprocessor` implementation.
+- `[!]` Phase 1 sample rate, final artifact envelope, and `online_state` schema must be locked before `OnlinePreprocessor` implementation.
 
 ## Component Plan
 
@@ -70,8 +72,8 @@ LSLReceiver -> StreamWorker -> OnlinePreprocessor -> LiveInferenceEngine -> logs
 - `online_state`: fixed Phase 1 state exported with the trained decoder artifact.
 
 **Outputs:**
-- `clean_features_250hz`: NumPy array aligned to decimated samples.
-- `output_timestamps`: NumPy array aligned to `clean_features_250hz` rows.
+- `model_features`: NumPy array aligned to model-facing samples.
+- `output_timestamps`: NumPy array aligned to `model_features` rows.
 
 **Required behavior:**
 - Use `scipy.signal.sosfilt` with persistent `zi` state for causal bandpass filtering.
@@ -79,7 +81,8 @@ LSLReceiver -> StreamWorker -> OnlinePreprocessor -> LiveInferenceEngine -> logs
 - Apply the fixed bad-channel policy from Phase 1.
 - Apply average reference after bad-channel handling.
 - Apply the fixed ICA transform from Phase 1.
-- Decimate from 1000 Hz to 250 Hz with a persistent sample counter so irregular batch sizes preserve phase.
+- Resample/decimate from 1000 Hz to the locked target rate with persistent
+  state so irregular batch sizes preserve alignment.
 - Provide `reset_state()` for a new run.
 
 **Tests before live use:**
@@ -91,9 +94,11 @@ LSLReceiver -> StreamWorker -> OnlinePreprocessor -> LiveInferenceEngine -> logs
 
 **Status:** `[ ]` Not implemented.
 
+**Detailed plan:** See [LiveInferenceEngine_Implementation_Plan.md](LiveInferenceEngine_Implementation_Plan.md).
+
 **Inputs:**
 - Path to Phase 1 `decoder_pipeline.joblib`.
-- `clean_features_250hz` from `OnlinePreprocessor`.
+- `model_features` from `OnlinePreprocessor`.
 
 **Responsibilities:**
 - Load trained sklearn-compatible decoder models.
@@ -133,9 +138,18 @@ LSLReceiver -> StreamWorker -> OnlinePreprocessor -> LiveInferenceEngine -> logs
 - `[ ]` Receiver, preprocessing, and inference errors are surfaced instead of silently swallowed.
 - `[ ]` Prediction timestamps remain aligned to the emitted probability rows.
 
-## Blocking Schema Decision
+## Blocking Phase 1 Decisions
 
-Before implementing `OnlinePreprocessor`, lock the Phase 1 saved artifact contract.
+Before implementing `OnlinePreprocessor`, lock the Phase 1 target rate,
+`online_state` schema, and saved artifact contract. Phase 1 currently exports
+`online_state` directly; the full artifact envelope below is the planned
+contract consumed by `LiveInferenceEngine`.
+
+### `[!]` Model-Facing Sample Rate
+
+Current Phase 2 docs previously assumed `250 Hz`. The new Phase 1 config default
+is `256 Hz`. Do not finalize `OnlinePreprocessor` resampling behavior until this
+is discussed with the Phase 1 developer and locked.
 
 Default artifact shape:
 
@@ -148,22 +162,45 @@ Default artifact shape:
 ```
 
 Required contents:
-- Channel names and channel order used during training.
-- Bad channels and the online bad-channel handling policy.
-- ICA matrix and excluded component metadata.
-- Model feature width and expected row layout.
 - Decoder task names.
 - Trained sklearn-compatible models.
+- Final artifact metadata, including model feature width and expected row layout.
 - Preprocessing settings required by Phase 2.
+
+Current `OfflinePreprocessor.export_online_state()` output:
+- `bad_channels`
+- `ica_unmixing`
+- `ica_mixing`
+- `ica_pca_components`
+- `ica_pca_mean`
+- `ica_exclude`
+- `ch_names`
+- `sfreq_offline`
+
+Still-open `online_state` / artifact items:
+- final model-facing sample rate
+- bad-channel handling policy for live data
+- feature layout and feature width metadata
+- final channel-order naming convention
+- final `decoder_pipeline.joblib` metadata envelope
+
+`LiveInferenceEngine` must treat `online_state` as an opaque payload: it loads
+and returns it for `OnlinePreprocessor`, but does not validate its keys or matrix
+contents.
 
 ## Implementation Order
 
-1. `[!]` Lock the Phase 1 artifact / `online_state` schema.
-2. `[~]` Clean up `LSLReceiver.start()` expectations in docs, smoke script, and integration test.
-3. `[ ]` Implement `OnlinePreprocessor`.
-4. `[ ]` Add stateful filtering and decimation tests.
-5. `[ ]` Implement `LiveInferenceEngine`.
-6. `[ ]` Implement `StreamWorker`.
+Build complete, self-contained classes first. `LiveInferenceEngine` can treat
+`online_state` as opaque while the Phase 1 artifact schema is still evolving.
+`OnlinePreprocessor` should wait because bad-channel handling and ICA/spatial
+transform behavior depend directly on that schema.
+
+1. `[x]` Clean up `LSLReceiver.start()` expectations in docs, smoke script, and integration test.
+2. `[ ]` Implement `LiveInferenceEngine`.
+3. `[ ]` Implement `StreamWorker`.
+4. `[!]` Lock the Phase 1 sample rate, artifact envelope, and `online_state` schema.
+5. `[ ]` Implement `OnlinePreprocessor`.
+6. `[ ]` Add stateful filtering and decimation tests.
 7. `[ ]` Add latency logging.
 8. `[ ]` Run replay-based dry run.
 9. `[ ]` Validate with the real lab LSL stream.
