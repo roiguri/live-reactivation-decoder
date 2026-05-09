@@ -94,15 +94,50 @@ def synthetic_epochs() -> mne.EpochsArray:
                            verbose=False)
 
 
+def _make_evaluator_settings(**overrides) -> dict:
+    """Build a DecoderSettings dict with merged classifier defaults via Pydantic."""
+    from backend.core.config_models import DecoderSettings
+    return DecoderSettings(**overrides).model_dump()
+
+
 @pytest.fixture
 def evaluator_settings() -> dict:
     """Decoder settings for evaluator tests (3-fold CV for speed)."""
-    return {
-        "model": "LDA",
-        "params": {"solver": "lsqr", "shrinkage": "auto"},
-        "cv": {"k": 3},
-        "tasks": [
+    return _make_evaluator_settings(
+        model="LDA",
+        params={"solver": "lsqr", "shrinkage": "auto"},
+        scale_method="standard",
+        cv={"k": 3},
+        tasks=[
             {"name": "red decoder", "pos_labels": ["red"], "neg_labels": ["green", "yellow"]},
             {"name": "yellow decoder", "pos_labels": ["yellow"], "neg_labels": ["green", "red"]},
         ],
-    }
+    )
+
+
+@pytest.fixture
+def logistic_evaluator_settings() -> dict:
+    """Logistic Regression decoder settings (single task, 3-fold, C=1.0 override)."""
+    return _make_evaluator_settings(
+        model="Logistic",
+        params={"C": 1.0},
+        scale_method="standard",
+        cv={"k": 3},
+        tasks=[
+            {"name": "red decoder", "pos_labels": ["red"], "neg_labels": ["green", "yellow"]},
+        ],
+    )
+
+
+@pytest.fixture
+def svm_evaluator_settings() -> dict:
+    """SVM decoder settings with median scaler (single task, 3-fold)."""
+    return _make_evaluator_settings(
+        model="SVM",
+        params={},
+        scale_method="median",
+        cv={"k": 3},
+        tasks=[
+            {"name": "red decoder", "pos_labels": ["red"], "neg_labels": ["green", "yellow"]},
+        ],
+    )

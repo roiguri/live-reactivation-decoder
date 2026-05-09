@@ -8,8 +8,11 @@ checks that require the full pipeline.
 
 import numpy as np
 import pytest
-from sklearn.pipeline import Pipeline
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import RobustScaler, StandardScaler
+from sklearn.svm import SVC
 
 from backend.offline_phase.evaluator import ModelEvaluator
 
@@ -77,22 +80,52 @@ class TestGetTaskData:
 # ── _build_classifier ─────────────────────────────────────────────────────────
 
 class TestBuildClassifier:
-    def test_returns_pipeline(self, synthetic_epochs, evaluator_settings):
-        ev = ModelEvaluator(synthetic_epochs, evaluator_settings)
-        clf = ev._build_classifier()
+    def test_lda_returns_pipeline(self, synthetic_epochs, evaluator_settings):
+        clf = ModelEvaluator(synthetic_epochs, evaluator_settings)._build_classifier()
         assert isinstance(clf, Pipeline)
-
-    def test_last_step_is_lda(self, synthetic_epochs, evaluator_settings):
-        ev = ModelEvaluator(synthetic_epochs, evaluator_settings)
-        clf = ev._build_classifier()
         assert isinstance(clf[-1], LinearDiscriminantAnalysis)
 
     def test_lda_params_applied(self, synthetic_epochs, evaluator_settings):
-        ev = ModelEvaluator(synthetic_epochs, evaluator_settings)
-        clf = ev._build_classifier()
-        lda = clf[-1]
+        lda = ModelEvaluator(synthetic_epochs, evaluator_settings)._build_classifier()[-1]
         assert lda.solver == "lsqr"
         assert lda.shrinkage == "auto"
+
+    def test_logistic_returns_pipeline_with_lr(self, synthetic_epochs, logistic_evaluator_settings):
+        clf = ModelEvaluator(synthetic_epochs, logistic_evaluator_settings)._build_classifier()
+        assert isinstance(clf, Pipeline)
+        assert isinstance(clf[-1], LogisticRegression)
+
+    def test_logistic_user_param_overrides_default(self, synthetic_epochs, logistic_evaluator_settings):
+        lr = ModelEvaluator(synthetic_epochs, logistic_evaluator_settings)._build_classifier()[-1]
+        assert lr.C == 1.0                    # user override
+        assert lr.class_weight == "balanced"  # default preserved
+
+    def test_svm_returns_pipeline_with_svc(self, synthetic_epochs, svm_evaluator_settings):
+        clf = ModelEvaluator(synthetic_epochs, svm_evaluator_settings)._build_classifier()
+        assert isinstance(clf, Pipeline)
+        assert isinstance(clf[-1], SVC)
+
+    def test_svm_has_probability_true(self, synthetic_epochs, svm_evaluator_settings):
+        svc = ModelEvaluator(synthetic_epochs, svm_evaluator_settings)._build_classifier()[-1]
+        assert svc.probability is True
+
+    def test_standard_scale_uses_standard_scaler(self, synthetic_epochs, evaluator_settings):
+        clf = ModelEvaluator(synthetic_epochs, evaluator_settings)._build_classifier()
+        assert isinstance(clf[0], StandardScaler)
+
+    def test_median_scale_uses_robust_scaler(self, synthetic_epochs, svm_evaluator_settings):
+        clf = ModelEvaluator(synthetic_epochs, svm_evaluator_settings)._build_classifier()
+        assert isinstance(clf[0], RobustScaler)
+
+    def test_no_scaler_returns_bare_classifier(self, synthetic_epochs, evaluator_settings):
+        settings = {**evaluator_settings, "scale_method": None}
+        clf = ModelEvaluator(synthetic_epochs, settings)._build_classifier()
+        assert isinstance(clf, LinearDiscriminantAnalysis)
+
+    def test_unsupported_model_raises(self, synthetic_epochs, evaluator_settings):
+        settings = {**evaluator_settings, "model": "RandomForest"}
+        with pytest.raises(ValueError, match="Unsupported"):
+            ModelEvaluator(synthetic_epochs, settings)._build_classifier()
 
 
 # ── run_evaluation ────────────────────────────────────────────────────────────
@@ -153,7 +186,9 @@ class TestRunEvaluation:
         settings = {
             "model": "LDA",
             "params": {"solver": "lsqr", "shrinkage": "auto"},
+            "scale_method": "standard",
             "cv": {"k": 3},
+            "random_state": 42,
             "tasks": [
                 {"name": "red decoder", "pos_labels": ["red"], "neg_labels": ["green", "yellow"]}
             ],

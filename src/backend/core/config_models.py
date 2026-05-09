@@ -95,13 +95,41 @@ class DecoderTask(BaseModel):
         return self
 
 
+_VALID_PARAMS_BY_MODEL: dict[str, set[str]] = {
+    "LDA":      {"solver", "shrinkage", "n_components", "priors"},
+    "Logistic": {"C", "penalty", "solver", "class_weight", "max_iter"},
+    "SVM":      {"C", "kernel", "gamma", "class_weight", "max_iter"},
+}
+
+_CLASSIFIER_DEFAULTS: dict[str, dict] = {
+    "LDA":      {},
+    "Logistic": {"solver": "liblinear", "class_weight": "balanced",
+                 "C": 1000, "penalty": "l1", "max_iter": 1000},
+    "SVM":      {"kernel": "linear", "class_weight": "balanced", "C": 1.0, "max_iter": 1000},
+}
+
+
 class DecoderSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    model: Literal["LDA"] = "LDA"
-    params: dict[str, Any] = Field(default_factory=dict)
-    cv: CVSettings = Field(default_factory=CVSettings)
-    tasks: list[DecoderTask] = Field(default_factory=list)
+    model:        Literal["LDA", "Logistic", "SVM"] = "LDA"
+    params:       dict[str, Any] = Field(default_factory=dict)
+    scale_method: Literal["standard", "median"] | None = "standard"
+    cv:           CVSettings = Field(default_factory=CVSettings)
+    tasks:        list[DecoderTask] = Field(default_factory=list)
+    random_state: int = 42
+
+    @model_validator(mode="after")
+    def _validate_and_apply_defaults(self) -> DecoderSettings:
+        valid = _VALID_PARAMS_BY_MODEL[self.model]
+        invalid = set(self.params.keys()) - valid
+        if invalid:
+            raise ValueError(
+                f"Invalid params for model '{self.model}': {sorted(invalid)}. "
+                f"Valid: {sorted(valid)}"
+            )
+        self.params = {**_CLASSIFIER_DEFAULTS[self.model], **self.params}
+        return self
 
 
 class EventEntry(BaseModel):

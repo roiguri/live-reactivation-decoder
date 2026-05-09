@@ -24,10 +24,12 @@ preprocessing:
     baseline: [null, 0]   # null = start of epoch
 
 decoders:
-  model: LDA
-  params:
+  random_state: 42
+  model: LDA          # LDA | Logistic | SVM
+  params:             # valid keys depend on model (see config_models.py _VALID_PARAMS_BY_MODEL)
     solver: lsqr
     shrinkage: auto
+  scale_method: standard   # standard | median | null
   cv:
     k: 5
   tasks:

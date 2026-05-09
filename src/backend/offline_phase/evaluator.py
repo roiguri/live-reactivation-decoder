@@ -7,9 +7,11 @@ import mne
 import numpy as np
 from mne.decoding import GeneralizingEstimator, cross_val_multiscore
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import RobustScaler, StandardScaler
+from sklearn.svm import SVC
 
 logger = logging.getLogger(__name__)
 
@@ -112,16 +114,26 @@ class ModelEvaluator:
         return selected.get_data(), y
 
     def _build_classifier(self) -> Any:
-        """Build StandardScaler + classifier pipeline from settings."""
+        """Build scaler + classifier pipeline from settings."""
         model_type: str = self.settings["model"]
-        params: dict[str, Any] = self.settings["params"]
-        # TODO: add support for more model types (in settings as well)
+        scale_method: str | None = self.settings["scale_method"]
+        params: dict = self.settings["params"]
+        random_state: int = self.settings["random_state"]
+
         if model_type == "LDA":
             clf = LinearDiscriminantAnalysis(**params)
+        elif model_type == "Logistic":
+            clf = LogisticRegression(random_state=random_state, **params)
+        elif model_type == "SVM":
+            clf = SVC(probability=True, random_state=random_state, **params)
         else:
             raise ValueError(f"Unsupported model type: {model_type!r}")
 
-        return make_pipeline(StandardScaler(), clf)
+        if scale_method == "standard":
+            return make_pipeline(StandardScaler(), clf)
+        elif scale_method == "median":
+            return make_pipeline(RobustScaler(), clf)
+        return clf
 
     def _run_tgm_cv(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         """
@@ -129,7 +141,7 @@ class ModelEvaluator:
         Returns the mean TGM (n_times, n_times) averaged over folds.
         """
         k: int = self.settings["cv"]["k"]
-        cv = StratifiedKFold(n_splits=k, shuffle=True, random_state=42)
+        cv = StratifiedKFold(n_splits=k, shuffle=True, random_state=self.settings["random_state"])
         estimator = GeneralizingEstimator(
             self._build_classifier(), scoring="roc_auc", n_jobs=1, verbose=False
         )

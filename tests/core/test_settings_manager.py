@@ -126,7 +126,7 @@ class TestAllowedValues:
             SettingsManager(tmp_config_file(minimal_valid_data))
 
     def test_rejects_invalid_decoder_model(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["decoders"]["model"] = "SVM"
+        minimal_valid_data["decoders"]["model"] = "XGBoost"
         with pytest.raises(ValueError):
             SettingsManager(tmp_config_file(minimal_valid_data))
 
