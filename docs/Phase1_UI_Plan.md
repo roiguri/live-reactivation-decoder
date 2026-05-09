@@ -16,7 +16,14 @@ Design reference: React mockup at `https://github.com/roiguri/decoder_gui` (`Pha
 
 ## Scope
 
-This plan covers the **Phase 1 training pipeline only**: a 4-node linear journey that guides the researcher through loading data, preprocessing with ICA review, evaluating decoder performance, and training final models.
+This plan covers the **Phase 1 training pipeline only**: a 5-node linear journey that guides the researcher through configuring the experiment, loading data, preprocessing with ICA review, evaluating decoder performance, and training final models.
+
+Nodes:
+1. **Pipeline Settings** — load experiment config YAML, pick output directory, review parsed settings
+2. **Load Data** — pick data directory, load `.vhdr` file
+3. **Preprocessing** — run ICA, review components, finish pipeline
+4. **Evaluation** — run temporal generalization CV, inspect AUC/TGMs, select timepoint
+5. **Train & Save** — train final decoders, inspect spatial topomaps
 
 Out of scope for this plan:
 - WelcomeScreen (experiment / subject setup)
@@ -47,7 +54,7 @@ online_decoder/src/frontend/
 │   └── phase1_screen.py           # QWidget: QHBoxLayout(workspace | journey panel)
 ├── widgets/
 │   ├── __init__.py
-│   ├── journey_panel.py           # JourneyNode + JourneyPanel (right sidebar, 280 px)
+│   ├── journey_panel.py           # JourneyNode + JourneyPanel (right sidebar, 320 px)
 │   ├── ica_component_card.py      # Card: matplotlib topomap + waveform + keep/reject toggle
 │   └── charts/
 │       ├── __init__.py
@@ -56,10 +63,11 @@ online_decoder/src/frontend/
 │       └── topomap_widget.py      # FigureCanvas: mne.viz.plot_topomap wrapper
 ├── views/                         # QStackedWidget pages — one per node or sub-step
 │   ├── __init__.py
-│   ├── load_data_view.py          # Node 1: data directory picker + load action
-│   ├── preprocessing_view.py      # Node 2: inner QStackedWidget (4 sub-steps)
-│   ├── evaluation_view.py         # Node 3: inner QStackedWidget (2 sub-steps)
-│   └── train_view.py              # Node 4: inner QStackedWidget (2 sub-steps)
+│   ├── settings_view.py           # Node 1: config file picker + output dir + read-only settings display
+│   ├── load_data_view.py          # Node 2: data directory picker + load action
+│   ├── preprocessing_view.py      # Node 3: inner QStackedWidget (4 sub-steps)
+│   ├── evaluation_view.py         # Node 4: inner QStackedWidget (2 sub-steps)
+│   └── train_view.py              # Node 5: inner QStackedWidget (2 sub-steps)
 ├── workers/
 │   ├── __init__.py
 │   ├── base_worker.py             # BaseWorker(QObject) with standard signal set
@@ -76,14 +84,20 @@ online_decoder/src/frontend/
 
 ## App Bootstrap
 
-`main.py` runs two `QFileDialog` calls before `MainWindow` opens:
-1. Pick `experiment_config.yaml`
-2. Pick output directory
-3. Creates `AppSession(config_path, output_dir)` → passed into `Phase1Screen`
+`main.py` has **no file dialogs and no backend imports**. It only:
+1. Creates `QApplication`, applies global QSS stylesheet
+2. Instantiates `Phase1Screen()` (session starts as `None`)
+3. Adds it to `MainWindow` and calls `show()`
 
-`AppSession` is the **only** backend import in `main.py`. It owns `SettingsManager` internally and exposes `session.offline` (`OfflineOrchestrator`) for Phase 1. Phase 2 will add `session.build_stream_worker(...)`.
+`AppSession` is created inside `Phase1Screen` when Node 1 ("Pipeline Settings") completes:
+1. User clicks "Load Config File" → `QFileDialog.getOpenFileName` → YAML path stored
+2. User clicks "Select Output Directory" → `QFileDialog.getExistingDirectory` → dir stored
+3. Read-only parsed settings are displayed; "Continue" becomes enabled
+4. User clicks "Continue" → `self.session = AppSession(config_path, output_dir)` → `journey_panel.advance(1)`
 
-`Phase1Screen.__init__(self, session: AppSession)` stores the session and accesses `session.offline` for all backend calls.
+`AppSession` is the **only** backend class the frontend imports directly. It owns `SettingsManager` internally and exposes `session.offline` (`OfflineOrchestrator`) for Nodes 2–5. Phase 2 will add `session.build_stream_worker(...)`.
+
+`Phase1Screen.__init__(self)` starts with `self.session = None`; all nodes from Node 2 onwards access `self.session.offline`.
 
 **Running the app:** always run from the `online_decoder/` root:
 
@@ -94,7 +108,7 @@ PYTHONPATH=src python -m frontend.main
 `main.py` must not manipulate `sys.path` itself. The `PYTHONPATH=src` prefix makes both `frontend.*` and `backend.*` importable as top-level packages. Backend imports in frontend code therefore look like:
 
 ```python
-from backend.offline_phase.orchestrator import OfflineOrchestrator
+from backend.session import AppSession
 ```
 
 ---
@@ -125,21 +139,21 @@ Build the frontend from the outside in. Each step is **independently runnable an
 **Create:**
 - `styles/__init__.py`, `styles/theme.py` — color constants + QSS string
 - `main_window.py` — `QMainWindow` with a `QStackedWidget` (one slot per screen)
-- `main.py` — `QApplication` + two `QFileDialog` calls (config YAML; output dir) → creates `AppSession(config_path, output_dir)` → instantiates `Phase1Screen(session)` → shows `MainWindow`
+- `main.py` — `QApplication` + stylesheet → instantiates `Phase1Screen()` → shows `MainWindow` (no dialogs, no backend imports)
 
-**Stub:** `Phase1Screen` is an empty `QWidget` with `BG_LIGHT` background at this step.
+**Stub:** `Phase1Screen` is an empty `QWidget` with `BG_LIGHT` background and `session = None`.
 
-**Test:** `python src/frontend/main.py` — two file dialogs open, then a blank window with the correct background appears.
+**Test:** `python -m frontend.main` — window opens immediately (no dialogs) with the correct background color.
 
 ---
 
 ### Step 2 — Journey panel (static) + Phase1Screen layout
 
 **Create:**
-- `screens/phase1_screen.py` — `QHBoxLayout`: left = stretching placeholder `QWidget`, right = journey panel (280 px fixed)
-- `widgets/__init__.py`, `widgets/journey_panel.py` — `JourneyNode` + `JourneyPanel`: 4 nodes; trail drawn in `paintEvent`; `QPropertyAnimation` fills trail segment on `advance()`; Node 1 starts active
+- `screens/phase1_screen.py` — `QHBoxLayout`: left = stretching placeholder `QWidget`, right = journey panel (320 px fixed)
+- `widgets/__init__.py`, `widgets/journey_panel.py` — `JourneyNode` + `JourneyPanel`: 5 nodes; trail drawn in `paintEvent`; `QPropertyAnimation` fills trail segment on `advance()`; Node 1 starts active
 
-**Behaviour at this step:** clicking a node's action button calls `journey_panel.advance()` directly (no backend, no workspace change). All 4 nodes cycle through on click.
+**Behaviour at this step:** clicking a node's action button calls `journey_panel.advance()` directly (no backend, no workspace change). All 5 nodes cycle through on click.
 
 **Test:** run the app → click node buttons → trail segment fills with animation → node circle changes state (active → complete → next active).
 
@@ -149,43 +163,61 @@ Build the frontend from the outside in. Each step is **independently runnable an
 
 **Create:**
 - `views/__init__.py`
-- `views/load_data_view.py` — stub `QLabel("Node 1: Load Data")`
+- `views/settings_view.py` — stub `QLabel("Node 1: Pipeline Settings")`
+- `views/load_data_view.py` — stub `QLabel("Node 2: Load Data")`
 - `views/preprocessing_view.py` — stub
 - `views/evaluation_view.py` — stub
 - `views/train_view.py` — stub
 
-**Wire:** replace the left placeholder with a `QStackedWidget` holding the 4 stubs; connect `journey_panel.node_changed(int)` → `workspace_stack.setCurrentIndex(int)`.
+**Wire:** replace the left placeholder with a `QStackedWidget` holding the 5 stubs; connect `journey_panel.node_changed(int)` → `workspace_stack.setCurrentIndex(int)`.
 
 **Test:** clicking node buttons fills the trail **and** changes the left panel label.
 
 ---
 
-### Step 4 — Node 1: Load Data (backend wired)
+### Step 4 — Node 1: Pipeline Settings (backend wired)
+
+**Create:**
+- `views/settings_view.py` (replace stub) — two file-picker rows + read-only settings display:
+  - "Load Config File" `QPushButton` → `QFileDialog.getOpenFileName` filter `"Config (*.yaml *.yml)"` → stores `_config_path`; shows a checkmark label on success
+  - "Select Output Directory" `QPushButton` → `QFileDialog.getExistingDirectory` → stores `_output_dir`; shows selected path
+  - Read-only `QGroupBox` sections: **Preprocessing** (bandpass, resample, ICA, epochs) and **Model Evaluation** (model, CV folds, decoders) populated from `SettingsManager` after config load
+  - "Continue" button (disabled until both paths are set); on click: `self.session = AppSession(config_path, output_dir)` → `journey_panel.advance(1)`
+
+**Wire:** Node 1 action button is the "Load Config File" trigger. "Continue" is a separate button inside the view (enabled only when both paths are filled).
+
+On `AppSession` construction error: `QMessageBox.critical(...)`, paths cleared, user can retry.
+
+**Test:** pick the real `experiment_config.yaml` + a writable output dir → settings sections populate with correct values → "Continue" becomes enabled → click → trail animates to Node 2.
+
+---
+
+### Step 5 — Node 2: Load Data (backend wired)
 
 **Create:**
 - `workers/__init__.py`, `workers/base_worker.py` — `BaseWorker(QObject)` with signals
 - `workers/load_worker.py` — calls `orchestrator.load_raw_data()`
 - `views/load_data_view.py` (replace stub) — dir picker `QPushButton` + path label + "Load Data" button (disabled until dir selected) + indeterminate `QProgressBar`
 
-**Wire:** "Load Data" → `orchestrator.set_file_path(data_dir)` → start `LoadWorker` on `QThread` → `result_ready` → `journey_panel.advance(1)`.
+**Wire:** "Load Data" → `orchestrator.set_file_path(data_dir)` → start `LoadWorker` on `QThread` → `result_ready` → `journey_panel.advance(2)`.
 
-**Test with a real `.vhdr` file:** pick dir → click "Load Data" → progress bar shows → trail animates to Node 2. Window stays responsive during load.
+**Test with a real `.vhdr` file:** pick dir → click "Load Data" → progress bar shows → trail animates to Node 3. Window stays responsive during load.
 
 ---
 
-### Step 5 — Node 2, page 0: Preprocessing Step 1 + progress
+### Step 6 — Node 3, page 0: Preprocessing Step 1 + progress
 
 **Create:**
 - `workers/preprocessing_worker.py` — `PreprocessingStep1Worker` calls `orchestrator.run_step1_prepare_ica()`
 - `views/preprocessing_view.py` — inner `QStackedWidget`; Page 0 = indeterminate `QProgressBar` + status label; Pages 1–3 are stubs
 
-**Wire:** Node 2 action button → start `PreprocessingStep1Worker` → `result_ready(ica_obj, suggested_components)` → advance inner stack to Page 1 stub.
+**Wire:** Node 3 action button → start `PreprocessingStep1Worker` → `result_ready(ica_obj, suggested_components)` → advance inner stack to Page 1 stub.
 
-**Test:** after Node 1, click Node 2 → progress bar runs for the real preprocessing → transitions to the stub ICA page. No UI freeze during EEG computation.
+**Test:** after Node 2, click Node 3 → progress bar runs for the real preprocessing → transitions to the stub ICA page. No UI freeze during EEG computation.
 
 ---
 
-### Step 6 — Node 2, page 1: ICA component review
+### Step 7 — Node 3, page 1: ICA component review
 
 **Create:**
 - `widgets/ica_component_card.py` — `ICAComponentCard(QWidget)`: embedded `FigureCanvas` with two axes (left: `mne.viz.plot_topomap(ica.get_components()[:, i], ica.info)`, right: `ica.get_sources(raw).get_data()[i, :500]`); color badge; keep/reject `QPushButton` (checkable)
@@ -193,25 +225,25 @@ Build the frontend from the outside in. Each step is **independently runnable an
 
 **Wire:** "Confirm" → collect rejected indices → start `PreprocessingStep2Worker` placeholder (immediately emits `result_ready({})`) → Page 2 stub.
 
-**Test:** after Step 5, the real ICA grid renders; toggling keep/reject changes button color; clicking Confirm transitions forward.
+**Test:** after Step 6, the real ICA grid renders; toggling keep/reject changes button color; clicking Confirm transitions forward.
 
 ---
 
-### Step 7 — Node 2, pages 2–3: Preprocessing Step 2 + complete
+### Step 8 — Node 3, pages 2–3: Preprocessing Step 2 + complete
 
 **Create:**
 - Add `PreprocessingStep2Worker` to `workers/preprocessing_worker.py` — calls `orchestrator.run_step2_finish_pipeline(excluded_components)`
 - Update `views/preprocessing_view.py`:
   - Page 2 = indeterminate `QProgressBar` + status label
-  - Page 3 = stats labels (epochs retained, components removed); calls `journey_panel.advance(2)` on display
+  - Page 3 = stats labels (epochs retained, components removed); calls `journey_panel.advance(3)` on display
 
-**Wire:** Confirm (Step 6) → real `PreprocessingStep2Worker` → progress (Page 2) → stats (Page 3) → `journey_panel.advance(2)`.
+**Wire:** Confirm (Step 7) → real `PreprocessingStep2Worker` → progress (Page 2) → stats (Page 3) → `journey_panel.advance(3)`.
 
-**Test:** full Node 2 flow: preprocessing → ICA grid → confirm → step 2 progress → epoch stats → trail to Node 3.
+**Test:** full Node 3 flow: preprocessing → ICA grid → confirm → step 2 progress → epoch stats → trail to Node 4.
 
 ---
 
-### Step 8 — Chart widgets (isolated)
+### Step 9 — Chart widgets (isolated)
 
 **Create:**
 - `widgets/charts/__init__.py`
@@ -222,7 +254,7 @@ Build the frontend from the outside in. Each step is **independently runnable an
 
 ---
 
-### Step 9 — Node 3: Evaluation (progress + results view)
+### Step 10 — Node 4: Evaluation (progress + results view)
 
 **Create:**
 - `workers/evaluation_worker.py` — calls `orchestrator.run_evaluation()`
@@ -232,13 +264,13 @@ Build the frontend from the outside in. Each step is **independently runnable an
     - Summary tab: `AUCChart` (all decoders) + stats panel (selected time, per-decoder AUC) + "Confirm Timepoint" button (disabled until timepoint selected)
     - Per-decoder tabs: individual `AUCChart` + `TGMChart`
 
-**Wire:** Node 3 button → `EvaluationWorker` → `result_ready` → build charts → Page 1. Timepoint click → update stats panel. "Confirm Timepoint" → `Phase1Screen._selected_timepoint = t` → `journey_panel.advance(3)`.
+**Wire:** Node 4 button → `EvaluationWorker` → `result_ready` → build charts → Page 1. Timepoint click → update stats panel. "Confirm Timepoint" → `Phase1Screen._selected_timepoint = t` → `journey_panel.advance(4)`.
 
-**Test:** after Node 2, click "Run Evaluation" → progress → AUC chart with all decoder lines; click different timepoints → stats panel updates; confirm → trail to Node 4.
+**Test:** after Node 3, click "Run Evaluation" → progress → AUC chart with all decoder lines; click different timepoints → stats panel updates; confirm → trail to Node 5.
 
 ---
 
-### Step 10 — Topomap widget (isolated)
+### Step 11 — Topomap widget (isolated)
 
 **Create:**
 - `widgets/charts/topomap_widget.py` — `TopomapWidget(FigureCanvas)`: calls `mne.viz.plot_topomap(pattern, info, axes=ax, show=False)`
@@ -247,7 +279,7 @@ Build the frontend from the outside in. Each step is **independently runnable an
 
 ---
 
-### Step 11 — Node 4: Train & Save (progress + complete)
+### Step 12 — Node 5: Train & Save (progress + complete)
 
 **Create:**
 - `workers/training_worker.py` — calls `orchestrator.run_training(selected_timepoint)`
@@ -255,9 +287,9 @@ Build the frontend from the outside in. Each step is **independently runnable an
   - Page 0 = indeterminate `QProgressBar` + `TrainingWorker`
   - Page 1 = read-only `QLineEdit` showing `model_filepath`; grid of `TopomapWidget` (one per decoder task using `spatial_patterns[task]` + `mne_info`)
 
-**Wire:** Node 4 button → `TrainingWorker(orchestrator, Phase1Screen._selected_timepoint)` → `result_ready` → build topomap grid → Page 1.
+**Wire:** Node 5 button → `TrainingWorker(orchestrator, Phase1Screen._selected_timepoint)` → `result_ready` → build topomap grid → Page 1.
 
-**Test (full pipeline):** run all 11 steps end-to-end: load → preprocess → ICA review → evaluate → confirm timepoint → train → topomaps render; confirm `decoder_pipeline.joblib` exists in output dir; confirm no UI freeze at any stage.
+**Test (full pipeline):** run all 12 steps end-to-end: settings → load → preprocess → ICA review → evaluate → confirm timepoint → train → topomaps render; confirm `decoder_pipeline.joblib` exists in output dir; confirm no UI freeze at any stage.
 
 ---
 
@@ -294,7 +326,7 @@ PyQt6 exports `pyqtSignal`, not `Signal`. All frontend code uses the alias `from
 
 ## Journey Panel
 
-**Layout:** right sidebar, fixed 280 px wide, `QVBoxLayout` with 4 `JourneyNode` widgets and a vertical trail line.
+**Layout:** right sidebar, fixed 320 px wide, `QVBoxLayout` with 5 `JourneyNode` widgets and a vertical trail line.
 
 ### `JourneyNode(QWidget)`
 - Numbered circle: inactive = white + gray border, active = `PRIMARY_BLUE` fill, complete = green checkmark.
@@ -313,16 +345,27 @@ PyQt6 exports `pyqtSignal`, not `Signal`. All frontend code uses the alias `from
 
 ## Node Detail
 
-### Node 1 — Load Data (`load_data_view.py`)
+### Node 1 — Pipeline Settings (`settings_view.py`)
+
+- "Load Config File" `QPushButton` → `QFileDialog.getOpenFileName` filter `"Config (*.yaml *.yml)"` → displays a "✓ Config loaded" label on success; shows read-only parsed settings in two `QGroupBox` sections:
+  - **Preprocessing**: bandpass, resample rate, ICA components/method, epoch tmin/tmax
+  - **Model Evaluation**: model type, CV folds, decoder task list
+- "Select Output Directory" `QPushButton` → `QFileDialog.getExistingDirectory` → shows selected path.
+- "Continue" button (disabled until both paths are set); on click: `self.session = AppSession(config_path, output_dir)` → `journey_panel.advance(1)`.
+- On `AppSession` construction error: `QMessageBox.critical(...)`, paths cleared, user can retry.
+
+---
+
+### Node 2 — Load Data (`load_data_view.py`)
 
 - `QPushButton` → `QFileDialog.getExistingDirectory` → show selected path.
 - "Load Data" button (disabled until dir selected) → calls `orchestrator.set_file_path(data_dir)`, starts `LoadWorker`.
-- On `result_ready`: `journey_panel.advance(1)`.
+- On `result_ready`: `journey_panel.advance(2)`.
 - On `error_occurred`: `QMessageBox.critical(...)`.
 
 ---
 
-### Node 2 — Preprocessing (`preprocessing_view.py`)
+### Node 3 — Preprocessing (`preprocessing_view.py`)
 
 Inner `QStackedWidget` with 4 pages:
 
@@ -331,7 +374,7 @@ Inner `QStackedWidget` with 4 pages:
 | 0 | Indeterminate `QProgressBar` + status label | `PreprocessingStep1Worker` calls `run_step1_prepare_ica()` |
 | 1 | ICA review grid (4 columns, N rows) | User reviews and toggles components |
 | 2 | Indeterminate `QProgressBar` + status label | `PreprocessingStep2Worker` calls `run_step2_finish_pipeline(excluded)` |
-| 3 | Stats: epochs retained, components removed | `journey_panel.advance(2)` called |
+| 3 | Stats: epochs retained, components removed | `journey_panel.advance(3)` called |
 
 **`ICAComponentCard(QWidget)` — Page 1:**
 - `FigureCanvas` (matplotlib) with two axes: left = `mne.viz.plot_topomap(ica.get_components()[:, i], ica.info)`, right = ICA time series.
@@ -339,12 +382,12 @@ Inner `QStackedWidget` with 4 pages:
 - Keep / Reject toggle button (`QPushButton`, checkable).
 - "Confirm" button below the grid reads all toggle states and transitions to Page 2.
 
-**⚠ Backend data gap — resolve before implementing Step 6:**
-The time series axis requires `ica.get_sources(raw).get_data()[i, :500]`, but `raw` is private to the orchestrator and not returned by any current API call. **The frontend must not access the orchestrator's internals or import backend classes to work around this.** Instead, open a separate backend plan to decide how to expose the data — for example, `run_step1_prepare_ica()` could return a third value (a pre-computed `(n_components, n_samples)` source array), or the orchestrator could gain a `get_ica_sources_preview() -> np.ndarray` method. Until that plan is written and the orchestrator updated, implement Step 6 with the topomap axis only and leave the time series axis as a placeholder.
+**⚠ Backend data gap — resolve before implementing Step 7:**
+The time series axis requires `ica.get_sources(raw).get_data()[i, :500]`, but `raw` is private to the orchestrator and not returned by any current API call. **The frontend must not access the orchestrator's internals or import backend classes to work around this.** Instead, open a separate backend plan to decide how to expose the data — for example, `run_step1_prepare_ica()` could return a third value (a pre-computed `(n_components, n_samples)` source array), or the orchestrator could gain a `get_ica_sources_preview() -> np.ndarray` method. Until that plan is written and the orchestrator updated, implement Step 7 with the topomap axis only and leave the time series axis as a placeholder.
 
 ---
 
-### Node 3 — Evaluation (`evaluation_view.py`)
+### Node 4 — Evaluation (`evaluation_view.py`)
 
 Inner `QStackedWidget` with 2 pages:
 
@@ -357,7 +400,7 @@ Inner `QStackedWidget` with 2 pages:
 - `AUCChart`: one colored `matplotlib` line per decoder (`tasks[name]["diagonal_auc"]` vs `times`). Vertical dashed line at `suggested_timepoint`.
 - `mpl_connect("button_press_event")` maps click x-coordinate to nearest time in `times` array → emits `timepoint_selected(float)`.
 - Stats panel (right side): selected time display, per-decoder AUC at that time, average AUC.
-- "Confirm Timepoint" button (disabled until timepoint selected) → stores timepoint in `Phase1Screen._selected_timepoint` → calls `journey_panel.advance(3)`.
+- "Confirm Timepoint" button (disabled until timepoint selected) → stores timepoint in `Phase1Screen._selected_timepoint` → calls `journey_panel.advance(4)`.
 
 *Per-decoder tabs (one per task name):*
 - `AUCChart` (single decoder, same click behavior).
@@ -366,7 +409,7 @@ Inner `QStackedWidget` with 2 pages:
 
 ---
 
-### Node 4 — Train & Save (`train_view.py`)
+### Node 5 — Train & Save (`train_view.py`)
 
 Inner `QStackedWidget` with 2 pages:
 
@@ -382,24 +425,28 @@ Inner `QStackedWidget` with 2 pages:
 
 ## Styling
 
-`styles/theme.py` constants:
+`styles/theme.py` constants (verified against React mockup):
 
 ```python
-PRIMARY_BLUE  = "#0078D4"
-SUCCESS_GREEN = "#228B22"
-BG_LIGHT      = "#F3F3F3"
-CARD_WHITE    = "#FFFFFF"
-TEXT_PRIMARY  = "#1E1E1E"
-TEXT_MUTED    = "#6B7280"
-ALERT_RED     = "#C41E3A"
-AMBER         = "#B45309"
+PRIMARY_BLUE        = "#0078D4"   # primary CTAs, active nodes
+SUCCESS_GREEN       = "#228B22"   # complete state
+BG_LIGHT            = "#F3F3F3"  # outer window background
+CARD_WHITE          = "#FFFFFF"  # workspace and journey panels
+TEXT_PRIMARY        = "#1F2937"  # gray-800
+TEXT_MUTED          = "#6B7280"  # gray-500
+ALERT_RED           = "#C41E3A"  # error / reject
+AMBER               = "#B45309"  # suggested reject badge
+PRIMARY_BLUE_HOVER  = "#006CBE"
+BORDER_GRAY         = "#E5E7EB"  # gray-200 panel borders
 ```
 
 A global QSS string is applied via `QApplication.setStyleSheet(...)`:
 - Main window background: `BG_LIGHT`.
-- Card widgets (white rounded boxes): `CARD_WHITE` + `border-radius: 8px`.
-- Primary buttons: `PRIMARY_BLUE` fill, white text, hover at 10% darker shade.
-- Disabled buttons: `#D1D5DB` fill, muted text.
+- Workspace and journey panels: `CARD_WHITE` + `1px solid BORDER_GRAY`; journey panel adds `border-left` only.
+- Card widgets: `CARD_WHITE` + `border-radius: 2px` (mockup uses `rounded-sm`, not 8 px).
+- Primary buttons: `PRIMARY_BLUE` fill, white text, hover `PRIMARY_BLUE_HOVER`.
+- Secondary buttons: white fill, `BORDER_GRAY` border, hover `#F3F4F6`.
+- Disabled buttons: `#D1D5DB` fill, `TEXT_MUTED` text.
 
 ---
 
@@ -411,7 +458,7 @@ These are open questions that affect the robustness of the app but are not block
 
 `AppSession` (`src/backend/session.py`) is the **only** backend class the frontend may import. All UI code reaches the orchestrator via `session.offline`. No widget, view, or worker may import or instantiate `OfflineOrchestrator`, `OfflinePreprocessor`, `ModelEvaluator`, `ModelTrainer`, or `SettingsManager` directly.
 
-**If data the UI needs is not exposed by the orchestrator's current API, stop and write a separate backend plan.** Do not work around the gap by importing backend internals, accessing private attributes, or adding temporary shims in the frontend. The fix belongs in the backend, documented and reviewed before the frontend step that needs it is implemented. An example of this pattern is the ICA time series data needed by `ICAComponentCard` (see Step 6 above).
+**If data the UI needs is not exposed by the orchestrator's current API, stop and write a separate backend plan.** Do not work around the gap by importing backend internals, accessing private attributes, or adding temporary shims in the frontend. The fix belongs in the backend, documented and reviewed before the frontend step that needs it is implemented. An example of this pattern is the ICA time series data needed by `ICAComponentCard` (see Step 7 above).
 
 ### Error handling
 
@@ -435,12 +482,13 @@ The orchestrator owns all file writes. The UI never writes files directly — it
 
 When implementation begins, verify end-to-end:
 
-1. `python src/frontend/main.py` — bootstrap file dialogs appear, then `Phase1Screen` opens.
-2. **Node 1**: pick data dir → "Load Data" → indeterminate bar runs → trail animates to Node 2.
-3. **Node 2 step 1**: "Run Preprocessing" → progress → ICA grid renders with real MNE topomaps and time series.
-4. **Node 2 step 2**: toggle rejections → "Confirm" → progress → complete view with epoch stats → trail to Node 3.
-5. **Node 3 step 1**: "Run Evaluation" → progress → AUC chart renders with clickable timepoints.
-6. **Node 3 step 2**: click timepoint → stats update → "Confirm Timepoint" → trail to Node 4.
-7. **Node 4**: "Run Training" → progress → spatial topomaps render per decoder.
-8. `decoder_pipeline.joblib` exists in the output directory.
-9. No UI freeze during any backend call (main thread always responsive).
+1. `python -m frontend.main` — window opens immediately (no dialogs).
+2. **Node 1**: pick config YAML + output dir → settings sections populate → "Continue" becomes enabled → click → trail animates to Node 2.
+3. **Node 2**: pick data dir → "Load Data" → indeterminate bar runs → trail animates to Node 3.
+4. **Node 3 step 1**: "Run Preprocessing" → progress → ICA grid renders with real MNE topomaps.
+5. **Node 3 step 2**: toggle rejections → "Confirm" → progress → complete view with epoch stats → trail to Node 4.
+6. **Node 4 step 1**: "Run Evaluation" → progress → AUC chart renders with clickable timepoints.
+7. **Node 4 step 2**: click timepoint → stats update → "Confirm Timepoint" → trail to Node 5.
+8. **Node 5**: "Run Training" → progress → spatial topomaps render per decoder.
+9. `decoder_pipeline.joblib` exists in the output directory.
+10. No UI freeze during any backend call (main thread always responsive).
