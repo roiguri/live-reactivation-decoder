@@ -1270,11 +1270,36 @@ online_decoder/
 
 ---
 
+## 5. Frontend Architecture (Phase 1 UI)
+
+`src/frontend/` is planned but not committed. The active design is described in [Phase1_UI_Plan.md](Phase1_UI_Plan.md).
+
+**Summary:**
+
+- **Entry point:** `src/frontend/main.py` — launches two `QFileDialog` calls (config YAML + output dir), constructs `OfflineOrchestrator`, passes it to `Phase1Screen`.
+- **Layout:** `Phase1Screen` splits into a left `QStackedWidget` (workspace) and a right 280 px journey panel. All 4 nodes share one orchestrator instance.
+- **Threading:** Every blocking backend call runs in a `BaseWorker(QObject)` moved onto a `QThread`. Workers emit `result_ready(object)` and `error_occurred(str)`. The UI re-enables controls and advances the journey panel on `result_ready`.
+- **Charts:** All three chart types (AUC curves, TGM heatmaps, spatial topomaps) use **matplotlib** via `FigureCanvasQTAgg`. MNE's `plot_topomap` renders natively inside the embedded canvas.
+- **Journey panel animation:** On node completion, `QPropertyAnimation` fills the trail segment between nodes over 500 ms (`InOutCubic` easing).
+
+**Backend calls the UI makes (in order):**
+
+| Step | Call |
+|---|---|
+| Startup | `OfflineOrchestrator(settings_manager, output_dir)` |
+| Node 1 | `set_file_path(data_dir)` → `load_raw_data()` |
+| Node 2 step 1 | `run_step1_prepare_ica()` → returns `(ica_obj, suggested_components)` |
+| Node 2 step 2 | `run_step2_finish_pipeline(excluded_components)` → returns `{"n_epochs": int}` |
+| Node 3 | `run_evaluation()` → returns `{times, suggested_timepoint, tasks}` |
+| Node 4 | `run_training(timepoint)` → returns `{"model_filepath", "spatial_patterns", "mne_info"}` |
+
+---
+
 ## What This Document Doesn't Cover
 
 This is the authoritative architecture reference for the backend class surface in `online_decoder`. It does not cover:
 
-- **Frontend/UI implementation details**: See [../../knowledge_base/01_timeline/03_online_stage_design/Reactivation Decoder PRD.md](../../knowledge_base/01_timeline/03_online_stage_design/Reactivation%20Decoder%20PRD.md) for the operator workflow and UI intent
+- **Frontend/UI implementation details**: See [Phase1_UI_Plan.md](Phase1_UI_Plan.md) for the full Phase 1 UI plan. See [../../knowledge_base/01_timeline/03_online_stage_design/Reactivation Decoder PRD.md](../../knowledge_base/01_timeline/03_online_stage_design/Reactivation%20Decoder%20PRD.md) for the operator workflow and UI intent
 - **Development workflow and testing**: See [../../knowledge_base/03_codebase/online_architecture.md](../../knowledge_base/03_codebase/online_architecture.md) for pytest usage, dependency management, and running tests
 - **Current experiment-specific values**: See [../experiment_config.yaml](../experiment_config.yaml) for the concrete YAML used in this repository
 - **Experiment design and requirements**: See [../../knowledge_base/01_timeline/03_online_stage_design/Reactivation Decoder PRD.md](../../knowledge_base/01_timeline/03_online_stage_design/Reactivation%20Decoder%20PRD.md) for product requirements
