@@ -16,6 +16,14 @@ Code under `online_decoder/src/` is the source of truth for implemented behavior
 
 Last reconciled with code on **2026-05-09**.
 
+**Offline phase implementation status (as of last reconciliation):**
+- ✅ `SettingsManager` + Pydantic config models (`src/backend/core/`)
+- ✅ `OfflinePreprocessor` (`src/backend/offline_phase/preprocessor.py`)
+- ✅ `ModelEvaluator` (`src/backend/offline_phase/evaluator.py`)
+- ✅ `ModelTrainer` (`src/backend/offline_phase/trainer.py`)
+- ✅ Shared utilities (`src/backend/offline_phase/utils.py`) — `build_classifier`, `get_task_data`
+- 🔲 `OfflinePhaseOrchestrator` — planned; will own state management, bundling, and persistence
+
 # Reactivation Decoder: Application Architecture Plan
 ## 1. System Overview & Frontend Integration
 The application is built on a decoupled architecture. The "Backend" (Python data pipelines, Scikit-Learn, MNE) handles all heavy mathematical lifting, while the "Frontend" (PyQt6) handles user inputs, experiment states, and data visualization.
@@ -29,17 +37,17 @@ Because EEG processing and live inference are computationally demanding, mixing 
 ## 2. Phase 1: Offline Training
 **Context:** This phase occurs during the subject's break. Latency is not an issue here. The goal is to clean a large block of recorded .vhdr data, evaluate where the brain signal is strongest, let the user manually reject artifacts, and compile a final set of predictive models.
 
-**Status (2026-05-09):** In `online_decoder`, the configuration schema in `src/backend/core/config_models.py`, `SettingsManager` in `src/backend/core/settings_manager.py`, `OfflinePreprocessor` in `src/backend/offline_phase/preprocessor.py`, and `ModelEvaluator` in `src/backend/offline_phase/evaluator.py` are implemented. `ModelTrainer` remains a planned interface and is not currently committed under `src/backend/offline_phase/`.
+**Status (2026-05-09):** `SettingsManager`, `OfflinePreprocessor`, `ModelEvaluator`, `ModelTrainer`, and shared `utils.py` are implemented. `OfflinePhaseOrchestrator` is planned but not committed — it will be the single frontend-facing entry point for Phase 1.
 
 ### Data Flow & Communication
 
-1. UI initializes `SettingsManager` and passes its outputs to `OfflinePreprocessor`.
-2. UI calls `preprocessor.run_step1_prepare_ica()`. The preprocessor loads data, filters, fits ICA, and returns suggested bad components.
+1. UI initializes `SettingsManager` and passes its outputs to `OfflinePhaseOrchestrator`.
+2. UI calls `orchestrator.run_step1_prepare_ica()`. Internally calls `OfflinePreprocessor`. Returns suggested bad components.
 3. UI presents these components. The researcher selects which to drop.
-4. UI calls `preprocessor.run_step2_finish_pipeline(...)`. The preprocessor finishes cleaning and exports the `mne.Epochs`.
-5. UI passes epochs to `ModelEvaluator`. It runs Cross-Validation and returns arrays. UI plots the AUC graph.
+4. UI calls `orchestrator.run_step2_finish_pipeline(exclude_components)`. Preprocessor finishes; orchestrator stores `epochs` and `online_state` internally.
+5. UI calls `orchestrator.run_evaluation()`. Internally calls `ModelEvaluator`. Returns AUC/TGM arrays for plotting.
 6. The researcher clicks a specific timepoint on the graph.
-7. UI passes that timepoint to `ModelTrainer`, which trains the final models and bundles them with the `online_state` into a `.joblib` file.
+7. UI calls `orchestrator.run_training(timepoint, output_dir)`. Internally calls `ModelTrainer`, then bundles the returned models with the stored `online_state` and saves `decoder_pipeline.joblib`. Returns spatial patterns and `mne.Info` for topomap display.
 
 ### Component Map
 #### **1. Configuration Schema (`config_models.py`)**
@@ -76,11 +84,19 @@ Because EEG processing and live inference are computationally demanding, mixing 
 
 #### **5. ModelTrainer**
 
-* **Role:** The Compiler. Takes the user's final chosen timepoint, trains production-ready One-vs-All models on 100% of the data using balanced weights, and saves the system state.
+* **Role:** The Trainer. Takes the user's chosen timepoint and trains one production-ready classifier per task on 100% of the data. Computes Haufe et al. 2014 activation patterns for GUI topomap verification. Has no knowledge of persistence or Phase 1 artifacts.
 
-* **Inputs:** Chosen timepoint (float), mne.Epochs, online_state.
+* **Inputs:** Chosen timepoint (float), mne.Epochs, decoder settings.
 
-* **Outputs:** decoder_pipeline.joblib (saved to disk) and spatial patterns for the UI to draw verification topomaps.
+* **Outputs:** Fitted models (dict), spatial patterns (dict of ndarrays), mne.Info. Does **not** write to disk.
+
+#### **6. OfflinePhaseOrchestrator** *(planned)*
+
+* **Role:** The Façade. The single backend entry point for the Phase 1 UI. Holds intermediate state (epochs, online_state, eval results) between user-triggered steps, calls the individual backend classes in the correct order, and owns the final bundling and `decoder_pipeline.joblib` export.
+
+* **Inputs:** data directory, SettingsManager.
+
+* **Outputs:** Per-step return dicts shaped for the UI's specific display needs.
 
 ### Components Interface
 ```python
@@ -486,73 +502,120 @@ class ModelEvaluator:
 
 class ModelTrainer:
     """
-    Trains the final decoders at the user-selected timepoint, calculates biological
-    spatial patterns for verification, and exports the complete pipeline.
+    Trains the final decoders at the user-selected timepoint and calculates
+    biological spatial patterns for verification.
+
+    Persistence and bundling with Phase 1 artifacts is the responsibility of
+    OfflinePhaseOrchestrator, not this class.
+
+    **Status:** ✅ Implemented in `src/backend/offline_phase/trainer.py`
+
+    Single entry point: run_training().
     """
 
     def __init__(self, epochs: mne.Epochs, decoder_settings: Dict[str, Any]):
-        """
-        Args:
-            epochs: Fully cleaned mne.Epochs object.
-            decoder_settings: The 'decoders' block from the shared settings.
-        """
         self.epochs = epochs
         self.settings = decoder_settings
+        self.times: np.ndarray = epochs.times
 
-    def run_training(self,
-                     timepoint: float,
-                     online_state: Dict[str, Any],
-                     output_dir: Path) -> Dict[str, Any]:
+    def run_training(self, timepoint: float) -> Dict[str, Any]:
         """
-        The single entry point for the App to train and package the final models.
+        Train one classifier per task at the given timepoint.
 
         Args:
-            timepoint: The specific millisecond to extract features from (e.g., 0.350).
-            online_state: The cleaning rules from Phase 1, passed here ONLY to be
-                          bundled into the final export file.
-            output_dir: The directory to save the final pipeline file.
+            timepoint: Time in seconds to extract features from (e.g. 0.350).
 
         Returns:
-            Dict containing verification data for the GUI:
             {
-                "model_filepath": Path,          # Where the .pkl/.joblib was saved
-                "spatial_patterns": {            # For drawing topomaps in the GUI
-                    "red decoder": np.ndarray,   # Shape: (n_channels,)
-                    "yellow decoder": np.ndarray
-                },
-                "mne_info": mne.Info             # Required to plot the topomaps
+                "models":           {task_name: fitted_sklearn_pipeline},
+                "spatial_patterns": {task_name: np.ndarray},  # (n_channels,) each
+                "mne_info":         mne.Info,
             }
+
+        Raises:
+            ValueError: If settings contain no tasks, or if any task's labels
+                        are missing from the epochs or resolve to a single class.
         """
         pass
 
-    # --- Private Methods (Hidden from the App/UI layer) ---
-
-    def _extract_features(self, task_settings: Dict[str, Any], timepoint: float) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Retrieves the relevant features for a specific decoder training task.
-        Selects only the trials matching the task's pos_labels and neg_labels,
-        and extracts the 2D numpy array (n_trials, n_channels) at the requested time index.
-        """
+    def _extract_features(self, task_cfg: Dict[str, Any], timepoint: float) -> Tuple[np.ndarray, np.ndarray]:
+        """Return X_t (n_trials, n_channels) and binary y at the given timepoint."""
         pass
 
     def _train_classifier(self, X: np.ndarray, y: np.ndarray) -> Any:
-        """
-        Fits a single Scikit-Learn classifier (e.g., LDA) using the extracted features.
-        Explicitly uses class_weight='balanced' to handle unequal event distributions.
-        """
+        """Build and fit a classifier on 100% of the data via build_classifier()."""
         pass
 
     def _calculate_spatial_patterns(self, X: np.ndarray, model: Any) -> np.ndarray:
         """
-        Calculates the true biological activation patterns (A = Cov(X) * W * Cov(S)^-1)
-        from the raw classifier weights so the GUI topomaps accurately reflect brain activity.
+        Haufe et al. 2014: A = Cov(X) @ w / Var(X @ w).
+        Weights are transformed to original feature space when a scaler is present.
         """
         pass
 
-    def _export_pipeline(self, models: Dict[str, Any], timepoint: float, online_state: Dict[str, Any], output_dir: Path) -> Path:
+
+# ── Planned: OfflinePhaseOrchestrator ────────────────────────────────────────
+
+class OfflinePhaseOrchestrator:
+    """
+    Façade over the Phase 1 backend classes. The single entry point for the
+    Phase 1 UI. Holds intermediate state (epochs, online_state, eval_results)
+    between user-triggered steps, and owns the final artifact bundling and export.
+
+    **Status:** 🔲 Planned, not committed.
+    """
+
+    def __init__(self, data_dir: Path, settings_manager: "SettingsManager") -> None:
         """
-        Bundles the trained models, the timepoint, and the online_state into a
-        single 'decoder_pipeline.joblib' file for the Live Inference Engine.
+        Args:
+            data_dir: Directory containing the subject's raw .vhdr file.
+            settings_manager: Validated settings instance.
+        """
+        pass
+
+    def run_step1_prepare_ica(self) -> Dict[str, Any]:
+        """
+        Delegates to OfflinePreprocessor.run_step1_prepare_ica().
+
+        Returns:
+            {"suggested_components": list[int]}
+        """
+        pass
+
+    def run_step2_finish_pipeline(self, exclude_components: List[int]) -> Dict[str, Any]:
+        """
+        Delegates to OfflinePreprocessor.run_step2_finish_pipeline(), then
+        stores epochs and online_state internally for subsequent steps.
+
+        Returns:
+            {"n_epochs": int, "event_counts": dict[str, int], "channel_names": list[str]}
+        """
+        pass
+
+    def run_evaluation(self) -> Dict[str, Any]:
+        """
+        Delegates to ModelEvaluator.run_evaluation() using stored epochs.
+
+        Returns:
+            The full evaluator result dict (times, AUC curves, TGMs, suggested_timepoint).
+        """
+        pass
+
+    def run_training(self, timepoint: float, output_dir: Path) -> Dict[str, Any]:
+        """
+        Delegates to ModelTrainer.run_training(), then bundles the returned models
+        with the stored online_state and saves decoder_pipeline.joblib.
+
+        Args:
+            timepoint: Time in seconds selected by the researcher.
+            output_dir: Directory to write decoder_pipeline.joblib.
+
+        Returns:
+            {
+                "model_filepath":   Path,
+                "spatial_patterns": {task_name: np.ndarray},
+                "mne_info":         mne.Info,
+            }
         """
         pass
 ```
@@ -1140,9 +1203,11 @@ online_decoder/
 │       │   └── settings_manager.py # SettingsManager - Implemented
 │       │
 │       ├── offline_phase/         # Phase 1 Classes
+│       │   ├── utils.py           # build_classifier, get_task_data - Implemented
 │       │   ├── preprocessor.py    # OfflinePreprocessor - Implemented
 │       │   ├── evaluator.py       # ModelEvaluator - Implemented
-│       │   └── trainer.py         # ModelTrainer - Planned
+│       │   ├── trainer.py         # ModelTrainer - Implemented
+│       │   └── orchestrator.py    # OfflinePhaseOrchestrator - Planned
 │       │
 │       └── online_phase/          # Phase 2 Classes
 │           ├── lsl_receiver.py    # LSLReceiver - Implemented
@@ -1161,11 +1226,13 @@ online_decoder/
     │   └── test_settings_manager.py
     ├── notebooks/
     │   ├── validate_preprocessor.ipynb
-    │   └── validate_evaluator.ipynb
+    │   ├── validate_evaluator.ipynb
+    │   └── validate_trainer.ipynb
     ├── offline_phase/
     │   ├── conftest.py
     │   ├── test_preprocessor.py
-    │   └── test_evaluator.py
+    │   ├── test_evaluator.py
+    │   └── test_trainer.py
     └── online_phase/
         ├── test_lsl_receiver.py
         └── test_lsl_receiver_integration.py
