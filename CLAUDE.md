@@ -2,51 +2,61 @@
 
 `online_decoder/` is the **standalone app root**. It must remain self-contained and portable — no imports from the parent monorepo.
 
-## Architecture Reference
+## Authority
 
-See [docs/backend_plan.md](docs/backend_plan.md) for the authoritative component architecture (Phase 1 offline training, Phase 2 live inference). Always consult it before adding new backend components.
+Code under `src/` is the source of truth.
+
+Use [docs/backend_architecture.md](docs/backend_architecture.md) for the maintained backend summary and [docs/Phase2_Implementation_Plan.md](docs/Phase2_Implementation_Plan.md) for the active Phase 2 implementation checklist. If the docs and code disagree, follow the code and update the docs.
 
 ## Directory Layout
 
-```
+```text
 online_decoder/
-├── scripts/            — Root-local helper entrypoints for dev/integration tasks
+├── scripts/            — Characterization, replay, and smoke-test helpers
 ├── src/backend/
-│   ├── core/           — SettingsManager, Pydantic config models
-│   ├── offline_phase/  — OfflinePreprocessor, ModelEvaluator, ModelTrainer
-│   └── online_phase/   — LSLReceiver, RingBuffer, OnlinePreprocessor,
-│                          LiveInferenceEngine, StreamWorker
-├── tests/              — pytest suite, completely separate from src/
+│   ├── core/           — SettingsManager and Pydantic config models
+│   └── online_phase/   — LSLReceiver and online inference package scaffold
+├── tests/
+│   ├── core/           — Config validation tests
+│   └── online_phase/   — LSLReceiver unit and opt-in replay integration tests
 ├── tools/lslproxy/     — LSLProxy.exe and Windows DLLs (hardware interface)
-└── docs/               — architecture plans and documentation
+└── docs/               — Backend status and architecture notes
 ```
+
+## Current Backend Scope
+
+- Committed code currently covers config loading/validation and the LSL input boundary.
+- `src/backend/offline_phase/`, `src/frontend/`, `OnlinePreprocessor`, `LiveInferenceEngine`, and `StreamWorker` are not committed yet.
+- The active Phase 2 direction is **stateful micro-batch processing**. `RingBuffer` is obsolete in this app.
 
 ## Dependency Management
 
-- `requirements.txt` — runtime deps only (install for production)
-- `requirements-dev.txt` — `-r requirements.txt` + test/dev tools
-- `src/` code never imports test libraries (pytest, etc.)
+- `requirements.txt` — runtime deps only
+- `requirements-dev.txt` — `-r requirements.txt` plus test tooling
+- `src/` code never imports test libraries such as `pytest`
 
 ## Running Tests
 
 ```bash
 # From online_decoder/ root
 pytest tests/
-pytest tests/ -v --cov=src   # with coverage
+pytest tests/ -v --cov=src
+RUN_LSL_INTEGRATION=1 pytest tests/online_phase/test_lsl_receiver_integration.py -q
 python scripts/characterize_lsl.py --duration 10
+python scripts/smoke_test_lsl_receiver.py --duration 5
 ```
 
 ## Config Schema
 
-The experiment config lives in `experiment_config.yaml`. Schema is defined in `src/backend/core/config_models.py` (Pydantic v2). When the YAML schema changes, update the Pydantic models — that is the single source of truth for validation.
+The experiment config lives in `experiment_config.yaml`. Its schema is defined in `src/backend/core/config_models.py` using Pydantic v2. When the YAML schema changes, update the Pydantic models.
 
 ## When to Update This File
 
-Update CLAUDE.md when:
-- A new backend component directory is added under `src/backend/`
-- A new top-level workflow directory is added (for example `scripts/`)
-- A new project-wide convention is established (error handling, logging, naming, etc.)
+Update `CLAUDE.md` when:
+- The committed backend surface changes in a way that affects repo navigation
+- The Phase 2 architecture direction changes materially
+- A new top-level workflow directory is added
+- A new project-wide convention is established
 - The config schema structure changes significantly
-- New tooling is added that affects the development workflow
 
-Do NOT update for every new file — only for structural or convention changes that affect how an AI agent reasons about the project.
+Do not update it for every individual file.
