@@ -77,11 +77,13 @@ online_decoder/src/frontend/
 ## App Bootstrap
 
 `main.py` runs two `QFileDialog` calls before `MainWindow` opens:
-1. Pick `experiment_config.yaml` → creates `SettingsManager(config_path)`
-2. Pick output directory → `Path(output_dir)`
-3. Creates `OfflineOrchestrator(settings_manager, output_dir)` → passed into `Phase1Screen`
+1. Pick `experiment_config.yaml`
+2. Pick output directory
+3. Creates `AppSession(config_path, output_dir)` → passed into `Phase1Screen`
 
-`Phase1Screen.__init__(self, orchestrator: OfflineOrchestrator)` owns the orchestrator for the full session.
+`AppSession` is the **only** backend import in `main.py`. It owns `SettingsManager` internally and exposes `session.offline` (`OfflineOrchestrator`) for Phase 1. Phase 2 will add `session.build_stream_worker(...)`.
+
+`Phase1Screen.__init__(self, session: AppSession)` stores the session and accesses `session.offline` for all backend calls.
 
 **Running the app:** always run from the `online_decoder/` root:
 
@@ -99,8 +101,7 @@ from backend.offline_phase.orchestrator import OfflineOrchestrator
 
 ## Backend API Used by the UI
 
-All Phase 1 calls go through `OfflineOrchestrator`
-(`src/backend/offline_phase/orchestrator.py`):
+The frontend imports only `AppSession` (`src/backend/session.py`). All Phase 1 calls go through `session.offline` (an `OfflineOrchestrator`):
 
 | UI action | Call | Returns |
 |---|---|---|
@@ -124,7 +125,7 @@ Build the frontend from the outside in. Each step is **independently runnable an
 **Create:**
 - `styles/__init__.py`, `styles/theme.py` — color constants + QSS string
 - `main_window.py` — `QMainWindow` with a `QStackedWidget` (one slot per screen)
-- `main.py` — `QApplication` + two `QFileDialog` calls (config YAML → `SettingsManager`; output dir → `Path`) → creates `OfflineOrchestrator` → instantiates `Phase1Screen(orchestrator)` → shows `MainWindow`
+- `main.py` — `QApplication` + two `QFileDialog` calls (config YAML; output dir) → creates `AppSession(config_path, output_dir)` → instantiates `Phase1Screen(session)` → shows `MainWindow`
 
 **Stub:** `Phase1Screen` is an empty `QWidget` with `BG_LIGHT` background at this step.
 
@@ -406,9 +407,9 @@ A global QSS string is applied via `QApplication.setStyleSheet(...)`:
 
 These are open questions that affect the robustness of the app but are not blocking for the initial implementation. Each should be resolved before the app is used in a real experiment session.
 
-### Orchestrator as sole backend interface
+### AppSession as sole backend interface
 
-All UI code must call `OfflineOrchestrator` exclusively. No widget, view, or worker may import or instantiate `OfflinePreprocessor`, `ModelEvaluator`, `ModelTrainer`, or `SettingsManager` directly. The orchestrator is the only permitted backend entry point for the frontend.
+`AppSession` (`src/backend/session.py`) is the **only** backend class the frontend may import. All UI code reaches the orchestrator via `session.offline`. No widget, view, or worker may import or instantiate `OfflineOrchestrator`, `OfflinePreprocessor`, `ModelEvaluator`, `ModelTrainer`, or `SettingsManager` directly.
 
 **If data the UI needs is not exposed by the orchestrator's current API, stop and write a separate backend plan.** Do not work around the gap by importing backend internals, accessing private attributes, or adding temporary shims in the frontend. The fix belongs in the backend, documented and reviewed before the frontend step that needs it is implemented. An example of this pattern is the ICA time series data needed by `ICAComponentCard` (see Step 6 above).
 
