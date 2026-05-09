@@ -3,21 +3,25 @@ experiment_info:
 
 preprocessing:
   bandpass:
-    l_freq: 1.0
+    l_freq: 0.1
     h_freq: 40.0
     method: iir
     notch: 50.0
   resample:
-    target_rate: 250
+    target_rate: 256
+  reject_criteria:
+    hard_amplitude: 1.5e-4   # hard pre-filter before AutoReject (V)
+    flat_threshold: 0.5e-6   # channel std below this → flat (V)
+    noisy_z_score: 3.0       # channel std z-score above this → noisy
   ica:
-    n_components: 20
+    n_components: 25
     method: fastica
     random_state: 42
+    fit_l_freq: 1.0
   epochs:
     tmin: -0.2
-    tmax: 0.8
+    tmax: 1.0
     baseline: [null, 0]   # null = start of epoch
-    reject: 1.0e-4        # hard amplitude rejection threshold (Volts)
   autoreject:
     random_state: 42
 

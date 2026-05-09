@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class BandpassSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    l_freq: float = Field(default=1.0, gt=0)
+    l_freq: float = Field(default=0.1, gt=0)
     h_freq: float = 40.0
     method: Literal["iir", "fir"] = "iir"
     notch: Optional[float] = 50.0
@@ -25,25 +25,25 @@ class BandpassSettings(BaseModel):
 class ResampleSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    target_rate: int = Field(default=250, ge=1)
+    target_rate: int = Field(default=256, ge=1)
 
 
 class ICASettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    n_components: int = Field(default=20, ge=1)
+    n_components: int = Field(default=25, ge=1)
     method: Literal["fastica", "infomax", "picard"] = "fastica"
     random_state: int = 42
+    fit_l_freq: float = Field(default=1.0, gt=0)  # HP freq for the ICA fitting copy
 
 
 class EpochSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tmin: float = -0.2
-    tmax: float = 0.8
+    tmax: float = 1.0
     # [null, 0] in YAML → (None, 0.0) — passed directly to mne.Epochs
     baseline: tuple[Optional[float], Optional[float]] = (None, 0.0)
-    reject: float = Field(default=1.0e-4, gt=0)
 
     @model_validator(mode="after")
     def _tmin_below_tmax(self) -> EpochSettings:
@@ -52,6 +52,14 @@ class EpochSettings(BaseModel):
                 f"tmin ({self.tmin}) must be less than tmax ({self.tmax})"
             )
         return self
+
+
+class RejectCriteriaSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    hard_amplitude: float = Field(default=150e-6, gt=0)  # epoch amplitude pre-filter before AutoReject (V)
+    flat_threshold: float = Field(default=0.5e-6, gt=0)  # channel std below this → flat channel (V)
+    noisy_z_score: float = Field(default=3.0, gt=0)      # channel std z-score above this → noisy channel
 
 
 class AutoRejectSettings(BaseModel):
@@ -65,6 +73,7 @@ class PreprocessingSettings(BaseModel):
 
     bandpass: BandpassSettings = Field(default_factory=BandpassSettings)
     resample: ResampleSettings = Field(default_factory=ResampleSettings)
+    reject_criteria: RejectCriteriaSettings = Field(default_factory=RejectCriteriaSettings)
     ica: ICASettings = Field(default_factory=ICASettings)
     epochs: EpochSettings = Field(default_factory=EpochSettings)
     autoreject: AutoRejectSettings = Field(default_factory=AutoRejectSettings)

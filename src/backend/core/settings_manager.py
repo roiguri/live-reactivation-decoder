@@ -31,6 +31,6 @@ class SettingsManager:
         """Returns the 'decoders' block as a plain dict."""
         return self._config.decoders.model_dump()
 
-    def get_event_mapping(self) -> dict[int, str]:
-        """Returns a flat mapping of trigger ID → event name (e.g. {1: 'red'})."""
-        return {e.id: e.name for e in self._config.markers_mapping.events}
+    def get_event_mapping(self) -> dict[str, int]:
+        """Returns event name → trigger ID (e.g. {'red': 1}), ready for mne.Epochs event_id."""
+        return {e.name: e.id for e in self._config.markers_mapping.events}

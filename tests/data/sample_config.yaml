@@ -9,15 +9,19 @@ preprocessing:
     notch: 50.0
   resample:
     target_rate: 250
+  reject_criteria:
+    hard_amplitude: 1.5e-4
+    flat_threshold: 0.5e-6
+    noisy_z_score: 3.0
   ica:
     n_components: 20
     method: fastica
     random_state: 42
+    fit_l_freq: 1.0
   epochs:
     tmin: -0.2
-    tmax: 0.8
+    tmax: 1.0
     baseline: [null, 0]
-    reject: 1.0e-4
   autoreject:
     random_state: 42
 

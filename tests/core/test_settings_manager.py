@@ -92,26 +92,26 @@ class TestGetDecoderSettings:
 
 
 class TestGetEventMapping:
-    def test_returns_int_keys(self, sample_config_path):
+    def test_returns_str_keys(self, sample_config_path):
         mapping = SettingsManager(sample_config_path).get_event_mapping()
-        assert all(isinstance(k, int) for k in mapping.keys())
+        assert all(isinstance(k, str) for k in mapping.keys())
 
-    def test_returns_str_values(self, sample_config_path):
+    def test_returns_int_values(self, sample_config_path):
         mapping = SettingsManager(sample_config_path).get_event_mapping()
-        assert all(isinstance(v, str) for v in mapping.values())
+        assert all(isinstance(v, int) for v in mapping.values())
 
     def test_correct_mappings(self, sample_config_path):
         mapping = SettingsManager(sample_config_path).get_event_mapping()
-        assert mapping[1] == "red"
-        assert mapping[2] == "green"
-        assert mapping[3] == "yellow"
+        assert mapping["red"] == 1
+        assert mapping["green"] == 2
+        assert mapping["yellow"] == 3
 
     def test_single_event(self, tmp_config_file, minimal_valid_data):
         # Override to single event (no decoder tasks referencing it)
         minimal_valid_data["markers_mapping"] = {"events": [{"id": 99, "name": "target"}]}
         minimal_valid_data["decoders"] = {"model": "LDA", "tasks": []}
         mapping = SettingsManager(tmp_config_file(minimal_valid_data)).get_event_mapping()
-        assert mapping == {99: "target"}
+        assert mapping == {"target": 99}
 
 
 class TestAllowedValues:
