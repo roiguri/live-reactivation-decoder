@@ -29,7 +29,7 @@ Because EEG processing and live inference are computationally demanding, mixing 
 ## 2. Phase 1: Offline Training
 **Context:** This phase occurs during the subject's break. Latency is not an issue here. The goal is to clean a large block of recorded .vhdr data, evaluate where the brain signal is strongest, let the user manually reject artifacts, and compile a final set of predictive models.
 
-**Status (2026-05-09):** In `online_decoder`, the configuration schema in `src/backend/core/config_models.py` and `SettingsManager` in `src/backend/core/settings_manager.py` are implemented. `OfflinePreprocessor`, `ModelEvaluator`, and `ModelTrainer` remain planned interfaces and are not currently committed under `src/backend/offline_phase/`.
+**Status (2026-05-09):** In `online_decoder`, the configuration schema in `src/backend/core/config_models.py`, `SettingsManager` in `src/backend/core/settings_manager.py`, and `OfflinePreprocessor` in `src/backend/offline_phase/preprocessor.py` are implemented. `ModelEvaluator` and `ModelTrainer` remain planned interfaces and are not currently committed under `src/backend/offline_phase/`.
 
 ### Data Flow & Communication
 
@@ -86,7 +86,7 @@ Because EEG processing and live inference are computationally demanding, mixing 
 ```python
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class BandpassSettings(BaseModel):
@@ -97,7 +97,7 @@ class BandpassSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    l_freq: float = Field(default=1.0, gt=0)
+    l_freq: float = Field(default=0.1, gt=0)
     h_freq: float = 40.0
     method: Literal["iir", "fir"] = "iir"
     notch: Optional[float] = 50.0
@@ -110,7 +110,7 @@ class ResampleSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    target_rate: int = Field(default=250, ge=1)
+    target_rate: int = Field(default=256, ge=1)
 
 
 class ICASettings(BaseModel):
@@ -120,33 +120,34 @@ class ICASettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    n_components: int = Field(default=20, ge=1)
+    n_components: int = Field(default=25, ge=1)
     method: Literal["fastica", "infomax", "picard"] = "fastica"
-    random_state: int = 42
+    fit_l_freq: float = Field(default=1.0, gt=0)  # HP freq for the ICA fitting copy
 
 
 class EpochSettings(BaseModel):
     """
-    Epoch extraction and hard rejection parameters for Phase 1.
+    Epoch extraction parameters for Phase 1.
     Contract: tmin must remain below tmax.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     tmin: float = -0.2
-    tmax: float = 0.8
+    tmax: float = 1.0
     baseline: tuple[Optional[float], Optional[float]] = (None, 0.0)
-    reject: float = Field(default=1.0e-4, gt=0)
 
 
-class AutoRejectSettings(BaseModel):
+class RejectCriteriaSettings(BaseModel):
     """
-    AutoReject configuration for Phase 1 epoch repair.
+    Amplitude and channel-quality thresholds for Phase 1 epoch and channel rejection.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    random_state: int = 42
+    hard_amplitude: float = Field(default=150e-6, gt=0)  # epoch amplitude pre-filter before AutoReject (V)
+    flat_threshold: float = Field(default=0.5e-6, gt=0)  # channel std below this → flat channel (V)
+    noisy_z_score: float = Field(default=3.0, gt=0)      # channel std z-score above this → noisy channel
 
 
 class PreprocessingSettings(BaseModel):
@@ -156,11 +157,12 @@ class PreprocessingSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    random_state: int = 42
     bandpass: BandpassSettings = Field(default_factory=BandpassSettings)
     resample: ResampleSettings = Field(default_factory=ResampleSettings)
+    reject_criteria: RejectCriteriaSettings = Field(default_factory=RejectCriteriaSettings)
     ica: ICASettings = Field(default_factory=ICASettings)
     epochs: EpochSettings = Field(default_factory=EpochSettings)
-    autoreject: AutoRejectSettings = Field(default_factory=AutoRejectSettings)
 
 
 class CVSettings(BaseModel):
@@ -284,6 +286,8 @@ class OfflinePreprocessor:
     """
     Executes the offline cleaning pipeline for a single subject and session.
     Designed for a two-step execution to allow manual GUI intervention during ICA.
+
+    **Status:** ✅ Implemented in `src/backend/offline_phase/preprocessor.py`
     """
 
     def __init__(self, subject_dir: Path, session: str, preprocessing_settings: Dict[str, Any]):
@@ -1114,8 +1118,8 @@ online_decoder/
 │       │   ├── config_models.py    # Pydantic config schema - Implemented
 │       │   └── settings_manager.py # SettingsManager - Implemented
 │       │
-│       ├── offline_phase/         # Planned Phase 1 Classes
-│       │   ├── preprocessor.py    # OfflinePreprocessor - Planned
+│       ├── offline_phase/         # Phase 1 Classes
+│       │   ├── preprocessor.py    # OfflinePreprocessor - Implemented
 │       │   ├── evaluator.py       # ModelEvaluator - Planned
 │       │   └── trainer.py         # ModelTrainer - Planned
 │       │
@@ -1134,6 +1138,11 @@ online_decoder/
 └── tests/
     ├── core/
     │   └── test_settings_manager.py
+    ├── notebooks/
+    │   └── validate_preprocessor.ipynb
+    ├── offline_phase/
+    │   ├── conftest.py
+    │   └── test_preprocessor.py
     └── online_phase/
         ├── test_lsl_receiver.py
         └── test_lsl_receiver_integration.py

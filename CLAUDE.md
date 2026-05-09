@@ -15,9 +15,12 @@ online_decoder/
 ├── scripts/            — Characterization, replay, and smoke-test helpers
 ├── src/backend/
 │   ├── core/           — SettingsManager and Pydantic config models
+│   ├── offline_phase/  — OfflinePreprocessor (Phase 1 cleaning pipeline)
 │   └── online_phase/   — LSLReceiver and online inference package scaffold
 ├── tests/
 │   ├── core/           — Config validation tests
+│   ├── notebooks/      — Manual validation notebooks
+│   ├── offline_phase/  — OfflinePreprocessor unit tests
 │   └── online_phase/   — LSLReceiver unit and opt-in replay integration tests
 ├── tools/lslproxy/     — LSLProxy.exe and Windows DLLs (hardware interface)
 └── docs/               — Backend status and architecture notes
@@ -25,8 +28,8 @@ online_decoder/
 
 ## Current Backend Scope
 
-- Committed code currently covers config loading/validation and the LSL input boundary.
-- `src/backend/offline_phase/`, `src/frontend/`, `OnlinePreprocessor`, `LiveInferenceEngine`, and `StreamWorker` are not committed yet.
+- Committed code currently covers config loading/validation, the LSL input boundary, and the Phase 1 `OfflinePreprocessor`.
+- `src/backend/offline_phase/evaluator.py`, `src/backend/offline_phase/trainer.py`, `src/frontend/`, `OnlinePreprocessor`, `LiveInferenceEngine`, and `StreamWorker` are not committed yet.
 - The active Phase 2 direction is **stateful micro-batch processing**. `RingBuffer` is obsolete in this app.
 
 ## Dependency Management
