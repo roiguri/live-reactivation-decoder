@@ -15,6 +15,7 @@ from sklearn.svm import SVC
 
 logger = logging.getLogger(__name__)
 
+# TODO: consider computing an empiric change level - this depend if weights are balanced
 _CHANCE_LEVEL = 0.5
 
 
