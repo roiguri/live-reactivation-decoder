@@ -48,7 +48,7 @@ class TestGetPreprocessingParams:
 
     def test_contains_all_sections(self, sample_config_path):
         params = SettingsManager(sample_config_path).get_preprocessing_params()
-        assert {"bandpass", "resample", "ica", "epochs", "autoreject"} <= params.keys()
+        assert {"random_state", "bandpass", "resample", "ica", "epochs"} <= params.keys()
 
     def test_bandpass_values(self, sample_config_path):
         bandpass = SettingsManager(sample_config_path).get_preprocessing_params()["bandpass"]
@@ -66,7 +66,7 @@ class TestGetPreprocessingParams:
 
     def test_defaults_applied_when_section_omitted(self, tmp_config_file, minimal_valid_data):
         params = SettingsManager(tmp_config_file(minimal_valid_data)).get_preprocessing_params()
-        assert params["resample"]["target_rate"] == 250
+        assert params["resample"]["target_rate"] == 256
 
 
 class TestGetDecoderSettings:

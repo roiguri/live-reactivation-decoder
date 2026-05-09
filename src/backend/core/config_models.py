@@ -33,7 +33,6 @@ class ICASettings(BaseModel):
 
     n_components: int = Field(default=25, ge=1)
     method: Literal["fastica", "infomax", "picard"] = "fastica"
-    random_state: int = 42
     fit_l_freq: float = Field(default=1.0, gt=0)  # HP freq for the ICA fitting copy
 
 
@@ -62,21 +61,15 @@ class RejectCriteriaSettings(BaseModel):
     noisy_z_score: float = Field(default=3.0, gt=0)      # channel std z-score above this → noisy channel
 
 
-class AutoRejectSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    random_state: int = 42
-
-
 class PreprocessingSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    random_state: int = 42
     bandpass: BandpassSettings = Field(default_factory=BandpassSettings)
     resample: ResampleSettings = Field(default_factory=ResampleSettings)
     reject_criteria: RejectCriteriaSettings = Field(default_factory=RejectCriteriaSettings)
     ica: ICASettings = Field(default_factory=ICASettings)
     epochs: EpochSettings = Field(default_factory=EpochSettings)
-    autoreject: AutoRejectSettings = Field(default_factory=AutoRejectSettings)
 
 
 class CVSettings(BaseModel):

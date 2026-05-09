@@ -2,6 +2,7 @@ experiment_info:
   name: Reactivation_Study_V1
 
 preprocessing:
+  random_state: 42
   bandpass:
     l_freq: 0.1
     h_freq: 40.0
@@ -16,14 +17,11 @@ preprocessing:
   ica:
     n_components: 25
     method: fastica
-    random_state: 42
     fit_l_freq: 1.0
   epochs:
     tmin: -0.2
     tmax: 1.0
     baseline: [null, 0]   # null = start of epoch
-  autoreject:
-    random_state: 42
 
 decoders:
   model: LDA

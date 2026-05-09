@@ -234,7 +234,7 @@ class OfflinePreprocessor:
         self.ica = mne.preprocessing.ICA(
             n_components=ica_s["n_components"],
             method=ica_s["method"],
-            random_state=ica_s["random_state"],
+            random_state=self.settings["random_state"],
             max_iter="auto",
         )
         self.ica.fit(raw_for_ica, verbose=False)
@@ -315,8 +315,7 @@ class OfflinePreprocessor:
             return
         # end TODO
         
-        ar_s = self.settings["autoreject"]
-        ar = AutoReject(random_state=ar_s["random_state"], verbose=False)
+        ar = AutoReject(random_state=self.settings["random_state"], verbose=False)
         self.epochs, reject_log = ar.fit_transform(self.epochs, return_log=True)
         n_dropped = reject_log.bad_epochs.sum()
         logger.info("AutoReject dropped %d epochs", n_dropped)

@@ -50,12 +50,12 @@ def synthetic_raw_with_events() -> mne.io.RawArray:
 def preprocessing_settings() -> dict:
     """Minimal preprocessing settings dict matching the config schema defaults."""
     return {
+        "random_state": 42,
         "bandpass": {"l_freq": 1.0, "h_freq": 40.0, "method": "iir", "notch": 50.0},
         "resample": {"target_rate": 250},
         "reject_criteria": {"hard_amplitude": 1e-3, "flat_threshold": 0.5e-6, "noisy_z_score": 3.0},
-        "ica": {"n_components": 4, "method": "fastica", "random_state": 42, "fit_l_freq": 1.0},
+        "ica": {"n_components": 4, "method": "fastica", "fit_l_freq": 1.0},
         "epochs": {"tmin": -0.1, "tmax": 0.5, "baseline": [None, 0]},
-        "autoreject": {"random_state": 42},
     }
 
 
