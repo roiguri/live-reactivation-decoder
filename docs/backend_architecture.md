@@ -988,8 +988,9 @@ class LiveInferenceEngine:
         """
         Args:
             models: Dict mapping decoder task names to fitted sklearn-compatible models.
-            metadata: Model-facing metadata such as feature_width, positive_class,
-                      and task_positive_classes.
+            metadata: Model-facing metadata such as feature_width and optional
+                      positive_class. Phase 1 should train each one-vs-other
+                      decoder with 0 = other and 1 = target.
         """
         pass
 

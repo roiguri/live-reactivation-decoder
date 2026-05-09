@@ -104,7 +104,6 @@ Planned artifact shape:
     "metadata": {
         "feature_width": 64,
         "positive_class": 1,
-        "task_positive_classes": {"red decoder": 1},
     },
 }
 ```
@@ -122,6 +121,8 @@ Behavior:
 - `LiveInferenceEngine` validates model-facing runtime compatibility.
 - `predict()` requires a 2D feature array.
 - `predict()` returns one 1D positive-class probability vector per decoder task.
+  Phase 1 is expected to train every one-vs-other decoder with `0 = other` and
+  `1 = target`, so `positive_class` defaults to `1`.
 - Each probability vector has shape `(n_feature_rows,)`.
 - `LiveInferenceEngine` must not assume `250 Hz` or `256 Hz`; it validates
   feature width only.
@@ -238,10 +239,8 @@ models and metadata.
 ### Commit 4: Positive-Class Selection
 
 - [ ] Add tests for positive-class selection:
-  - [ ] per-task `metadata["task_positive_classes"][task_name]`
-  - [ ] global `metadata["positive_class"]`
   - [ ] fallback to class label `1`
-  - [ ] fallback to class label `True`
+  - [ ] optional global `metadata["positive_class"]`
   - [ ] missing identifiable positive class raises `ValueError`
   - [ ] probability matrix with wrong row count raises `ValueError`
   - [ ] probability matrix with too few columns raises `ValueError`

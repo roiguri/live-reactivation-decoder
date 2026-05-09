@@ -116,30 +116,16 @@ class LiveInferenceEngine:
                 "probability selection."
             )
 
-        target_labels = self._positive_class_candidates(task_name)
+        target_label = self._metadata.get("positive_class", 1)
         class_labels = list(classes)
-        for target_label in target_labels:
-            for idx, class_label in enumerate(class_labels):
-                if class_label == target_label:
-                    return idx
+        for idx, class_label in enumerate(class_labels):
+            if class_label == target_label:
+                return idx
 
         raise ValueError(
             f"Decoder '{task_name}' classes_ does not contain an identifiable "
-            f"positive class. Tried: {target_labels}"
+            f"positive class. Tried: {target_label}"
         )
-
-    def _positive_class_candidates(self, task_name: str) -> list[Any]:
-        task_positive_classes = self._metadata.get("task_positive_classes", {})
-        if task_positive_classes is None:
-            task_positive_classes = {}
-        if not isinstance(task_positive_classes, dict):
-            raise ValueError("task_positive_classes metadata must be a dictionary.")
-
-        if task_name in task_positive_classes:
-            return [task_positive_classes[task_name]]
-        if "positive_class" in self._metadata:
-            return [self._metadata["positive_class"]]
-        return [1, True]
 
     @classmethod
     def _derive_feature_width(

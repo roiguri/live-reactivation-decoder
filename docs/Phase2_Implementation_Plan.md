@@ -125,15 +125,17 @@ engine = LiveInferenceEngine(
 
 **Inputs:**
 - Unwrapped trained sklearn-compatible decoder models.
-- Model-facing metadata such as `feature_width`, `positive_class`, and
-  `task_positive_classes`.
+- Model-facing metadata such as `feature_width` and optional global
+  `positive_class`.
 - `model_features` from `OnlinePreprocessor`.
 
 **Responsibilities:**
 - Validate model runtime compatibility.
 - Validate feature width before prediction.
 - Run `predict_proba()` for each configured decoder task.
-- Select the configured positive-class probability.
+- Select the positive-class probability. Phase 1 is expected to train every
+  one-vs-other decoder with `0 = other` and `1 = target`, so the default
+  positive label is `1`.
 - Return probabilities for every feature row produced by the batch.
 
 **Boundary rule:**

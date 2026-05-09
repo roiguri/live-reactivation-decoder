@@ -199,27 +199,7 @@ def test_predict_returns_one_positive_probability_vector_per_task():
     assert predictions["red decoder"].shape == (2,)
 
 
-def test_predict_uses_per_task_positive_class_metadata():
-    engine = LiveInferenceEngine(
-        models={
-            "red decoder": FakeModel(
-                classes=(0, 1, 2),
-                probabilities=np.array([[0.2, 0.3, 0.5]]),
-            )
-        },
-        metadata={
-            "feature_width": 64,
-            "positive_class": 1,
-            "task_positive_classes": {"red decoder": 2},
-        },
-    )
-
-    predictions = engine.predict(_features(n_rows=1))
-
-    np.testing.assert_allclose(predictions["red decoder"], [0.5])
-
-
-def test_predict_uses_global_positive_class_metadata():
+def test_predict_uses_configured_positive_class_metadata():
     engine = LiveInferenceEngine(
         models={
             "red decoder": FakeModel(
@@ -235,7 +215,7 @@ def test_predict_uses_global_positive_class_metadata():
     np.testing.assert_allclose(predictions["red decoder"], [0.65])
 
 
-def test_predict_falls_back_to_class_label_one():
+def test_predict_falls_back_to_binary_target_label_one():
     engine = LiveInferenceEngine(
         models={
             "red decoder": FakeModel(
@@ -249,22 +229,6 @@ def test_predict_falls_back_to_class_label_one():
     predictions = engine.predict(_features(n_rows=1))
 
     np.testing.assert_allclose(predictions["red decoder"], [0.75])
-
-
-def test_predict_falls_back_to_class_label_true():
-    engine = LiveInferenceEngine(
-        models={
-            "red decoder": FakeModel(
-                classes=(False, True),
-                probabilities=np.array([[0.4, 0.6]]),
-            )
-        },
-        metadata={"feature_width": 64},
-    )
-
-    predictions = engine.predict(_features(n_rows=1))
-
-    np.testing.assert_allclose(predictions["red decoder"], [0.6])
 
 
 def test_predict_raises_when_positive_class_is_not_identifiable():
@@ -323,14 +287,4 @@ def test_predict_rejects_probability_matrix_with_too_few_columns():
     )
 
     with pytest.raises(ValueError, match="at least two probability columns"):
-        engine.predict(_features(n_rows=1))
-
-
-def test_task_positive_classes_metadata_must_be_dict():
-    engine = LiveInferenceEngine(
-        models={"red decoder": FakeModel()},
-        metadata={"feature_width": 64, "task_positive_classes": ["bad"]},
-    )
-
-    with pytest.raises(ValueError, match="task_positive_classes"):
         engine.predict(_features(n_rows=1))
