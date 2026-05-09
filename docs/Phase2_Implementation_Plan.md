@@ -27,6 +27,8 @@ LSLReceiver -> StreamWorker -> OnlinePreprocessor -> LiveInferenceEngine -> logs
 ## Current Status
 
 - `[x]` Config schema and `SettingsManager` are implemented.
+- `[x]` `OfflinePreprocessor` is implemented and unit-tested.
+- `[x]` `ModelEvaluator` is implemented and unit-tested (108 tests passing).
 - `[x]` `LSLReceiver` is implemented and unit-tested.
 - `[~]` Replay, smoke-test, and opt-in integration tooling exists.
 - `[~]` `OfflinePreprocessor` exists and exports an initial `online_state`.

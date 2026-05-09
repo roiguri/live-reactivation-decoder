@@ -29,7 +29,7 @@ Because EEG processing and live inference are computationally demanding, mixing 
 ## 2. Phase 1: Offline Training
 **Context:** This phase occurs during the subject's break. Latency is not an issue here. The goal is to clean a large block of recorded .vhdr data, evaluate where the brain signal is strongest, let the user manually reject artifacts, and compile a final set of predictive models.
 
-**Status (2026-05-09):** In `online_decoder`, the configuration schema in `src/backend/core/config_models.py`, `SettingsManager` in `src/backend/core/settings_manager.py`, and `OfflinePreprocessor` in `src/backend/offline_phase/preprocessor.py` are implemented. `ModelEvaluator` and `ModelTrainer` remain planned interfaces and are not currently committed under `src/backend/offline_phase/`.
+**Status (2026-05-09):** In `online_decoder`, the configuration schema in `src/backend/core/config_models.py`, `SettingsManager` in `src/backend/core/settings_manager.py`, `OfflinePreprocessor` in `src/backend/offline_phase/preprocessor.py`, and `ModelEvaluator` in `src/backend/offline_phase/evaluator.py` are implemented. `ModelTrainer` remains a planned interface and is not currently committed under `src/backend/offline_phase/`.
 
 ### Data Flow & Communication
 
@@ -188,17 +188,35 @@ class DecoderTask(BaseModel):
     neg_labels: list[str]
 
 
+_VALID_PARAMS_BY_MODEL: dict[str, set[str]] = {
+    "LDA":      {"solver", "shrinkage", "n_components", "priors"},
+    "Logistic": {"C", "penalty", "solver", "class_weight", "max_iter"},
+    "SVM":      {"C", "kernel", "gamma", "class_weight", "max_iter"},
+}
+
+_CLASSIFIER_DEFAULTS: dict[str, dict] = {
+    "LDA":      {},
+    "Logistic": {"solver": "liblinear", "class_weight": "balanced",
+                 "C": 1000, "penalty": "l1", "max_iter": 1000},
+    "SVM":      {"kernel": "linear", "class_weight": "balanced", "C": 1.0, "max_iter": 1000},
+}
+
+
 class DecoderSettings(BaseModel):
     """
-    Top-level decoder block, including model family, params, CV, and tasks.
+    Top-level decoder block, including model family, params, scaler, CV, and tasks.
+    Validator merges _CLASSIFIER_DEFAULTS into params so callers receive fully-populated params.
+    Validator also rejects param keys that are invalid for the chosen model.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    model: Literal["LDA"] = "LDA"
-    params: dict[str, Any] = Field(default_factory=dict)
-    cv: CVSettings = Field(default_factory=CVSettings)
-    tasks: list[DecoderTask] = Field(default_factory=list)
+    model:        Literal["LDA", "Logistic", "SVM"] = "LDA"
+    params:       dict[str, Any] = Field(default_factory=dict)
+    scale_method: Literal["standard", "median"] | None = "standard"
+    cv:           CVSettings = Field(default_factory=CVSettings)
+    tasks:        list[DecoderTask] = Field(default_factory=list)
+    random_state: int = 42
 
 
 class EventEntry(BaseModel):
@@ -275,10 +293,10 @@ class SettingsManager:
         """
         pass
 
-    def get_event_mapping(self) -> dict[int, str]:
+    def get_event_mapping(self) -> dict[str, int]:
         """
-        Returns a flat dictionary mapping integer trigger IDs to event names
-        (e.g., {1: 'red', 2: 'green', 3: 'yellow'}).
+        Returns a flat dictionary mapping event names to integer trigger IDs
+        (e.g., {'red': 1, 'green': 2, 'yellow': 3}).
         """
         pass
 
@@ -419,19 +437,22 @@ class OfflinePreprocessor:
 
 class ModelEvaluator:
     """
-    Evaluates the offline performance of specific decoding tasks using Cross-Validation.
-    Acts as a single-entry-point engine that runs all necessary mathematical evaluations
-    and returns a comprehensive dictionary formatted for the GUI dashboard.
+    Evaluates offline decoder performance using Temporal Generalization CV.
+    Runs one GeneralizingEstimator pass per task to produce both the TGM and
+    the diagonal AUC curve, then surfaces a suggested inference timepoint.
+
+    Single entry point: run_evaluation().
+
+    **Status:** ✅ Implemented in `src/backend/offline_phase/evaluator.py`
     """
 
     def __init__(self, epochs: mne.Epochs, decoder_settings: Dict[str, Any]):
         """
-        Initializes the evaluator with cleaned epochs and the blueprint for the decoders.
-
         Args:
             epochs: Cleaned mne.Epochs object.
-            decoder_settings: Dictionary containing 'model', 'params', 'tasks',
-                              and 'cv_params' (e.g., {'n_splits': 5}).
+            decoder_settings: Dict from SettingsManager.get_decoder_settings().
+                              Required keys: 'model', 'params', 'scale_method',
+                              'cv' ({'k': int}), 'random_state', 'tasks'.
         """
         self.epochs = epochs
         self.settings = decoder_settings
@@ -439,27 +460,27 @@ class ModelEvaluator:
 
     def run_evaluation(self) -> Dict[str, Any]:
         """
-        Executes the complete evaluation pipeline for all decoders defined in the settings.
-        This includes diagonal cross-validation, temporal generalization matrices,
-        chance level calculations, and peak timepoint suggestions.
+        Run full evaluation for all decoder tasks defined in settings.
 
         Returns:
-            Dict[str, Any]: A complete payload for the UI containing all plot data and stats.
-            Example structure:
             {
-                "times": np.ndarray,             # 1D array (X-axis for plots)
-                "suggested_timepoint": float,    # Recommended inference time (e.g., 0.350)
-                "average_peak_auc": float,       # The mean AUC across all decoders at peak
+                "times": np.ndarray,
+                "suggested_timepoint": float,
+                "average_peak_auc": float,
                 "tasks": {
-                    "red decoder": {
-                        "diagonal_auc": np.ndarray,  # 1D array for the line chart
-                        "tgm_matrix": np.ndarray,    # 2D array for the heatmap
-                        "peak_auc": float,           # Max AUC for this specific decoder
-                        "chance_level": float        # Calculated baseline / permutation result
+                    "<task_name>": {
+                        "diagonal_auc": np.ndarray,   # shape (n_times,)
+                        "tgm_matrix":   np.ndarray,   # shape (n_times, n_times)
+                        "peak_auc":     float,
+                        "chance_level": float,        # always 0.5 for binary AUC
                     },
-                    "yellow decoder": { ... }
-                }
+                    ...
+                },
             }
+
+        Raises:
+            ValueError: If settings contain no tasks, or if any task's labels
+                        are missing from the epochs or resolve to a single class.
         """
         pass
 
@@ -1120,7 +1141,7 @@ online_decoder/
 │       │
 │       ├── offline_phase/         # Phase 1 Classes
 │       │   ├── preprocessor.py    # OfflinePreprocessor - Implemented
-│       │   ├── evaluator.py       # ModelEvaluator - Planned
+│       │   ├── evaluator.py       # ModelEvaluator - Implemented
 │       │   └── trainer.py         # ModelTrainer - Planned
 │       │
 │       └── online_phase/          # Phase 2 Classes
@@ -1139,10 +1160,12 @@ online_decoder/
     ├── core/
     │   └── test_settings_manager.py
     ├── notebooks/
-    │   └── validate_preprocessor.ipynb
+    │   ├── validate_preprocessor.ipynb
+    │   └── validate_evaluator.ipynb
     ├── offline_phase/
     │   ├── conftest.py
-    │   └── test_preprocessor.py
+    │   ├── test_preprocessor.py
+    │   └── test_evaluator.py
     └── online_phase/
         ├── test_lsl_receiver.py
         └── test_lsl_receiver_integration.py
