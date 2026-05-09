@@ -141,3 +141,4 @@ def svm_evaluator_settings() -> dict:
             {"name": "red decoder", "pos_labels": ["red"], "neg_labels": ["green", "yellow"]},
         ],
     )
+

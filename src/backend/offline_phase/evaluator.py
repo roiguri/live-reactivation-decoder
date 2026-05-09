@@ -6,12 +6,9 @@ from typing import Any
 import mne
 import numpy as np
 from mne.decoding import GeneralizingEstimator, cross_val_multiscore
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import StratifiedKFold
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import RobustScaler, StandardScaler
-from sklearn.svm import SVC
+
+from backend.offline_phase.utils import build_classifier, get_task_data
 
 logger = logging.getLogger(__name__)
 
@@ -93,48 +90,11 @@ class ModelEvaluator:
         self, task_cfg: dict[str, Any]
     ) -> tuple[np.ndarray, np.ndarray]:
         """Return X (n_trials, n_ch, n_times) and binary y for one task."""
-        pos_labels: list[str] = task_cfg["pos_labels"]
-        neg_labels: list[str] = task_cfg["neg_labels"]
-        all_labels = pos_labels + neg_labels
-
-        missing = [lbl for lbl in all_labels if lbl not in self.epochs.event_id]
-        if missing:
-            raise ValueError(
-                f"Task '{task_cfg['name']}': labels not found in epochs: {missing}"
-            )
-
-        selected = self.epochs[all_labels]
-        pos_codes = {selected.event_id[lbl] for lbl in pos_labels}
-        y = np.where(np.isin(selected.events[:, 2], list(pos_codes)), 1, 0)
-
-        if len(np.unique(y)) < 2:
-            raise ValueError(
-                f"Task '{task_cfg['name']}': only one class present after label filtering."
-            )
-
-        return selected.get_data(), y
+        return get_task_data(self.epochs, task_cfg)
 
     def _build_classifier(self) -> Any:
         """Build scaler + classifier pipeline from settings."""
-        model_type: str = self.settings["model"]
-        scale_method: str | None = self.settings["scale_method"]
-        params: dict = self.settings["params"]
-        random_state: int = self.settings["random_state"]
-
-        if model_type == "LDA":
-            clf = LinearDiscriminantAnalysis(**params)
-        elif model_type == "Logistic":
-            clf = LogisticRegression(random_state=random_state, **params)
-        elif model_type == "SVM":
-            clf = SVC(probability=True, random_state=random_state, **params)
-        else:
-            raise ValueError(f"Unsupported model type: {model_type!r}")
-
-        if scale_method == "standard":
-            return make_pipeline(StandardScaler(), clf)
-        elif scale_method == "median":
-            return make_pipeline(RobustScaler(), clf)
-        return clf
+        return build_classifier(self.settings)
 
     def _run_tgm_cv(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         """
