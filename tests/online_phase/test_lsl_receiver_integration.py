@@ -45,7 +45,7 @@ def test_lsl_receiver_can_connect_to_replayed_xdf_stream():
 
     try:
         time.sleep(1.5)
-        assert receiver.start(), "LSLReceiver failed to resolve the replayed stream."
+        receiver.start()
 
         deadline = time.monotonic() + 5.0
         total_samples = 0

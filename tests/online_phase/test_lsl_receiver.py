@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, Mock
 import numpy as np
 import pytest
 
+from backend.online_phase import lsl_receiver
 from backend.online_phase.lsl_receiver import (
     LSLReceiver,
     decode_trigger_value,
@@ -32,6 +33,16 @@ class FakeInlet:
 
     def close_stream(self) -> None:
         self.closed = True
+
+
+class FakePylslModule:
+    def __init__(self) -> None:
+        self.created_inlets: list[FakeInlet] = []
+
+    def StreamInlet(self, stream, recover: bool = True):
+        inlet = FakeInlet([])
+        self.created_inlets.append(inlet)
+        return inlet
 
 
 def test_decode_trigger_value_extracts_parallel_port_bits():
@@ -136,6 +147,25 @@ def test_pull_new_data_skips_malformed_chunks_gracefully(caplog):
     # Should have logged a warning about the malformed chunk
     assert "Malformed chunk received" in caplog.text
     assert "Skipping" in caplog.text
+
+
+def test_start_success_returns_none_and_opens_inlet(monkeypatch):
+    receiver = LSLReceiver(stream_name="TestStream", launch_proxy=False)
+
+    mock_stream = MagicMock()
+    mock_stream.nominal_srate.return_value = 1000
+    mock_stream.channel_count.return_value = 65
+    mock_stream.name.return_value = "TestStream"
+    mock_stream.type.return_value = "EEG"
+    mock_stream.source_id.return_value = "test_source"
+
+    fake_pylsl = FakePylslModule()
+    receiver._resolve_stream = Mock(return_value=mock_stream)
+    monkeypatch.setattr(lsl_receiver, "pylsl", fake_pylsl)
+
+    assert receiver.start() is None
+    assert receiver.inlet is fake_pylsl.created_inlets[0]
+    assert receiver._last_trigger_code == 0
 
 
 def test_start_raises_runtime_error_when_stream_not_found():

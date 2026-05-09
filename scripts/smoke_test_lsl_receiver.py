@@ -123,9 +123,10 @@ def main() -> int:
             f"Connecting to stream name={args.stream_name!r}, "
             f"type={args.stream_type!r}, timeout={args.resolve_timeout:.1f}s"
         )
-        started = receiver.start()
-        if not started:
-            print("Connection failed: receiver.start() timed out.")
+        try:
+            receiver.start()
+        except Exception as exc:
+            print(f"Connection failed: {exc}")
             return 1
 
         print("Connected. Pulling data...")

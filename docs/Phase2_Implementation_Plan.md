@@ -54,7 +54,7 @@ LSLReceiver -> StreamWorker -> OnlinePreprocessor -> LiveInferenceEngine -> logs
 - `markers`: list of integer marker codes detected during the pull.
 
 **Cleanup TODOs:**
-- `[ ]` Reconcile docs/scripts/tests that still expect `start()` to return `True` or `False`; current code returns `None` and raises on failure.
+- `[x]` Reconcile docs/scripts/tests that still expect `start()` to return `True` or `False`; current code returns `None` and raises on failure.
 - `[ ]` Add richer marker output if needed: marker code plus timestamp and/or sample index.
 - `[ ]` Run final validation on the real lab stream with `LSLProxy.exe` on the decoding machine.
 - `[ ]` Decide whether malformed chunks should always be skipped or escalated to the UI in live mode.
