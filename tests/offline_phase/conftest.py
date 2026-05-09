@@ -72,3 +72,37 @@ def make_preprocessor(tmp_path, preprocessing_settings):
         preprocessing_settings=preprocessing_settings,
     )
     return preprocessor
+
+
+# ── ModelEvaluator fixtures ───────────────────────────────────────────────────
+
+@pytest.fixture
+def synthetic_epochs() -> mne.EpochsArray:
+    """3-class EpochsArray: 30 trials × 3 classes, 20 ch, 20 time points at 100 Hz."""
+    rng = np.random.default_rng(0)
+    n_per_class, n_times, sfreq, tmin = 30, 20, 100.0, -0.1
+
+    data = rng.standard_normal((n_per_class * 3, N_CHANNELS, n_times)) * 10e-6
+    info = mne.create_info(ch_names=EEG_CH_NAMES, sfreq=sfreq, ch_types="eeg")
+
+    event_id = {"red": 1, "green": 2, "yellow": 3}
+    labels = np.repeat([1, 2, 3], n_per_class)
+    events = np.column_stack(
+        [np.arange(len(labels)), np.zeros(len(labels), int), labels]
+    )
+    return mne.EpochsArray(data, info, events=events, tmin=tmin, event_id=event_id,
+                           verbose=False)
+
+
+@pytest.fixture
+def evaluator_settings() -> dict:
+    """Decoder settings for evaluator tests (3-fold CV for speed)."""
+    return {
+        "model": "LDA",
+        "params": {"solver": "lsqr", "shrinkage": "auto"},
+        "cv": {"k": 3},
+        "tasks": [
+            {"name": "red decoder", "pos_labels": ["red"], "neg_labels": ["green", "yellow"]},
+            {"name": "yellow decoder", "pos_labels": ["yellow"], "neg_labels": ["green", "red"]},
+        ],
+    }

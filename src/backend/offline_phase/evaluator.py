@@ -1,0 +1,143 @@
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import mne
+import numpy as np
+from mne.decoding import GeneralizingEstimator, cross_val_multiscore
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.model_selection import StratifiedKFold
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+
+logger = logging.getLogger(__name__)
+
+_CHANCE_LEVEL = 0.5
+
+
+class ModelEvaluator:
+    """
+    Evaluates offline decoder performance using Temporal Generalization CV.
+    Runs one GeneralizingEstimator pass per task to produce both the TGM and
+    the diagonal AUC curve, then surfaces a suggested inference timepoint.
+
+    Single entry point: run_evaluation().
+    """
+
+    def __init__(self, epochs: mne.Epochs, decoder_settings: dict[str, Any]) -> None:
+        self.epochs = epochs
+        self.settings = decoder_settings
+        self.times: np.ndarray = epochs.times
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def run_evaluation(self) -> dict[str, Any]:
+        """
+        Run full evaluation for all decoder tasks defined in settings.
+
+        Returns:
+            {
+                "times": np.ndarray,
+                "suggested_timepoint": float,
+                "average_peak_auc": float,
+                "tasks": {
+                    "<task_name>": {
+                        "diagonal_auc": np.ndarray,   # shape (n_times,)
+                        "tgm_matrix":   np.ndarray,   # shape (n_times, n_times)
+                        "peak_auc":     float,
+                        "chance_level": float,
+                    },
+                    ...
+                },
+            }
+
+        Raises:
+            ValueError: If settings contain no tasks, or if any task's labels
+                        are missing from the epochs or resolve to a single class.
+        """
+        tasks = self.settings["tasks"]
+        if not tasks:
+            raise ValueError("decoder_settings contains no tasks.")
+
+        task_results: dict[str, Any] = {}
+        for task_cfg in tasks:
+            name = task_cfg["name"]
+            logger.info("Evaluating task: %s", name)
+            X, y = self._get_task_data(task_cfg)
+            tgm = self._run_tgm_cv(X, y)
+            diagonal = np.diag(tgm)
+            task_results[name] = {
+                "diagonal_auc": diagonal,
+                "tgm_matrix": tgm,
+                "peak_auc": float(np.max(diagonal)),
+                "chance_level": _CHANCE_LEVEL,
+            }
+
+        suggested_idx = self._compute_suggested_idx(task_results)
+        return {
+            "times": self.times,
+            "suggested_timepoint": float(self.times[suggested_idx]),
+            "average_peak_auc": float(
+                np.mean([v["diagonal_auc"][suggested_idx] for v in task_results.values()])
+            ),
+            "tasks": task_results,
+        }
+
+    # ── Private helpers ───────────────────────────────────────────────────────
+
+    def _get_task_data(
+        self, task_cfg: dict[str, Any]
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return X (n_trials, n_ch, n_times) and binary y for one task."""
+        pos_labels: list[str] = task_cfg["pos_labels"]
+        neg_labels: list[str] = task_cfg["neg_labels"]
+        all_labels = pos_labels + neg_labels
+
+        missing = [lbl for lbl in all_labels if lbl not in self.epochs.event_id]
+        if missing:
+            raise ValueError(
+                f"Task '{task_cfg['name']}': labels not found in epochs: {missing}"
+            )
+
+        selected = self.epochs[all_labels]
+        pos_codes = {selected.event_id[lbl] for lbl in pos_labels}
+        y = np.where(np.isin(selected.events[:, 2], list(pos_codes)), 1, 0)
+
+        if len(np.unique(y)) < 2:
+            raise ValueError(
+                f"Task '{task_cfg['name']}': only one class present after label filtering."
+            )
+
+        return selected.get_data(), y
+
+    def _build_classifier(self) -> Any:
+        """Build StandardScaler + classifier pipeline from settings."""
+        model_type: str = self.settings["model"]
+        params: dict[str, Any] = self.settings["params"]
+        # TODO: add support for more model types (in settings as well)
+        if model_type == "LDA":
+            clf = LinearDiscriminantAnalysis(**params)
+        else:
+            raise ValueError(f"Unsupported model type: {model_type!r}")
+
+        return make_pipeline(StandardScaler(), clf)
+
+    def _run_tgm_cv(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
+        """
+        Run GeneralizingEstimator with StratifiedKFold CV.
+        Returns the mean TGM (n_times, n_times) averaged over folds.
+        """
+        k: int = self.settings["cv"]["k"]
+        cv = StratifiedKFold(n_splits=k, shuffle=True, random_state=42)
+        estimator = GeneralizingEstimator(
+            self._build_classifier(), scoring="roc_auc", n_jobs=1, verbose=False
+        )
+        # scores: (n_folds, n_train_times, n_test_times)
+        scores = cross_val_multiscore(estimator, X, y, cv=cv, n_jobs=1)
+        return np.mean(scores, axis=0)
+
+    def _compute_suggested_idx(self, task_results: dict[str, Any]) -> int:
+        """Return the time index where the mean diagonal AUC across tasks peaks."""
+        diagonals = np.stack([v["diagonal_auc"] for v in task_results.values()])
+        return int(np.argmax(np.mean(diagonals, axis=0)))
