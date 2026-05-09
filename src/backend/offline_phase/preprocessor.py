@@ -97,7 +97,6 @@ class OfflinePreprocessor:
             exclude_components: Final list of ICA component indices to remove
                                 (user-confirmed, may differ from suggestions).
             event_mapping: {event_name: trigger_id} — MNE convention.
-                           Use the inverse of SettingsManager.get_event_mapping().
             output_dir: Directory to write the .fif epochs file.
         """
         if self.raw is None or self.ica is None:
