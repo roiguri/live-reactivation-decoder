@@ -30,8 +30,9 @@ LSLReceiver -> StreamWorker -> OnlinePreprocessor -> LiveInferenceEngine -> logs
 - `[x]` `LSLReceiver` is implemented and unit-tested.
 - `[~]` Replay, smoke-test, and opt-in integration tooling exists.
 - `[~]` `OfflinePreprocessor` exists and exports an initial `online_state`.
+- `[x]` `DecoderPipelineArtifact` loader exists and unwraps the Phase 1 artifact.
 - `[ ]` `OnlinePreprocessor` is missing.
-- `[ ]` `LiveInferenceEngine` is missing.
+- `[x]` `LiveInferenceEngine` receives unwrapped models/metadata and predicts positive-class probabilities.
 - `[ ]` `StreamWorker` is missing.
 - `[!]` Phase 1 sample rate, final artifact envelope, and `online_state` schema must be locked before `OnlinePreprocessor` implementation.
 
@@ -90,30 +91,63 @@ LSLReceiver -> StreamWorker -> OnlinePreprocessor -> LiveInferenceEngine -> logs
 - `[ ]` Irregular batch sizes preserve decimation alignment and timestamp alignment.
 - `[ ]` Shape validation rejects unexpected channel counts and timestamp lengths.
 
+### `DecoderPipelineArtifact` Loader - Startup Boundary
+
+**Status:** `[x]` Implemented in `online_decoder/src/backend/online_phase/artifact_loader.py`.
+
+**Responsibilities:**
+- Load the Phase 1 `decoder_pipeline.joblib` artifact with `joblib`.
+- Validate only the top-level artifact envelope: required keys, non-empty
+  `models` dict, and dict `metadata`.
+- Return `models`, `online_state`, and `metadata` as separate fields.
+- Keep `online_state` opaque; its internal schema belongs to `OnlinePreprocessor`.
+
+**Composition flow:**
+```python
+artifact = load_decoder_pipeline_artifact("decoder_pipeline.joblib")
+
+preprocessor = OnlinePreprocessor(
+    preprocessing_settings=preprocessing_settings,
+    online_state=artifact.online_state,
+)
+
+engine = LiveInferenceEngine(
+    models=artifact.models,
+    metadata=artifact.metadata,
+)
+```
+
 ### `LiveInferenceEngine` - Decoder Runtime
 
-**Status:** `[ ]` Not implemented.
+**Status:** `[x]` Implemented in `online_decoder/src/backend/online_phase/live_inference.py`.
 
 **Detailed plan:** See [LiveInferenceEngine_Implementation_Plan.md](LiveInferenceEngine_Implementation_Plan.md).
 
 **Inputs:**
-- Path to Phase 1 `decoder_pipeline.joblib`.
+- Unwrapped trained sklearn-compatible decoder models.
+- Model-facing metadata such as `feature_width`, `positive_class`, and
+  `task_positive_classes`.
 - `model_features` from `OnlinePreprocessor`.
 
 **Responsibilities:**
-- Load trained sklearn-compatible decoder models.
-- Expose the loaded `online_state` for `OnlinePreprocessor`.
+- Validate model runtime compatibility.
 - Validate feature width before prediction.
 - Run `predict_proba()` for each configured decoder task.
+- Select the configured positive-class probability.
 - Return probabilities for every feature row produced by the batch.
+
+**Boundary rule:**
+- `LiveInferenceEngine` does not load joblib artifacts.
+- `LiveInferenceEngine` does not receive, expose, or interpret `online_state`.
 
 **Output contract:**
 - Dictionary mapping task name to probability array, aligned to the preprocessor output timestamps.
 
 **Tests before live use:**
-- `[ ]` Loads a fixture pipeline and exposes `online_state`.
-- `[ ]` Predicts all configured tasks.
-- `[ ]` Rejects wrong feature width with a clear error.
+- `[x]` Loader unwraps a fixture pipeline and returns opaque `online_state`.
+- `[x]` Predicts all configured tasks.
+- `[x]` Validates feature width before prediction.
+- `[x]` Selects positive-class probability columns.
 
 ### `StreamWorker` - Online Orchestrator
 
@@ -141,9 +175,9 @@ LSLReceiver -> StreamWorker -> OnlinePreprocessor -> LiveInferenceEngine -> logs
 ## Blocking Phase 1 Decisions
 
 Before implementing `OnlinePreprocessor`, lock the Phase 1 target rate,
-`online_state` schema, and saved artifact contract. Phase 1 currently exports
-`online_state` directly; the full artifact envelope below is the planned
-contract consumed by `LiveInferenceEngine`.
+`online_state` schema, and saved artifact contract. The artifact loader unwraps
+the saved envelope; `LiveInferenceEngine` consumes only the unwrapped models and
+model-facing metadata.
 
 ### `[!]` Model-Facing Sample Rate
 
@@ -184,19 +218,19 @@ Still-open `online_state` / artifact items:
 - final channel-order naming convention
 - final `decoder_pipeline.joblib` metadata envelope
 
-`LiveInferenceEngine` must treat `online_state` as an opaque payload: it loads
-and returns it for `OnlinePreprocessor`, but does not validate its keys or matrix
-contents.
+The artifact loader must treat `online_state` as an opaque payload: it returns
+it for `OnlinePreprocessor`, but does not validate its keys or matrix contents.
+`LiveInferenceEngine` must never receive `online_state`.
 
 ## Implementation Order
 
-Build complete, self-contained classes first. `LiveInferenceEngine` can treat
+Build complete, self-contained classes first. The artifact loader can treat
 `online_state` as opaque while the Phase 1 artifact schema is still evolving.
 `OnlinePreprocessor` should wait because bad-channel handling and ICA/spatial
 transform behavior depend directly on that schema.
 
 1. `[x]` Clean up `LSLReceiver.start()` expectations in docs, smoke script, and integration test.
-2. `[ ]` Implement `LiveInferenceEngine`.
+2. `[x]` Implement artifact loader and `LiveInferenceEngine`.
 3. `[ ]` Implement `StreamWorker`.
 4. `[!]` Lock the Phase 1 sample rate, artifact envelope, and `online_state` schema.
 5. `[ ]` Implement `OnlinePreprocessor`.
@@ -208,6 +242,7 @@ transform behavior depend directly on that schema.
 ## Test Plan
 
 - Normal tests: from `online_decoder/`, run `.venv/bin/python -m pytest tests/ -q`.
+- Loader/engine tests: `.venv/bin/python -m pytest tests/online_phase/test_artifact_loader.py tests/online_phase/test_live_inference.py -q`.
 - Replay integration: run only when requested with `RUN_LSL_INTEGRATION=1`.
 - Preprocessor state tests must pass before any live experiment.
 - Real lab validation remains a final checklist item; home replay does not complete it.

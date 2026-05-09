@@ -539,11 +539,17 @@ Older full-window / `RingBuffer` descriptions are obsolete and are kept only in 
 
 **Status (2026-05-09):**
 - `LSLReceiver` is implemented in code
+- `DecoderPipelineArtifact` loader is implemented in code
 - `OnlinePreprocessor` is planned, not committed
-- `LiveInferenceEngine` is planned, not committed
+- `LiveInferenceEngine` is implemented in code
 - `StreamWorker` is planned, not committed
 
 ### **Data Flow (Active Micro-Batch Design)**
+Startup/composition code loads the Phase 1 artifact once before the run:
+`load_decoder_pipeline_artifact()` returns unwrapped `models`, `online_state`,
+and `metadata`. `OnlinePreprocessor` receives only `online_state`;
+`LiveInferenceEngine` receives only `models` and model-facing `metadata`.
+
 1. `StreamWorker` asks `LSLReceiver` for all newly available data.
 2. If data exists, `StreamWorker` appends it to an internal batch accumulator.
 3. When about `40 ms` of samples are available, `StreamWorker` hands one batch to `OnlinePreprocessor.process_batch()`.
@@ -594,9 +600,16 @@ Older full-window / `RingBuffer` descriptions are obsolete and are kept only in 
 #### **3. LiveInferenceEngine (The Brain)**
 
 * **Role:** Holds the trained models and generates real-time probabilities for all outputs produced by a batch.
-* **Inputs:** `clean_features_250hz` from `OnlinePreprocessor`.
-* **Outputs:** per-task probability arrays aligned to the batch outputs.
-* **Status:** Planned, not committed.
+* **Inputs:** Unwrapped decoder models, model-facing metadata, and `clean_features_250hz` from `OnlinePreprocessor`.
+* **Outputs:** per-task positive-class probability arrays aligned to the batch outputs.
+* **Status:** Implemented.
+
+#### **3a. DecoderPipelineArtifact Loader (Startup Boundary)**
+
+* **Role:** Loads the saved Phase 1 artifact envelope and returns its parts without constructing runtime components.
+* **Inputs:** Path to `decoder_pipeline.joblib`.
+* **Outputs:** `models`, opaque `online_state`, and `metadata`.
+* **Status:** Implemented.
 
 #### **4. StreamWorker (The Conductor)**
 
@@ -935,27 +948,48 @@ class OnlinePreprocessor:
         pass
 
 
+class DecoderPipelineArtifact:
+    """
+    Unwrapped Phase 1 decoder pipeline artifact.
+    """
+
+    models: Dict[str, Any]
+    online_state: Any
+    metadata: Dict[str, Any]
+
+
+def load_decoder_pipeline_artifact(path: str | Path) -> DecoderPipelineArtifact:
+    """
+    Loads the saved Phase 1 artifact envelope.
+
+    Validates only top-level artifact concerns:
+    - artifact file exists
+    - joblib payload is a dictionary
+    - required keys exist: models, online_state, metadata
+    - models is a non-empty dictionary
+    - metadata is a dictionary
+
+    Does not validate model prediction behavior or online_state internals.
+    """
+    pass
+
+
 class LiveInferenceEngine:
     """
-    Loads the trained Scikit-Learn decoders and predicts probabilities for
-    all decimated outputs produced by a batch.
+    Holds unwrapped trained Scikit-Learn decoders and predicts positive-class
+    probabilities for all decimated outputs produced by a batch.
     """
 
-    def __init__(self, pipeline_filepath: str | Path):
+    def __init__(
+        self,
+        models: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]] = None,
+    ):
         """
         Args:
-            pipeline_filepath: Path to the 'decoder_pipeline.joblib' saved in Phase 1.
-        """
-        self.pipeline_filepath = Path(pipeline_filepath)
-        self.models: Dict[str, Any] = {}
-
-    def load_pipeline(self) -> Dict[str, Any]:
-        """
-        Loads the saved models into memory.
-
-        Returns:
-            Dict: The 'online_state' extracted from the pipeline file, which
-                  must be passed to OnlinePreprocessor.
+            models: Dict mapping decoder task names to fitted sklearn-compatible models.
+            metadata: Model-facing metadata such as feature_width, positive_class,
+                      and task_positive_classes.
         """
         pass
 
@@ -967,10 +1001,22 @@ class LiveInferenceEngine:
             clean_features_250hz: 2D feature array from OnlinePreprocessor.
 
         Returns:
-            Dict mapping task names to probability arrays aligned to the rows in
-            clean_features_250hz.
+            Dict mapping task names to selected positive-class probability arrays
+            aligned to the rows in clean_features_250hz.
         """
         pass
+
+
+# Startup composition:
+artifact = load_decoder_pipeline_artifact("decoder_pipeline.joblib")
+preprocessor = OnlinePreprocessor(
+    preprocessing_settings=preprocessing_settings,
+    online_state=artifact.online_state,
+)
+engine = LiveInferenceEngine(
+    models=artifact.models,
+    metadata=artifact.metadata,
+)
 
 from PyQt6.QtCore import QThread, pyqtSignal
 

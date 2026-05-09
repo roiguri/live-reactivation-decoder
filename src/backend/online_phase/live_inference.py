@@ -1,56 +1,69 @@
 from __future__ import annotations
 
-from pathlib import Path
+from numbers import Integral
 from typing import Any
 
-import joblib
+import numpy as np
 
 
 class LiveInferenceEngine:
-    """Load the Phase 1 decoder artifact envelope for live inference."""
+    """Run live decoder inference from already-unwrapped models."""
 
-    _REQUIRED_ARTIFACT_KEYS = ("models", "online_state", "metadata")
-
-    def __init__(self, pipeline_filepath: str | Path) -> None:
-        self.pipeline_filepath = Path(pipeline_filepath)
-        self.models: dict[str, Any] | None = None
-        self.metadata: dict[str, Any] | None = None
-        self.online_state: dict[str, Any] | None = None
-
-    def load_pipeline(self) -> dict[str, Any]:
-        """Load and validate the top-level decoder artifact envelope."""
-        if not self.pipeline_filepath.exists():
-            raise FileNotFoundError(
-                f"Decoder pipeline artifact not found: {self.pipeline_filepath}"
-            )
-
-        artifact = joblib.load(self.pipeline_filepath)
-        if not isinstance(artifact, dict):
-            raise ValueError("Decoder pipeline artifact must be a dictionary.")
-
-        missing = [
-            key for key in self._REQUIRED_ARTIFACT_KEYS if key not in artifact
-        ]
-        if missing:
-            raise ValueError(
-                "Decoder pipeline artifact missing required keys: "
-                + ", ".join(missing)
-            )
-
-        models = artifact["models"]
-        metadata = artifact["metadata"]
-        self._validate_models(models)
+    def __init__(
+        self,
+        models: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        if metadata is None:
+            metadata = {}
         if not isinstance(metadata, dict):
             raise ValueError("Decoder pipeline metadata must be a dictionary.")
 
-        # TODO: Once the Phase 1 artifact metadata contract is locked, validate
-        # feature width and positive-class metadata before prediction is added.
-        self.models = models
-        self.metadata = metadata
-        # TODO: Validate online_state internals only after Phase 1 locks that
-        # schema; for now it is an opaque payload for OnlinePreprocessor.
-        self.online_state = artifact["online_state"]
-        return self.online_state
+        self._validate_models(models)
+        feature_width = self._derive_feature_width(models, metadata)
+
+        self._models = models
+        self._metadata = metadata
+        self._feature_width = feature_width
+
+    @property
+    def models(self) -> dict[str, Any]:
+        return self._models
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        return self._metadata
+
+    @property
+    def feature_width(self) -> int:
+        return self._feature_width
+
+    def predict(self, model_features: Any) -> dict[str, np.ndarray]:
+        """Predict positive-class probabilities for every decoder task."""
+        features = np.asarray(model_features)
+        if features.ndim != 2:
+            raise ValueError("Live inference features must be a 2D array.")
+        if features.shape[1] != self._feature_width:
+            raise ValueError(
+                "Live inference feature width does not match decoder "
+                f"feature_width={self._feature_width}: got {features.shape[1]}"
+            )
+
+        predictions: dict[str, np.ndarray] = {}
+        for task_name, model in self._models.items():
+            probabilities = self._validate_probability_matrix(
+                task_name,
+                model.predict_proba(features),
+                expected_rows=features.shape[0],
+            )
+            positive_idx = self._positive_class_index(str(task_name), model)
+            if positive_idx >= probabilities.shape[1]:
+                raise ValueError(
+                    f"Decoder '{task_name}' returned too few probability columns "
+                    f"for positive class index {positive_idx}."
+                )
+            predictions[str(task_name)] = probabilities[:, positive_idx]
+        return predictions
 
     @staticmethod
     def _validate_models(models: Any) -> None:
@@ -69,3 +82,128 @@ class LiveInferenceEngine:
                 "Decoder models must expose callable predict_proba: "
                 + ", ".join(str(name) for name in invalid)
             )
+
+    @staticmethod
+    def _validate_probability_matrix(
+        task_name: Any,
+        probabilities: Any,
+        *,
+        expected_rows: int,
+    ) -> np.ndarray:
+        probabilities_array = np.asarray(probabilities)
+        if probabilities_array.ndim != 2:
+            raise ValueError(
+                f"Decoder '{task_name}' predict_proba output must be a 2D array."
+            )
+        if probabilities_array.shape[0] != expected_rows:
+            raise ValueError(
+                f"Decoder '{task_name}' predict_proba row count "
+                f"{probabilities_array.shape[0]} does not match input row count "
+                f"{expected_rows}."
+            )
+        if probabilities_array.shape[1] < 2:
+            raise ValueError(
+                f"Decoder '{task_name}' predict_proba output must include at "
+                "least two probability columns."
+            )
+        return probabilities_array
+
+    def _positive_class_index(self, task_name: str, model: Any) -> int:
+        classes = getattr(model, "classes_", None)
+        if classes is None:
+            raise ValueError(
+                f"Decoder '{task_name}' must expose classes_ for positive-class "
+                "probability selection."
+            )
+
+        target_labels = self._positive_class_candidates(task_name)
+        class_labels = list(classes)
+        for target_label in target_labels:
+            for idx, class_label in enumerate(class_labels):
+                if class_label == target_label:
+                    return idx
+
+        raise ValueError(
+            f"Decoder '{task_name}' classes_ does not contain an identifiable "
+            f"positive class. Tried: {target_labels}"
+        )
+
+    def _positive_class_candidates(self, task_name: str) -> list[Any]:
+        task_positive_classes = self._metadata.get("task_positive_classes", {})
+        if task_positive_classes is None:
+            task_positive_classes = {}
+        if not isinstance(task_positive_classes, dict):
+            raise ValueError("task_positive_classes metadata must be a dictionary.")
+
+        if task_name in task_positive_classes:
+            return [task_positive_classes[task_name]]
+        if "positive_class" in self._metadata:
+            return [self._metadata["positive_class"]]
+        return [1, True]
+
+    @classmethod
+    def _derive_feature_width(
+        cls,
+        models: dict[str, Any],
+        metadata: dict[str, Any],
+    ) -> int:
+        metadata_width = metadata.get("feature_width")
+        model_widths = cls._model_feature_widths(models)
+
+        # TODO: Remove the model-derived fallback if Phase 1 always writes
+        # feature_width into the final decoder_pipeline.joblib metadata.
+        if metadata_width is not None:
+            feature_width = cls._validate_feature_width(metadata_width)
+            mismatched = {
+                task_name: width
+                for task_name, width in model_widths.items()
+                if width != feature_width
+            }
+            if mismatched:
+                raise ValueError(
+                    "Decoder model feature widths do not match metadata "
+                    f"feature_width={feature_width}: {mismatched}"
+                )
+            return feature_width
+
+        if not model_widths:
+            raise ValueError(
+                "Decoder pipeline metadata must include feature_width when "
+                "models do not expose n_features_in_."
+            )
+        missing_widths = [
+            str(task_name)
+            for task_name, model in models.items()
+            if getattr(model, "n_features_in_", None) is None
+        ]
+        if missing_widths:
+            raise ValueError(
+                "Decoder pipeline metadata must include feature_width when "
+                "some models do not expose n_features_in_: "
+                + ", ".join(missing_widths)
+            )
+
+        unique_widths = set(model_widths.values())
+        if len(unique_widths) != 1:
+            raise ValueError(
+                "Decoder models expose inconsistent n_features_in_ values: "
+                f"{model_widths}"
+            )
+        return unique_widths.pop()
+
+    @classmethod
+    def _model_feature_widths(cls, models: dict[str, Any]) -> dict[str, int]:
+        widths: dict[str, int] = {}
+        for task_name, model in models.items():
+            width = getattr(model, "n_features_in_", None)
+            if width is not None:
+                widths[str(task_name)] = cls._validate_feature_width(width)
+        return widths
+
+    @staticmethod
+    def _validate_feature_width(feature_width: Any) -> int:
+        if not isinstance(feature_width, Integral) or isinstance(feature_width, bool):
+            raise ValueError("Decoder pipeline feature_width must be a positive integer.")
+        if feature_width <= 0:
+            raise ValueError("Decoder pipeline feature_width must be a positive integer.")
+        return int(feature_width)

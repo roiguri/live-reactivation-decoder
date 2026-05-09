@@ -7,30 +7,35 @@
 ## Summary
 
 Build `LiveInferenceEngine` as a complete runtime class before implementing
-`StreamWorker`. The engine loads the planned Phase 1 decoder artifact envelope,
-owns decoder models and inference metadata, exposes `online_state` for
-`OnlinePreprocessor`, and predicts probabilities from already-preprocessed
-model-facing feature rows.
+`StreamWorker`. Artifact unwrapping lives in a dedicated loader; the engine
+receives already-unwrapped decoder models plus model-facing metadata and
+predicts probabilities from already-preprocessed model-facing feature rows.
 
 `predict()` must not perform preprocessing and must not interpret `online_state`.
 
 ## Role Boundaries
 
-`LiveInferenceEngine` is responsible for:
+`DecoderPipelineArtifact` loader is responsible for:
 
 - loading the planned `decoder_pipeline.joblib` artifact
-- validating artifact shape, model compatibility, and feature width
+- validating artifact-envelope shape
+- returning unwrapped `models`, `online_state`, and `metadata`
+- leaving `online_state` opaque
+
+`LiveInferenceEngine` is responsible for:
+
 - storing sklearn-compatible decoder models by task name
-- exposing `online_state` for startup code to pass into `OnlinePreprocessor`
+- validating model compatibility and feature width
 - selecting each decoder's positive-class probability
 - predicting probabilities for all decoder tasks for every feature row
 
 `LiveInferenceEngine` is not responsible for:
 
+- artifact file loading or `joblib`
 - EEG preprocessing, filtering, ICA, bad-channel handling, or referencing
 - buffering, micro-batch assembly, or timestamp alignment
 - threshold decisions, trigger emission, logging, or UI updates
-- interpreting the contents of `online_state`
+- receiving, exposing, or interpreting `online_state`
 
 ## `online_state`
 
@@ -53,27 +58,29 @@ with these observed keys:
 - `sfreq_offline`
 
 Those keys are useful current context, but they are not treated here as the
-final locked Phase 1 contract. The inference engine must load and return the
+final locked Phase 1 contract. The artifact loader must return the
 `online_state` object without validating its internal keys, matrix shapes,
 sample-rate policy, bad-channel policy, feature layout, or feature width.
 Missing or still-open items include bad-channel policy, feature layout, final
 model feature width metadata, final artifact metadata, and the model-facing
 sample-rate decision.
 
-The inference engine loads and returns `online_state` because the Phase 1
-artifact bundles setup data for the whole live pipeline. Prediction itself uses
-only already-preprocessed model-facing feature rows, loaded models, and
-inference metadata.
+Prediction itself uses only already-preprocessed model-facing feature rows,
+loaded models, and inference metadata.
 
 Expected startup flow:
 
 ```python
-engine = LiveInferenceEngine("decoder_pipeline.joblib")
-online_state = engine.load_pipeline()
+artifact = load_decoder_pipeline_artifact("decoder_pipeline.joblib")
 
 preprocessor = OnlinePreprocessor(
     preprocessing_settings=preprocessing_settings,
-    online_state=online_state,
+    online_state=artifact.online_state,
+)
+
+engine = LiveInferenceEngine(
+    models=artifact.models,
+    metadata=artifact.metadata,
 )
 
 features, timestamps = preprocessor.process_batch(eeg_batch, timestamps)
@@ -82,7 +89,11 @@ probabilities = engine.predict(features)
 
 ## Public Contract
 
-Add `backend.online_phase.live_inference.LiveInferenceEngine`.
+Add:
+
+- `backend.online_phase.artifact_loader.DecoderPipelineArtifact`
+- `backend.online_phase.artifact_loader.load_decoder_pipeline_artifact`
+- `backend.online_phase.live_inference.LiveInferenceEngine`
 
 Planned artifact shape:
 
@@ -100,16 +111,16 @@ Planned artifact shape:
 
 Required API:
 
-- `__init__(pipeline_filepath: str | Path)`
-- `load_pipeline() -> dict`
+- `load_decoder_pipeline_artifact(path: str | Path) -> DecoderPipelineArtifact`
+- `LiveInferenceEngine(models: dict[str, Any], metadata: dict[str, Any] | None = None)`
 - `predict(model_features: np.ndarray) -> dict[str, np.ndarray]`
 
 Behavior:
 
-- `load_pipeline()` loads and validates the top-level artifact envelope, stores
-  models and metadata, and returns the exact `online_state` object from the
-  artifact without inspecting its internal schema.
-- `predict()` requires a loaded pipeline and a 2D feature array.
+- `load_decoder_pipeline_artifact()` validates the top-level artifact envelope
+  and returns the exact unwrapped parts from the loaded payload.
+- `LiveInferenceEngine` validates model-facing runtime compatibility.
+- `predict()` requires a 2D feature array.
 - `predict()` returns one 1D positive-class probability vector per decoder task.
 - Each probability vector has shape `(n_feature_rows,)`.
 - `LiveInferenceEngine` must not assume `250 Hz` or `256 Hz`; it validates
@@ -117,58 +128,95 @@ Behavior:
 
 Errors:
 
-- missing artifact: `FileNotFoundError`
-- malformed artifact, model, metadata, or features: `ValueError`
-- `predict()` before `load_pipeline()`: `RuntimeError`
+- missing artifact: `FileNotFoundError` from the loader
+- malformed artifact envelope: `ValueError` from the loader
+- malformed model, metadata, features, or probability outputs: `ValueError` from the engine
 
 ## Commit Plan
 
+When committing this implementation, keep the work split into these chunks:
+
+### Commit 1: Artifact Loader Boundary
+
+- Add `artifact_loader.py` with `DecoderPipelineArtifact` and
+  `load_decoder_pipeline_artifact()`.
+- Add `test_artifact_loader.py`.
+- Export the loader and artifact dataclass from `backend.online_phase`.
+- Test gate: `.venv/bin/python -m pytest tests/online_phase/test_artifact_loader.py -q`.
+- Suggested commit: `feat: load decoder pipeline artifacts`
+
+### Commit 2: Injected Live Inference Engine
+
+- Break the old path-based `LiveInferenceEngine` API.
+- Make the engine accept unwrapped `models` and model-facing `metadata`.
+- Implement model validation, feature-width validation, `predict()`, probability
+  output validation, and positive-class selection.
+- Update `test_live_inference.py` for the injected API.
+- Test gate: `.venv/bin/python -m pytest tests/online_phase/test_live_inference.py -q`.
+- Suggested commit: `feat: predict with injected live decoders`
+
+### Commit 3: Maintained Docs
+
+- Update `Phase2_Implementation_Plan.md` and `backend_architecture.md` to show
+  loader-owned artifact unwrapping and engine-owned runtime validation.
+- Keep `backend_plan.md` unchanged because it is legacy.
+- Test gate: `.venv/bin/python -m pytest tests/online_phase -q`.
+- Suggested commit: `docs: document phase 2 artifact loading boundary`
+
+## Historical Commit Notes
+
+The original checklist below was written before the artifact-loader boundary was
+split out of `LiveInferenceEngine`. The maintained contract above and
+`Phase2_Implementation_Plan.md` are the source of truth: artifact loading now
+belongs to `artifact_loader.py`, while `LiveInferenceEngine` receives unwrapped
+models and metadata.
+
 ### Commit 0: Add This Plan
 
-- [ ] Create `online_decoder/docs/LiveInferenceEngine_Implementation_Plan.md`.
-- [ ] Link this file from `online_decoder/docs/Phase2_Implementation_Plan.md`.
-- [ ] Keep historical docs unchanged.
-- [ ] Test gate: no runtime tests required.
-- [ ] Suggested commit: `docs: add live inference engine implementation plan`
+- [x] Create `online_decoder/docs/LiveInferenceEngine_Implementation_Plan.md`.
+- [x] Link this file from `online_decoder/docs/Phase2_Implementation_Plan.md`.
+- [x] Keep historical docs unchanged.
+- [x] Test gate: no runtime tests required.
+- [x] Suggested commit: `docs: add live inference engine implementation plan`
 
 ### Commit 1: Artifact Loading Tests And Loader
 
-- [ ] Add `online_decoder/tests/online_phase/test_live_inference.py`.
-- [ ] Write tests first for:
-  - [ ] valid artifact loads successfully
-  - [ ] `load_pipeline()` returns the exact `online_state`
-  - [ ] engine stores models and metadata
-  - [ ] missing artifact raises `FileNotFoundError`
-  - [ ] non-dict artifact raises `ValueError`
-  - [ ] missing `models`, `online_state`, or `metadata` raises `ValueError`
-  - [ ] empty `models` raises `ValueError`
-  - [ ] model without `predict_proba` raises `ValueError`
-- [ ] Implement `online_decoder/src/backend/online_phase/live_inference.py`.
-- [ ] Keep loading explicit: constructor stores path, `load_pipeline()` reads the file.
-- [ ] Do not validate `online_state` internals in this commit; only require the
+- [x] Add `online_decoder/tests/online_phase/test_live_inference.py`.
+- [x] Write tests first for:
+  - [x] valid artifact loads successfully
+  - [x] `load_pipeline()` returns the exact `online_state`
+  - [x] engine stores models and metadata
+  - [x] missing artifact raises `FileNotFoundError`
+  - [x] non-dict artifact raises `ValueError`
+  - [x] missing `models`, `online_state`, or `metadata` raises `ValueError`
+  - [x] empty `models` raises `ValueError`
+  - [x] model without `predict_proba` raises `ValueError`
+- [x] Implement `online_decoder/src/backend/online_phase/live_inference.py`.
+- [x] Keep loading explicit: constructor stores path, `load_pipeline()` reads the file.
+- [x] Do not validate `online_state` internals in this commit; only require the
   top-level `online_state` key to be present.
-- [ ] Test gate:
-  - [ ] `.venv/bin/python -m pytest tests/online_phase/test_live_inference.py -q`
-  - [ ] `.venv/bin/python -m pytest tests/online_phase -q`
-- [ ] Suggested commit: `feat: load live inference artifacts`
+- [x] Test gate:
+  - [x] `.venv/bin/python -m pytest tests/online_phase/test_live_inference.py -q`
+  - [x] `.venv/bin/python -m pytest tests/online_phase -q`
+- [x] Suggested commit: `feat: load live inference artifacts`
 
 ### Commit 2: Feature Width And Metadata Validation
 
-- [ ] Add tests for:
-  - [ ] `feature_width` from `metadata["feature_width"]`
-  - [ ] fallback to model `n_features_in_` when metadata omits `feature_width`
-  - [ ] inconsistent model feature widths raise `ValueError`
-  - [ ] non-integer or non-positive `feature_width` raises `ValueError`
-- [ ] Implement feature-width derivation and validation.
-- [ ] Expose read-only properties if useful:
-  - [ ] `models`
-  - [ ] `metadata`
-  - [ ] `feature_width`
-  - [ ] `online_state`
-- [ ] Test gate:
-  - [ ] `.venv/bin/python -m pytest tests/online_phase/test_live_inference.py -q`
-  - [ ] `.venv/bin/python -m pytest tests/online_phase -q`
-- [ ] Suggested commit: `feat: validate live inference feature metadata`
+- [x] Add tests for:
+  - [x] `feature_width` from `metadata["feature_width"]`
+  - [x] fallback to model `n_features_in_` when metadata omits `feature_width`
+  - [x] inconsistent model feature widths raise `ValueError`
+  - [x] non-integer or non-positive `feature_width` raises `ValueError`
+- [x] Implement feature-width derivation and validation.
+- [x] Expose read-only properties if useful:
+  - [x] `models`
+  - [x] `metadata`
+  - [x] `feature_width`
+  - [x] `online_state`
+- [x] Test gate:
+  - [x] `.venv/bin/python -m pytest tests/online_phase/test_live_inference.py -q`
+  - [x] `.venv/bin/python -m pytest tests/online_phase -q`
+- [x] Suggested commit: `feat: validate live inference feature metadata`
 
 ### Commit 3: Prediction Tests And Prediction Logic
 
@@ -228,7 +276,7 @@ Errors:
 
 ## Assumptions
 
-- The engine targets only the planned `decoder_pipeline.joblib` dict, not legacy monorepo `.pkl` decoder files.
-- `joblib` is used for artifact loading.
+- The loader targets only the planned `decoder_pipeline.joblib` dict, not legacy monorepo `.pkl` decoder files.
+- `joblib` is used by the artifact loader, not by `LiveInferenceEngine`.
 - Input to `predict()` is already preprocessed, decimated, model-facing data.
 - Timestamp alignment, buffering, thresholding, triggers, logging, and UI emission are out of scope for this class.
