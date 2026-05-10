@@ -250,3 +250,100 @@ class TestApplyFilter:
         preprocessor.reset_state()
         assert preprocessor._bandpass_zi is None
         assert preprocessor._notch_zi is None
+
+
+# ── Commit 4: stateful decimation ─────────────────────────────────────────────
+
+class TestDecimate:
+    def _make_p(self) -> OnlinePreprocessor:
+        return OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+
+    def _make_data(self, n: int) -> tuple[np.ndarray, np.ndarray]:
+        rng = np.random.default_rng(7)
+        data = rng.standard_normal((n, N_CHANNELS)) * 1e-5
+        timestamps = np.arange(n, dtype=float) / INPUT_SFREQ
+        return data, timestamps
+
+    def test_40_samples_give_10_outputs(self):
+        """First batch of 40 samples at 1000 Hz → 10 outputs at 256 Hz."""
+        data, ts = self._make_data(40)
+        p = self._make_p()
+        out, out_ts = p._decimate(data, ts)
+        assert out.shape[0] == 10
+        assert out_ts.shape[0] == 10
+
+    def test_sample_count_large_equals_chunked(self):
+        """Total output samples must be the same whether input arrives as one batch or many."""
+        n_total = 1000
+        data, ts = self._make_data(n_total)
+
+        p1 = self._make_p()
+        _, out_ts_single = p1._decimate(data, ts)
+        n_single = len(out_ts_single)
+
+        p2 = self._make_p()
+        n_chunked = 0
+        for i in range(25):  # 25 × 40 = 1000
+            _, o = p2._decimate(data[i*40:(i+1)*40], ts[i*40:(i+1)*40])
+            n_chunked += len(o)
+
+        assert n_single == n_chunked
+
+    def test_output_timestamps_are_subset_of_input(self):
+        """Every output timestamp must correspond to an actual input timestamp."""
+        data, ts = self._make_data(200)
+        p = self._make_p()
+        _, out_ts = p._decimate(data, ts)
+        for t in out_ts:
+            assert np.any(np.isclose(ts, t)), f"Output timestamp {t} not in input timestamps"
+
+    def test_37_samples_at_phase_3_give_9_outputs(self):
+        """37 input samples starting at phase=3 → 9 outputs (verified analytically)."""
+        # Advance phase to 3 by processing 3 samples first
+        p = self._make_p()
+        seed_data, seed_ts = self._make_data(3)
+        p._decimate(seed_data, seed_ts)
+        assert p._decimate_phase == 3 * 32 % 125  # phase after 3 samples: 96 % 125 = 96
+
+        # Manually set phase to 3 for the documented test case
+        p._decimate_phase = 3
+        data, ts = self._make_data(37)
+        out, _ = p._decimate(data, ts)
+        assert out.shape[0] == 9
+
+    def test_empty_input_returns_empty(self):
+        p = self._make_p()
+        data = np.empty((0, N_CHANNELS))
+        timestamps = np.empty((0,))
+        out, out_ts = p._decimate(data, timestamps)
+        assert out.shape == (0, N_CHANNELS)
+        assert out_ts.shape == (0,)
+
+    def test_output_is_2d(self):
+        data, ts = self._make_data(40)
+        p = self._make_p()
+        out, _ = p._decimate(data, ts)
+        assert out.ndim == 2
+        assert out.shape[1] == N_CHANNELS
+
+    def test_reset_clears_decimate_state(self, preprocessor):
+        data, ts = self._make_data(40)
+        preprocessor._decimate(data, ts)
+        preprocessor.reset_state()
+        assert preprocessor._decimate_zi is None
+        assert preprocessor._decimate_phase == 0
+
+    def test_reset_gives_identical_output(self):
+        """After reset, reprocessing the same data from scratch gives identical output."""
+        data, ts = self._make_data(120)
+        p = self._make_p()
+
+        chunks = [(data[i*40:(i+1)*40], ts[i*40:(i+1)*40]) for i in range(3)]
+        outputs_first = [p._decimate(d, t) for d, t in chunks]
+
+        p.reset_state()
+        outputs_second = [p._decimate(d, t) for d, t in chunks]
+
+        for (o1, t1), (o2, t2) in zip(outputs_first, outputs_second):
+            np.testing.assert_array_equal(o1, o2)
+            np.testing.assert_array_equal(t1, t2)

@@ -218,22 +218,25 @@ Anti-aliasing FIR design (in `__init__`):
 **Output sample count formula:** For a batch of `n_in` samples starting at global phase `p`:
 `n_out = floor((n_in + p) * target_rate / input_sfreq) - floor(p * target_rate / input_sfreq)`
 
+**Decisions made:**
+- FIR `zi` is zero-initialised (not warm-started). Transient = 321 ms, acceptable since
+  the session start is typically discarded. See `knowledge_base/02_reference/online_filtering.md`.
+- Phase algorithm: advance by `up_factor` per sample, emit and subtract `down_factor` on crossing.
+  First output for a fresh session is at input sample index 3 (not 0) — this is correct and expected.
+
 ### Checklist
-- [ ] Write failing test: one large batch and many small batches produce same number of
+- [x] Write failing test: one large batch and many small batches produce same number of
       output samples total (validates phase continuity)
-- [ ] Write failing test: output timestamps are a valid subset of input timestamps
-      (each output timestamp corresponds to a real input sample)
-- [ ] Write failing test: batch of 40 input samples → expected output count
-      `floor(40 * 256/1000)` = 10 samples
-- [ ] Write failing test: batch of 37 samples at phase offset 3 → correct output count
-- [ ] Write failing test: empty input returns empty output and timestamps with correct shape `(0, n_ch)`
-- [ ] Write failing test: output shape is `(n_out, n_channels)` — 2D preserved
-- [ ] Write failing test: `reset_state()` resets `_decimate_zi` to `None` and `_decimate_phase` to 0
-- [ ] Write failing test: after reset, first batch of same data produces same output
-      as very first call (stateless restart)
-- [ ] Implement `_decimate()` with lazy `zi` init, lfilter, and phase tracking
-- [ ] Wire `_decimate()` into `process_batch()` (after filter, before spatial transforms)
-- [ ] All tests pass
+- [x] Write failing test: output timestamps are a valid subset of input timestamps
+- [x] Write failing test: batch of 40 input samples → 10 outputs
+- [x] Write failing test: batch of 37 samples at phase offset 3 → 9 outputs
+- [x] Write failing test: empty input returns empty output, shape `(0, n_ch)`
+- [x] Write failing test: output shape is `(n_out, n_channels)` — 2D preserved
+- [x] Write failing test: `reset_state()` resets `_decimate_zi` to `None` and `_decimate_phase` to 0
+- [x] Write failing test: after reset, same data gives identical output as first run
+- [x] Implement `_decimate()` with zero-init zi, lfilter, and phase tracking
+- [ ] Wire `_decimate()` into `process_batch()` (done in Commit 6)
+- [x] All tests pass
 
 ---
 

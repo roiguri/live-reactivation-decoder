@@ -6,7 +6,7 @@ from typing import Optional
 
 import mne
 import numpy as np
-from scipy.signal import iirnotch, sosfilt, sosfilt_zi, tf2sos
+from scipy.signal import firwin, iirnotch, lfilter, sosfilt, sosfilt_zi, tf2sos
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,14 @@ class OnlinePreprocessor:
             self._notch_sos: Optional[np.ndarray] = tf2sos(b, a)
         else:
             self._notch_sos = None
-        self._decimate_fir: Optional[np.ndarray] = None
+        # Decimation: reduce from input_sfreq to target_sfreq
+        # Ratio: down_factor / up_factor (e.g. 125/32 for 1000→256 Hz)
+        common = gcd(int(self._input_sfreq), int(self._target_sfreq))
+        self._up_factor: int = int(self._target_sfreq) // common
+        self._down_factor: int = int(self._input_sfreq) // common
+        cutoff = 0.9 * self._target_sfreq / 2.0
+        n_taps = 10 * self._up_factor + 1
+        self._decimate_fir: np.ndarray = firwin(n_taps, cutoff, fs=self._input_sfreq)
 
         # Persistent filter state — reset to None each reset_state()
         self._bandpass_zi: Optional[np.ndarray] = None
@@ -154,6 +161,50 @@ class OnlinePreprocessor:
             )
 
         return filtered
+
+    def _decimate(
+        self, data: np.ndarray, timestamps: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Anti-alias FIR lowpass + phase-tracked subsampling from input_sfreq to target_sfreq.
+
+        Args:
+            data: (n_samples, n_channels)
+            timestamps: (n_samples,)
+
+        Returns:
+            Tuple of (decimated_data, decimated_timestamps).
+        """
+        n_in = data.shape[0]
+        n_ch = data.shape[1]
+
+        if n_in == 0:
+            return np.empty((0, n_ch)), np.empty((0,))
+
+        # Anti-aliasing FIR — zero-init (see online_filtering.md for rationale)
+        if self._decimate_zi is None:
+            self._decimate_zi = np.zeros((len(self._decimate_fir) - 1, n_ch))
+        filtered, self._decimate_zi = lfilter(
+            self._decimate_fir, 1.0, data, axis=0, zi=self._decimate_zi
+        )
+
+        # Phase-tracked subsampling (see online_filtering.md for algorithm details)
+        phase = self._decimate_phase
+        n_out = (n_in * self._up_factor + phase) // self._down_factor
+
+        if n_out == 0:
+            self._decimate_phase = (phase + n_in * self._up_factor) % self._down_factor
+            return np.empty((0, n_ch)), np.empty((0,))
+
+        # k-th output is at input index ceil(((k+1)*down - phase) / up) - 1
+        k = np.arange(n_out)
+        out_indices = (
+            np.ceil(((k + 1) * self._down_factor - phase) / self._up_factor).astype(int) - 1
+        )
+        out_indices = np.clip(out_indices, 0, n_in - 1)
+
+        self._decimate_phase = (phase + n_in * self._up_factor) % self._down_factor
+
+        return filtered[out_indices], timestamps[out_indices]
 
     # ── Validation ────────────────────────────────────────────────────────────
 
