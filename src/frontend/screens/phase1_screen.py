@@ -79,12 +79,13 @@ class Phase1Screen(QWidget):
 
         # Workspace stack (views own their internal padding)
         self._settings_view = SettingsView()
+        self._load_data_view = LoadDataView()
 
         self._workspace = QStackedWidget()
         self._workspace.setObjectName("workspace_stack")
         self._workspace.setStyleSheet(f"background: {CARD_WHITE};")
         self._workspace.addWidget(self._settings_view)
-        self._workspace.addWidget(LoadDataView())
+        self._workspace.addWidget(self._load_data_view)
         self._workspace.addWidget(PreprocessingView())
         self._workspace.addWidget(EvaluationView())
         self._workspace.addWidget(TrainView())
@@ -101,6 +102,7 @@ class Phase1Screen(QWidget):
         root.addWidget(self._journey_panel)
 
         # ── Wiring ────────────────────────────────────────────────────────────
+        # Node 1: Pipeline Settings
         self._journey_panel.set_node_action(0, self._settings_view.trigger_continue)
         self._journey_panel.set_node_ready(0, False)
         self._settings_view.ready_changed.connect(
@@ -109,6 +111,17 @@ class Phase1Screen(QWidget):
         self._settings_view.session_ready.connect(self._on_session_ready)
         self._settings_view.loading_requested.connect(self.show_loading)
         self._settings_view.loading_done.connect(self.hide_loading)
+
+        # Node 2: Load Data
+        self._journey_panel.set_node_action(1, self._load_data_view.trigger_load)
+        self._journey_panel.set_node_ready(1, False)
+        self._load_data_view.ready_changed.connect(
+            lambda ready: self._journey_panel.set_node_ready(1, ready)
+        )
+        self._load_data_view.loading_requested.connect(self.show_loading)
+        self._load_data_view.loading_done.connect(self.hide_loading)
+        self._load_data_view.data_loaded.connect(lambda: self._journey_panel.advance(2))
+
         self._journey_panel.node_changed.connect(self._on_node_changed)
 
     # ── public ────────────────────────────────────────────────────────────────
@@ -121,6 +134,7 @@ class Phase1Screen(QWidget):
 
     def _on_session_ready(self, session) -> None:
         self.session = session
+        self._load_data_view.set_session(session)
         self._journey_panel.advance(1)
 
     def _on_node_changed(self, completed_node: int) -> None:
