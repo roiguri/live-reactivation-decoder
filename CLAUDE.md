@@ -29,8 +29,9 @@ online_decoder/
 ## Current Backend Scope
 
 - Committed Phase 1 surface: config models, `SettingsManager`, `OfflinePreprocessor`, `ModelEvaluator`, `ModelTrainer`, and shared `utils.py` (`build_classifier`, `get_task_data`).
-- `OfflinePhaseOrchestrator` is the **next planned step** — it will be the single frontend entry point for Phase 1, holding intermediate state and owning `decoder_pipeline.joblib` export.
-- `src/frontend/`, `OnlinePreprocessor`, `LiveInferenceEngine`, and `StreamWorker` are not committed yet.
+- `OfflinePhaseOrchestrator` is the **next planned Phase 1 step** — it will be the single frontend entry point for Phase 1, holding intermediate state and owning `decoder_pipeline.joblib` export.
+- Committed Phase 2 surface: `LSLReceiver`, `DecoderPipelineArtifact` loader, `LiveInferenceEngine`, and `OnlinePreprocessor`.
+- `StreamWorker` and `src/frontend/` are not committed yet. `StreamWorker` is the next planned Phase 2 step.
 - The active Phase 2 direction is **stateful micro-batch processing**. `RingBuffer` is obsolete in this app.
 
 ## Dependency Management

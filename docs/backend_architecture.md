@@ -14,7 +14,7 @@ It includes both:
 
 Code under `online_decoder/src/` is the source of truth for implemented behavior. For classes that are still missing, this document is the interface contract until the code exists.
 
-Last reconciled with code on **2026-05-09**.
+Last reconciled with code on **2026-05-10**.
 
 **Offline phase implementation status (as of last reconciliation):**
 - ✅ `SettingsManager` + Pydantic config models (`src/backend/core/`)
@@ -625,12 +625,12 @@ This section defines the **active** Phase 2 backend contract.
 
 Older full-window / `RingBuffer` descriptions are obsolete and are kept only in historical design material. The active design is **stateful micro-batch processing**.
 
-**Status (2026-05-09):**
+**Status (2026-05-10):**
 - `LSLReceiver` is implemented in code
 - `DecoderPipelineArtifact` loader is implemented in code
-- `OnlinePreprocessor` is planned, not committed
+- `OnlinePreprocessor` is implemented in code (`src/backend/online_phase/online_preprocessor.py`)
 - `LiveInferenceEngine` is implemented in code
-- `StreamWorker` is planned, not committed
+- `StreamWorker` is planned, not committed — next step
 
 ### **Data Flow (Active Micro-Batch Design)**
 Startup/composition code loads the Phase 1 artifact once before the run:
@@ -641,7 +641,7 @@ and `metadata`. `OnlinePreprocessor` receives only `online_state`;
 1. `StreamWorker` asks `LSLReceiver` for all newly available data.
 2. If data exists, `StreamWorker` appends it to an internal batch accumulator.
 3. When about `40 ms` of samples are available, `StreamWorker` hands one batch to `OnlinePreprocessor.process_batch()`.
-4. `OnlinePreprocessor` applies causal bandpass/notch filtering with persistent state, fixed bad-channel handling from Phase 1, average reference, fixed ICA transform from Phase 1, and decimation from `1000 Hz` to `250 Hz`.
+4. `OnlinePreprocessor` applies causal bandpass/notch filtering with persistent state, decimation to the configured target rate, fixed bad-channel handling from Phase 1, average reference, and fixed ICA transform from Phase 1.
 5. `LiveInferenceEngine.predict()` scores all decimated outputs from that batch.
 6. `StreamWorker` emits or logs the probabilities, aligned timestamps, and any markers.
 
@@ -680,10 +680,10 @@ and `metadata`. `OnlinePreprocessor` receives only `online_state`;
 
 #### **2. OnlinePreprocessor (The Cleaner)**
 
-* **Role:** Applies Phase 1 spatial transforms and live causal filters to streaming micro-batches, then decimates them to the model rate.
-* **Inputs:** `eeg_batch_1000hz`, aligned timestamps, and `online_state` from Phase 1.
-* **Outputs:** `clean_features_250hz` plus aligned output timestamps.
-* **Status:** Planned, not committed.
+* **Role:** Applies causal filters and Phase 1 spatial transforms to streaming micro-batches, producing decimated features at the configured target rate.
+* **Inputs:** `eeg_batch` `(n_samples, n_channels)`, aligned timestamps, `preprocessing_settings`, and `online_state` from Phase 1.
+* **Outputs:** `features` `(n_out, n_channels)` plus aligned output timestamps at `target_sfreq`.
+* **Status:** ✅ Implemented in `src/backend/online_phase/online_preprocessor.py`.
 
 #### **3. LiveInferenceEngine (The Brain)**
 
@@ -981,59 +981,73 @@ if eeg_chunk.shape[0] > 0:
 ```python
 class OnlinePreprocessor:
     """
-    Applies stateful causal cleaning to streaming EEG micro-batches.
-    Uses persistent filter state and persistent decimation phase across batches.
+    Stateful causal EEG preprocessor for the online phase.
+
+    Replicates the offline pipeline's spatial transforms using matrices
+    exported from Phase 1, applied to streaming micro-batches.
+
+    Pipeline order (mirrors offline):
+        1. Bandpass + notch filter (causal IIR, persistent zi)
+        2. Decimate to target rate (FIR anti-alias + phase tracking)
+        3. Interpolate bad channels (fixed weight matrix)
+        4. Average reference
+        5. Apply ICA (fixed unmixing/mixing matrices)
+
+    Status: ✅ Implemented in src/backend/online_phase/online_preprocessor.py
     """
 
     def __init__(
         self,
         preprocessing_settings: Dict[str, Any],
         online_state: Dict[str, Any],
-        *,
         input_sfreq: float = 1000.0,
-        output_sfreq: float = 250.0,
-    ):
+    ) -> None:
         """
         Args:
-            preprocessing_settings: Settings from YAML (e.g., filter frequencies).
-            online_state: Exported Phase 1 state, including the fixed spatial transforms.
-            input_sfreq: Expected incoming sample rate (default: 1000 Hz).
-            output_sfreq: Expected model sample rate (default: 250 Hz).
+            preprocessing_settings: Settings from YAML, unwrapped from PreprocessingSettings.
+                Required keys: bandpass.l_freq, bandpass.h_freq, bandpass.method,
+                bandpass.notch (may be None), resample.target_rate.
+            online_state: Exported Phase 1 state dict. Required keys:
+                bad_channels, interp_weights, ch_names, ica_unmixing, ica_mixing,
+                ica_pca_components, ica_pca_mean, ica_exclude, pre_whitener, sfreq_offline.
+            input_sfreq: LSL stream sample rate (default: 1000.0 Hz).
+
+        Raises:
+            ValueError: If sfreq_offline does not match target_rate, or if
+                        ch_names and ICA matrix dimensions are inconsistent.
         """
-        self.settings = preprocessing_settings
-        self.online_state = online_state
+
+    @property
+    def n_channels(self) -> int: ...
+
+    @property
+    def input_sfreq(self) -> float: ...
+
+    @property
+    def target_sfreq(self) -> float: ...
 
     def process_batch(
         self,
-        eeg_batch_1000hz: np.ndarray,
+        eeg_batch: np.ndarray,
         timestamps: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
-        Processes one micro-batch using persistent state.
-
-        Steps:
-        1. Apply causal bandpass/notch filtering with persistent state.
-        2. Apply fixed bad-channel handling from Phase 1.
-        3. Apply average reference.
-        4. Apply fixed ICA transform from Phase 1.
-        5. Decimate from 1000 Hz to 250 Hz while preserving phase across batches.
+        Apply the full online preprocessing pipeline to one micro-batch.
 
         Args:
-            eeg_batch_1000hz: 2D array of shape (n_samples, n_channels).
-            timestamps: 1D array aligned with the input samples.
+            eeg_batch: (n_samples, n_channels) at input_sfreq.
+            timestamps: (n_samples,) LSL timestamps.
 
         Returns:
-            Tuple of:
-            - clean_features_250hz: 2D array aligned to the decimated outputs
-            - output_timestamps: timestamps aligned to the decimated outputs
+            Tuple of (features, output_timestamps) at target_sfreq.
+            features shape: (n_out, n_channels). n_out = 0 for very small batches.
+
+        Raises:
+            ValueError: If eeg_batch shape or timestamps length is wrong.
         """
-        pass
 
     def reset_state(self) -> None:
-        """
-        Resets persistent filter and decimation state for a new run, if needed.
-        """
-        pass
+        """Reset all causal filter state (call before each new recording run)."""
 
 
 class DecoderPipelineArtifact:
@@ -1210,15 +1224,18 @@ online_decoder/
 │       │   └── orchestrator.py    # OfflinePhaseOrchestrator - Planned
 │       │
 │       └── online_phase/          # Phase 2 Classes
-│           ├── lsl_receiver.py    # LSLReceiver - Implemented
-│           ├── preprocessor.py    # OnlinePreprocessor - Planned
-│           ├── inference.py       # LiveInferenceEngine - Planned
-│           └── stream_worker.py   # StreamWorker (QThread) - Planned
+│           ├── lsl_receiver.py        # LSLReceiver - Implemented
+│           ├── online_preprocessor.py # OnlinePreprocessor - Implemented
+│           ├── live_inference.py      # LiveInferenceEngine - Implemented
+│           ├── artifact_loader.py     # DecoderPipelineArtifact loader - Implemented
+│           ├── __init__.py            # Public API exports
+│           └── stream_worker.py       # StreamWorker (QThread) - Planned
 │
 ├── scripts/                       # Current support scripts
 │   ├── characterize_lsl.py        # LSL stream characterization
 │   ├── replay_xdf_to_lsl.py       # Replay recorded XDF into LSL
 │   ├── smoke_test_lsl_receiver.py # Manual Phase 2 smoke test
+│   ├── benchmark_preprocessor.py  # OnlinePreprocessor latency benchmark
 │   └── inspect_xdf.py             # XDF inspection helper
 │
 └── tests/
@@ -1227,7 +1244,8 @@ online_decoder/
     ├── notebooks/
     │   ├── validate_preprocessor.ipynb
     │   ├── validate_evaluator.ipynb
-    │   └── validate_trainer.ipynb
+    │   ├── validate_trainer.ipynb
+    │   └── validate_online_preprocessor.ipynb
     ├── offline_phase/
     │   ├── conftest.py
     │   ├── test_preprocessor.py
@@ -1235,7 +1253,8 @@ online_decoder/
     │   └── test_trainer.py
     └── online_phase/
         ├── test_lsl_receiver.py
-        └── test_lsl_receiver_integration.py
+        ├── test_lsl_receiver_integration.py
+        └── test_online_preprocessor.py
 ```
 
 ---

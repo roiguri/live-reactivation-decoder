@@ -2,7 +2,7 @@
 
 > Quick implementation plan for the active stateful micro-batch architecture. For rationale and trade-offs, see [../../knowledge_base/01_timeline/03_online_stage_design/Phase2_Architecture_Discussion.md](../../knowledge_base/01_timeline/03_online_stage_design/Phase2_Architecture_Discussion.md). For the maintained backend contract, see [backend_architecture.md](backend_architecture.md).
 
-Last reconciled with code on **2026-05-09**.
+Last reconciled with code on **2026-05-10**.
 
 ## Architecture Outline
 
@@ -28,15 +28,15 @@ LSLReceiver -> StreamWorker -> OnlinePreprocessor -> LiveInferenceEngine -> logs
 
 - `[x]` Config schema and `SettingsManager` are implemented.
 - `[x]` `OfflinePreprocessor` is implemented and unit-tested.
-- `[x]` `ModelEvaluator` is implemented and unit-tested (108 tests passing).
+- `[x]` `ModelEvaluator` is implemented and unit-tested.
 - `[x]` `LSLReceiver` is implemented and unit-tested.
 - `[~]` Replay, smoke-test, and opt-in integration tooling exists.
-- `[~]` `OfflinePreprocessor` exists and exports an initial `online_state`.
+- `[x]` `OfflinePreprocessor` exports `online_state` including `interp_weights` and `pre_whitener`.
 - `[x]` `DecoderPipelineArtifact` loader exists and unwraps the Phase 1 artifact.
-- `[ ]` `OnlinePreprocessor` is missing.
+- `[x]` `OnlinePreprocessor` is implemented and fully tested (76 tests).
 - `[x]` `LiveInferenceEngine` receives unwrapped models/metadata and predicts positive-class probabilities.
-- `[ ]` `StreamWorker` is missing.
-- `[!]` Phase 1 sample rate, final artifact envelope, and `online_state` schema must be locked before `OnlinePreprocessor` implementation.
+- `[ ]` `StreamWorker` is missing — next planned step.
+- `[x]` Phase 1 sample rate locked: configurable via `resample.target_rate` in YAML (default 256 Hz). `online_state` schema locked.
 
 ## Component Plan
 
@@ -66,32 +66,26 @@ LSLReceiver -> StreamWorker -> OnlinePreprocessor -> LiveInferenceEngine -> logs
 
 ### `OnlinePreprocessor` - Stateful Cleaner
 
-**Status:** `[ ]` Not implemented. This is the next critical backend class.
+**Status:** `[x]` Implemented in `src/backend/online_phase/online_preprocessor.py`. 76 tests passing.
 
-**Inputs:**
-- `eeg_batch_1000hz`: NumPy array, shape `(n_samples, n_channels)`.
-- `timestamps`: NumPy array aligned to input samples.
-- `preprocessing_settings`: validated config settings.
-- `online_state`: fixed Phase 1 state exported with the trained decoder artifact.
+**Pipeline order (causal, mirrors offline):**
+1. Bandpass + notch filter — causal IIR via `sosfilt` with persistent `zi`
+2. Decimate to target rate — FIR anti-alias + phase-tracked subsampling
+3. Interpolate bad channels — fixed weight matrix from Phase 1
+4. Average reference
+5. Apply ICA — delta formula with `pre_whitener`
 
-**Outputs:**
-- `model_features`: NumPy array aligned to model-facing samples.
-- `output_timestamps`: NumPy array aligned to `model_features` rows.
-
-**Required behavior:**
-- Use `scipy.signal.sosfilt` with persistent `zi` state for causal bandpass filtering.
-- Use persistent `zi` state for notch filtering when notch filtering is enabled.
-- Apply the fixed bad-channel policy from Phase 1.
-- Apply average reference after bad-channel handling.
-- Apply the fixed ICA transform from Phase 1.
-- Resample/decimate from 1000 Hz to the locked target rate with persistent
-  state so irregular batch sizes preserve alignment.
-- Provide `reset_state()` for a new run.
+**Key implementation notes:**
+- Target rate is fully configurable via `preprocessing_settings["resample"]["target_rate"]` — not hardcoded. Default 256 Hz comes from `experiment_config.yaml`.
+- Constructor cross-validates `online_state["sfreq_offline"]` against `target_rate` to catch Phase 1/2 config drift.
+- `online_state` must include: `bad_channels`, `interp_weights`, `ch_names`, `ica_unmixing`, `ica_mixing`, `ica_pca_components`, `ica_pca_mean`, `ica_exclude`, `pre_whitener`, `sfreq_offline`.
+- Benchmark: 0.21 ms mean per batch (default config), 0.53 ms worst-case (64 ch, 40 ICA comp) — well within 40 ms budget.
 
 **Tests before live use:**
-- `[ ]` Chunked filtering equals one continuous causal filtering call for the same data.
-- `[ ]` Irregular batch sizes preserve decimation alignment and timestamp alignment.
-- `[ ]` Shape validation rejects unexpected channel counts and timestamp lengths.
+- `[x]` Chunked filtering equals one continuous causal filtering call for the same data.
+- `[x]` Irregular batch sizes preserve decimation alignment and timestamp alignment.
+- `[x]` Shape validation rejects unexpected channel counts and timestamp lengths.
+- `[x]` Parametrized over 7 target rates (100–512 Hz).
 
 ### `DecoderPipelineArtifact` Loader - Startup Boundary
 
@@ -176,72 +170,40 @@ engine = LiveInferenceEngine(
 - `[ ]` Receiver, preprocessing, and inference errors are surfaced instead of silently swallowed.
 - `[ ]` Prediction timestamps remain aligned to the emitted probability rows.
 
-## Blocking Phase 1 Decisions
+## Resolved Phase 1 Decisions
 
-Before implementing `OnlinePreprocessor`, lock the Phase 1 target rate,
-`online_state` schema, and saved artifact contract. The artifact loader unwraps
-the saved envelope; `LiveInferenceEngine` consumes only the unwrapped models and
-model-facing metadata.
+Previously blocking decisions — all now resolved.
 
-### `[!]` Model-Facing Sample Rate
+### `[x]` Model-Facing Sample Rate
 
-Current Phase 2 docs previously assumed `250 Hz`. The new Phase 1 config default
-is `256 Hz`. Do not finalize `OnlinePreprocessor` resampling behavior until this
-is discussed with the Phase 1 developer and locked.
+Locked at **configurable via `resample.target_rate`** in `experiment_config.yaml` (default 256 Hz, not hardcoded). `OnlinePreprocessor` reads it from `preprocessing_settings` and cross-validates against `online_state["sfreq_offline"]`.
 
-Default artifact shape:
+### `[x]` `online_state` Schema
+
+`OfflinePreprocessor.export_online_state()` now exports:
+- `bad_channels`, `interp_weights` (precomputed spherical-spline weight matrix, or None)
+- `ch_names`, `sfreq_offline`
+- `ica_unmixing`, `ica_mixing`, `ica_pca_components`, `ica_pca_mean`, `ica_exclude`
+- `pre_whitener` (per-channel-type rescaling factor from MNE ICA fitting)
+
+### `[x]` Artifact envelope
 
 ```python
-{
-    "models": {...},
-    "online_state": {...},
-    "metadata": {...},
-}
+{"models": {...}, "online_state": {...}, "metadata": {...}}
 ```
 
-Required contents:
-- Decoder task names.
-- Trained sklearn-compatible models.
-- Final artifact metadata, including model feature width and expected row layout.
-- Preprocessing settings required by Phase 2.
-
-Current `OfflinePreprocessor.export_online_state()` output:
-- `bad_channels`
-- `ica_unmixing`
-- `ica_mixing`
-- `ica_pca_components`
-- `ica_pca_mean`
-- `ica_exclude`
-- `ch_names`
-- `sfreq_offline`
-
-Still-open `online_state` / artifact items:
-- final model-facing sample rate
-- bad-channel handling policy for live data
-- feature layout and feature width metadata
-- final channel-order naming convention
-- final `decoder_pipeline.joblib` metadata envelope
-
-The artifact loader must treat `online_state` as an opaque payload: it returns
-it for `OnlinePreprocessor`, but does not validate its keys or matrix contents.
-`LiveInferenceEngine` must never receive `online_state`.
+The artifact loader treats `online_state` as opaque. `LiveInferenceEngine` never receives it.
 
 ## Implementation Order
 
-Build complete, self-contained classes first. The artifact loader can treat
-`online_state` as opaque while the Phase 1 artifact schema is still evolving.
-`OnlinePreprocessor` should wait because bad-channel handling and ICA/spatial
-transform behavior depend directly on that schema.
-
 1. `[x]` Clean up `LSLReceiver.start()` expectations in docs, smoke script, and integration test.
 2. `[x]` Implement artifact loader and `LiveInferenceEngine`.
-3. `[ ]` Implement `StreamWorker`.
-4. `[!]` Lock the Phase 1 sample rate, artifact envelope, and `online_state` schema.
-5. `[ ]` Implement `OnlinePreprocessor`.
-6. `[ ]` Add stateful filtering and decimation tests.
-7. `[ ]` Add latency logging.
-8. `[ ]` Run replay-based dry run.
-9. `[ ]` Validate with the real lab LSL stream.
+3. `[x]` Lock the Phase 1 sample rate, artifact envelope, and `online_state` schema.
+4. `[x]` Implement `OnlinePreprocessor` with full test suite and benchmark.
+5. `[ ]` Implement `StreamWorker` ← **next**.
+6. `[ ]` Add latency logging to `StreamWorker`.
+7. `[ ]` Run replay-based dry run.
+8. `[ ]` Validate with the real lab LSL stream.
 
 ## Test Plan
 
