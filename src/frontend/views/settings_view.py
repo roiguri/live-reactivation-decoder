@@ -29,6 +29,9 @@ class SettingsView(QWidget):
 
     # Emits fully-configured AppSession when Continue is clicked successfully
     session_ready = Signal(object)
+    # Loading overlay protocol — handled by Phase1Screen
+    loading_requested = Signal(str)
+    loading_done = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -249,6 +252,7 @@ class SettingsView(QWidget):
 
     def _on_config_selected(self, path: str) -> None:
         self._config_picker.setEnabled(False)
+        self.loading_requested.emit("Loading configuration…")
 
         self._config_thread = QThread()
         self._config_worker = ConfigLoaderWorker(path)
@@ -271,8 +275,10 @@ class SettingsView(QWidget):
         self._update_settings_display(session.settings)
         self._update_continue_state()
         self._config_picker.setEnabled(True)
+        self.loading_done.emit()
 
     def _on_config_error(self, message: str) -> None:
+        self.loading_done.emit()
         QMessageBox.critical(self, "Config Error", message)
         self._config_picker.clear()
         self._config_status_lbl.hide()

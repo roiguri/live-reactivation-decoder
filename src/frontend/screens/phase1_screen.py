@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (
 )
 
 from frontend.widgets.journey_panel import JourneyPanel
+from frontend.widgets.loading_overlay import LoadingOverlay
 from frontend.views.settings_view import SettingsView
 from frontend.views.load_data_view import LoadDataView
 from frontend.views.preprocessing_view import PreprocessingView
@@ -92,6 +93,9 @@ class Phase1Screen(QWidget):
         outer_layout.addWidget(card, 1)
         root.addWidget(outer, 1)
 
+        # ── Loading overlay (covers workspace card only) ──────────────────────
+        self._loading_overlay = LoadingOverlay(card)
+
         # ── Right: journey panel ───────────────────────────────────────────────
         self._journey_panel = JourneyPanel()
         root.addWidget(self._journey_panel)
@@ -99,7 +103,17 @@ class Phase1Screen(QWidget):
         # ── Wiring ────────────────────────────────────────────────────────────
         self._journey_panel.set_node_action(0, self._settings_view.request_load_config)
         self._settings_view.session_ready.connect(self._on_session_ready)
+        self._settings_view.loading_requested.connect(self.show_loading)
+        self._settings_view.loading_done.connect(self.hide_loading)
         self._journey_panel.node_changed.connect(self._on_node_changed)
+
+    # ── public ────────────────────────────────────────────────────────────────
+
+    def show_loading(self, message: str) -> None:
+        self._loading_overlay.show_with_message(message)
+
+    def hide_loading(self) -> None:
+        self._loading_overlay.hide()
 
     def _on_session_ready(self, session) -> None:
         self.session = session

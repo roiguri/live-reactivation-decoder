@@ -8,7 +8,7 @@ Back to [Backend Architecture](backend_architecture.md) or [Docs Index](README.m
 
 This is the **active implementation contract** for the Phase 1 PyQt6 frontend.
 
-**Progress:** Step 4 complete (Node 1: Pipeline Settings, backend wired). Next: Step 5 — Node 2: Load Data (backend wired).
+**Progress:** Step 4 complete (Node 1: Pipeline Settings, backend wired). Step 4 follow-up also landed: `BaseWorker` + `ConfigLoaderWorker` (so `AppSession` construction no longer blocks the GUI thread) and a reusable `LoadingOverlay` widget mounted on the workspace card. Both are general-purpose and Step 5 reuses them. Next: Step 5 — Node 2: Load Data (backend wired).
 
 | Step | Description | Status |
 |---|---|---|
@@ -70,6 +70,8 @@ online_decoder/src/frontend/
 ├── widgets/
 │   ├── __init__.py
 │   ├── journey_panel.py           # JourneyNode + JourneyPanel (right sidebar, 320 px)
+│   ├── loading_overlay.py         # Semi-transparent overlay (message + indeterminate bar), parented to workspace card
+│   ├── shared.py                  # FilePicker, ReadOnlyField, SectionCard
 │   ├── ica_component_card.py      # Card: matplotlib topomap + waveform + keep/reject toggle
 │   └── charts/
 │       ├── __init__.py
@@ -86,6 +88,7 @@ online_decoder/src/frontend/
 ├── workers/
 │   ├── __init__.py
 │   ├── base_worker.py             # BaseWorker(QObject) with standard signal set
+│   ├── config_loader_worker.py    # Wraps AppSession(config_path) construction
 │   ├── load_worker.py             # Wraps orchestrator.load_raw_data()
 │   ├── preprocessing_worker.py    # Step1Worker + Step2Worker
 │   ├── evaluation_worker.py       # Wraps orchestrator.run_evaluation()
@@ -209,12 +212,13 @@ On `AppSession` construction error: `QMessageBox.critical(...)`, paths cleared, 
 
 ### Step 5 — Node 2: Load Data (backend wired)
 
-**Create:**
-- `workers/__init__.py`, `workers/base_worker.py` — `BaseWorker(QObject)` with signals
-- `workers/load_worker.py` — calls `orchestrator.load_raw_data()`
-- `views/load_data_view.py` (replace stub) — dir picker `QPushButton` + path label + "Load Data" button (disabled until dir selected) + indeterminate `QProgressBar`
+`workers/__init__.py` + `workers/base_worker.py` already exist from the Step 4 follow-up — reuse `BaseWorker`. The reusable `LoadingOverlay` on `Phase1Screen` is also already wired: views opt in by declaring `loading_requested(str)` and `loading_done()` signals; `Phase1Screen` connects them to `show_loading` / `hide_loading`.
 
-**Wire:** "Load Data" → `orchestrator.set_file_path(data_dir)` → start `LoadWorker` on `QThread` → `result_ready` → `journey_panel.advance(2)`.
+**Create:**
+- `workers/load_worker.py` — calls `orchestrator.load_raw_data()`
+- `views/load_data_view.py` (replace stub) — dir picker `QPushButton` + path label + "Load Data" button (disabled until dir selected). Use the shared `LoadingOverlay` via the `loading_requested` / `loading_done` signals instead of an in-view `QProgressBar`.
+
+**Wire:** "Load Data" → `orchestrator.set_file_path(data_dir)` → emit `loading_requested("Loading data…")` → start `LoadWorker` on `QThread` → `result_ready` → emit `loading_done()` → `journey_panel.advance(2)`.
 
 **Test with a real `.vhdr` file:** pick dir → click "Load Data" → progress bar shows → trail animates to Node 3. Window stays responsive during load.
 
@@ -321,6 +325,7 @@ class BaseWorker(QObject):
     progress       = Signal(str)     # free-form status text for UI label
     result_ready   = Signal(object)  # payload type varies per subclass
     error_occurred = Signal(str)
+    finished       = Signal()        # emit in subclass run()'s finally — drives thread cleanup
 
     def run(self) -> None:
         ...  # override in each subclass
@@ -329,13 +334,31 @@ class BaseWorker(QObject):
 PyQt6 exports `pyqtSignal`, not `Signal`. All frontend code uses the alias `from PyQt6.QtCore import pyqtSignal as Signal` so the plan's `Signal(...)` notation matches the implementation directly.
 
 **Standard UI lifecycle when a node button is clicked:**
-1. Disable the button; show an indeterminate `QProgressBar`.
+1. Disable the button; emit `loading_requested("…")` so `Phase1Screen` shows the shared `LoadingOverlay`.
 2. Instantiate `Worker(orchestrator, ...)` and `QThread()`.
 3. Move worker to thread; connect `thread.started → worker.run`.
-4. Connect `worker.result_ready` → handler (advances sub-step or calls `journey_panel.advance()`).
-5. Connect `worker.error_occurred` → `QMessageBox.critical(...)`.
-6. Connect cleanup: `worker.finished → thread.quit`, `thread.finished → thread.deleteLater`.
-7. `thread.start()`.
+4. Connect `worker.result_ready` → handler (emits `loading_done()`, then advances sub-step or calls `journey_panel.advance()`).
+5. Connect `worker.error_occurred` → handler (emits `loading_done()`, then `QMessageBox.critical(...)`).
+6. Connect cleanup: `worker.finished → thread.quit`, `thread.finished → worker.deleteLater`, `thread.finished → thread.deleteLater`.
+7. Keep `self._worker` and `self._thread` references on the view so they aren't GC'd while the thread is running. **Only null them in a slot connected to `thread.finished`** — nulling from `result_ready` is too early and will crash with `QThread: Destroyed while thread is still running` because `thread.quit()` is itself queued.
+8. `thread.start()`.
+
+---
+
+## Loading Overlay
+
+A reusable `LoadingOverlay` (`widgets/loading_overlay.py`) is mounted on the workspace card by `Phase1Screen`. It shows a centered message + indeterminate `QProgressBar` over a semi-transparent white background, and resizes with its host via an installed event filter. The journey panel sits outside the overlay's parent tree and stays visible/interactive at all times.
+
+**View protocol:** any view that needs to block its workspace during a backend call declares two signals:
+
+```python
+loading_requested = Signal(str)
+loading_done = Signal()
+```
+
+`Phase1Screen` connects them once in `__init__` to its own `show_loading(message)` / `hide_loading()`. Views never reference `Phase1Screen` directly — this matches the existing `session_ready` pattern and keeps view ↔ screen coupling one-way.
+
+Views should not introduce their own in-view `QProgressBar` for transient backend calls; use the shared overlay instead. (Indeterminate `QProgressBar`s embedded directly in inner stacked sub-pages — e.g. Node 3 page 0, Node 4 page 0 — are still appropriate when the progress is part of the page's state rather than a transient block.)
 
 ---
 
