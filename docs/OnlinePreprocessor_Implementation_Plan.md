@@ -168,30 +168,32 @@ initialised but no processing logic.
 2. If notch is configured, same for notch SOS + `self._notch_zi`.
 
 Filter coefficient design (in `__init__`):
-- Use `mne.filter.create_filter(data=None, sfreq=input_sfreq, l_freq=l_freq, h_freq=h_freq,
-  method=method, output="sos")` for bandpass — this is exactly what the offline pipeline
-  calls internally.
-- For notch: `mne.filter.create_filter(data=None, sfreq=input_sfreq, l_freq=notch-1,
-  h_freq=notch+1, method="iir", output="sos")` as a tight bandstop.
+- `mne.filter.create_filter(..., method='iir')` returns a dict; bandpass SOS is at `result['sos']`.
+  Applied single-pass with `sosfilt` (causal). Differs from offline `filtfilt` in phase response
+  and effective stopband depth (~−34 dB vs ~−68 dB at 2.5× cutoff). See
+  `knowledge_base/02_reference/online_filtering.md` for full group delay analysis and rationale.
+- Notch: `scipy.signal.iirnotch(w0=notch_freq, Q=30, fs=input_sfreq)` → `tf2sos`. Q=30 gives
+  ~3.3 Hz notch width. MNE's `create_filter` does not expose a bandstop output directly.
 - Store both SOS arrays as class attributes.
 
 `zi` initialisation: lazy — on first batch, initialise from
-`scipy.signal.sosfilt_zi(sos) * data[0]` (standard warm-start to avoid step response).
+`scipy.signal.sosfilt_zi(sos)[:, :, np.newaxis] * data[0]` (warm-start, shape `(n_sections, 2, n_ch)`).
 
 ### Checklist
-- [ ] Write failing test: processing same data in one chunk vs. ten equal-sized chunks
+- [x] Write failing test: processing same data in one chunk vs. ten equal-sized chunks
       produces identical output arrays (within 1e-10 — validates `zi` continuity)
-- [ ] Write failing test: processing same data in irregular chunk sizes (37, 51, 29, …)
+- [x] Write failing test: processing same data in irregular chunk sizes (37, 51, 29, …)
       matches one-chunk output (validates `zi` on irregular batches)
-- [ ] Write failing test: power above `h_freq` is attenuated (>40 dB) after filtering
-- [ ] Write failing test: power below `l_freq` is attenuated (>40 dB) after filtering
-- [ ] Write failing test: when `notch=None`, notch filter is not applied (no extra attenuation)
-- [ ] Write failing test: when `notch=50.0`, power around 50 Hz is attenuated
-- [ ] Write failing test: `_bandpass_zi` is not `None` after first call to `_apply_filter()`
-- [ ] Write failing test: `reset_state()` zeroes `_bandpass_zi` and `_notch_zi` back to `None`
-- [ ] Implement `_apply_filter()` with lazy `zi` initialisation and state update
-- [ ] Wire `_apply_filter()` into `process_batch()` (still `NotImplementedError` for later steps)
-- [ ] All tests pass
+- [x] Write failing test: power above `h_freq` is attenuated (>30 dB) after filtering
+      (note: −30 dB threshold, not −40 dB — causal single-pass has half the effective order of filtfilt)
+- [x] Write failing test: power below `l_freq` is attenuated (>40 dB) after filtering
+- [x] Write failing test: when `notch=None`, notch filter is not applied (no extra attenuation)
+- [x] Write failing test: when `notch=50.0`, power around 50 Hz is attenuated
+- [x] Write failing test: `_bandpass_zi` is not `None` after first call to `_apply_filter()`
+- [x] Write failing test: `reset_state()` zeroes `_bandpass_zi` and `_notch_zi` back to `None`
+- [x] Implement `_apply_filter()` with lazy `zi` initialisation and state update
+- [ ] Wire `_apply_filter()` into `process_batch()` (done in Commit 6)
+- [x] All tests pass
 
 ---
 

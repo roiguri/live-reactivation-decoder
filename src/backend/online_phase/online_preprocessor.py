@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+from math import gcd
 from typing import Optional
 
+import mne
 import numpy as np
+from scipy.signal import iirnotch, sosfilt, sosfilt_zi, tf2sos
 
 logger = logging.getLogger(__name__)
 
@@ -57,9 +60,26 @@ class OnlinePreprocessor:
             i for i in range(len(self._ch_names)) if i not in self._bad_indices
         ]
 
-        # Filter coefficients — initialised in later commits
-        self._bandpass_sos: Optional[np.ndarray] = None
-        self._notch_sos: Optional[np.ndarray] = None
+        # Filter coefficients
+        bp = preprocessing_settings["bandpass"]
+        # mne.filter.create_filter returns a dict with 'sos' for IIR method.
+        # We apply it single-pass (causal sosfilt) rather than forward-backward,
+        # so phase response differs from offline but cutoffs and band are identical.
+        iir_params = mne.filter.create_filter(
+            data=None,
+            sfreq=self._input_sfreq,
+            l_freq=bp["l_freq"],
+            h_freq=bp["h_freq"],
+            method=bp.get("method", "iir"),
+            verbose=False,
+        )
+        self._bandpass_sos: np.ndarray = iir_params["sos"]
+        notch_freq = bp.get("notch")
+        if notch_freq is not None:
+            b, a = iirnotch(w0=float(notch_freq), Q=30, fs=self._input_sfreq)
+            self._notch_sos: Optional[np.ndarray] = tf2sos(b, a)
+        else:
+            self._notch_sos = None
         self._decimate_fir: Optional[np.ndarray] = None
 
         # Persistent filter state — reset to None each reset_state()
@@ -105,6 +125,35 @@ class OnlinePreprocessor:
             Tuple of (features, output_timestamps) at target_sfreq.
         """
         raise NotImplementedError
+
+    # ── Private: filtering ────────────────────────────────────────────────────
+
+    def _apply_filter(self, data: np.ndarray) -> np.ndarray:
+        """Apply causal bandpass (and optional notch) with persistent zi state.
+
+        Args:
+            data: (n_samples, n_channels)
+
+        Returns:
+            Filtered array, same shape.
+        """
+        if self._bandpass_zi is None:
+            zi_template = sosfilt_zi(self._bandpass_sos)  # (n_sections, 2)
+            self._bandpass_zi = zi_template[:, :, np.newaxis] * data[0]  # (n_sections, 2, n_ch)
+
+        filtered, self._bandpass_zi = sosfilt(
+            self._bandpass_sos, data, axis=0, zi=self._bandpass_zi
+        )
+
+        if self._notch_sos is not None:
+            if self._notch_zi is None:
+                zi_template = sosfilt_zi(self._notch_sos)
+                self._notch_zi = zi_template[:, :, np.newaxis] * filtered[0]
+            filtered, self._notch_zi = sosfilt(
+                self._notch_sos, filtered, axis=0, zi=self._notch_zi
+            )
+
+        return filtered
 
     # ── Validation ────────────────────────────────────────────────────────────
 

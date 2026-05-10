@@ -151,3 +151,102 @@ class TestResetState:
         preprocessor._decimate_phase = 99
         preprocessor.reset_state()
         assert preprocessor._decimate_phase == 0
+
+
+# ── Commit 3: causal bandpass + notch filter ──────────────────────────────────
+
+def _make_sinusoid(freq_hz: float, n_samples: int, n_channels: int, sfreq: float) -> np.ndarray:
+    t = np.arange(n_samples) / sfreq
+    return np.tile(np.sin(2 * np.pi * freq_hz * t)[:, np.newaxis], (1, n_channels))
+
+
+class TestApplyFilter:
+    def test_equal_chunks_match_single_pass(self):
+        """Filtering in N equal chunks must equal filtering the whole array at once."""
+        rng = np.random.default_rng(1)
+        data = rng.standard_normal((1000, N_CHANNELS)) * 1e-5
+
+        p1 = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+        result_single = p1._apply_filter(data.copy())
+
+        p2 = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+        chunks = [p2._apply_filter(data[i * 100:(i + 1) * 100].copy()) for i in range(10)]
+        result_chunked = np.concatenate(chunks)
+
+        np.testing.assert_allclose(result_single, result_chunked, atol=1e-10)
+
+    def test_irregular_chunks_match_single_pass(self):
+        rng = np.random.default_rng(2)
+        data = rng.standard_normal((1000, N_CHANNELS)) * 1e-5
+
+        p1 = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+        result_single = p1._apply_filter(data.copy())
+
+        p2 = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+        sizes = [37, 51, 29, 83, 100, 200, 500]  # sums to 1000
+        chunks, idx = [], 0
+        for s in sizes:
+            chunks.append(p2._apply_filter(data[idx:idx + s].copy()))
+            idx += s
+        result_chunked = np.concatenate(chunks)
+
+        np.testing.assert_allclose(result_single, result_chunked, atol=1e-10)
+
+    def test_highfreq_attenuated(self):
+        """Sinusoid well above h_freq=40 Hz must be strongly attenuated."""
+        n = int(INPUT_SFREQ * 5)
+        data = _make_sinusoid(100.0, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
+        p = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+        out = p._apply_filter(data)
+        # Take second half to skip filter transient.
+        # Causal single-pass IIR has half the effective order of offline filtfilt,
+        # so -30 dB (not -40 dB) is the meaningful guarantee at 2.5× the cutoff.
+        half = n // 2
+        ratio_db = 20 * np.log10(out[half:].std() / data[half:].std() + 1e-30)
+        assert ratio_db < -30, f"Expected >30 dB attenuation, got {ratio_db:.1f} dB"
+
+    def test_lowfreq_attenuated(self):
+        """Sinusoid well below l_freq=1 Hz must be strongly attenuated."""
+        n = int(INPUT_SFREQ * 30)  # need longer signal to see sub-1 Hz
+        data = _make_sinusoid(0.1, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
+        p = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+        out = p._apply_filter(data)
+        half = n // 2
+        ratio_db = 20 * np.log10(out[half:].std() / data[half:].std() + 1e-30)
+        assert ratio_db < -40, f"Expected >40 dB attenuation, got {ratio_db:.1f} dB"
+
+    def test_notch_attenuates_50hz(self):
+        """50 Hz sinusoid must be strongly attenuated when notch=50."""
+        n = int(INPUT_SFREQ * 5)
+        data = _make_sinusoid(50.0, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
+        settings = _make_settings()
+        settings["bandpass"]["notch"] = 50.0
+        p = OnlinePreprocessor(settings, _make_online_state(), INPUT_SFREQ)
+        out = p._apply_filter(data)
+        half = n // 2
+        ratio_db = 20 * np.log10(out[half:].std() / (data[half:].std() + 1e-30) + 1e-30)
+        assert ratio_db < -20, f"Expected notch attenuation, got {ratio_db:.1f} dB"
+
+    def test_no_notch_leaves_50hz_intact(self):
+        """50 Hz sinusoid must NOT be attenuated when notch=None."""
+        n = int(INPUT_SFREQ * 5)
+        data = _make_sinusoid(50.0, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
+        settings = _make_settings()
+        settings["bandpass"]["notch"] = None
+        settings["bandpass"]["h_freq"] = 80.0  # widen bandpass so 50 Hz passes
+        p = OnlinePreprocessor(settings, _make_online_state(), INPUT_SFREQ)
+        out = p._apply_filter(data)
+        half = n // 2
+        ratio_db = 20 * np.log10(out[half:].std() / (data[half:].std() + 1e-30) + 1e-30)
+        assert ratio_db > -6, f"50 Hz should pass through, got {ratio_db:.1f} dB"
+
+    def test_bandpass_zi_set_after_first_call(self, preprocessor):
+        assert preprocessor._bandpass_zi is None
+        preprocessor._apply_filter(np.random.standard_normal((100, N_CHANNELS)) * 1e-5)
+        assert preprocessor._bandpass_zi is not None
+
+    def test_reset_clears_filter_zi(self, preprocessor):
+        preprocessor._apply_filter(np.random.standard_normal((100, N_CHANNELS)) * 1e-5)
+        preprocessor.reset_state()
+        assert preprocessor._bandpass_zi is None
+        assert preprocessor._notch_zi is None
