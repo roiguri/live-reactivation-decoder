@@ -4,6 +4,8 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+DEFAULT_RANDOM_STATE: int = 42
+
 
 class BandpassSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -64,6 +66,7 @@ class RejectCriteriaSettings(BaseModel):
 class PreprocessingSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    random_state: int = DEFAULT_RANDOM_STATE
     bandpass: BandpassSettings = Field(default_factory=BandpassSettings)
     resample: ResampleSettings = Field(default_factory=ResampleSettings)
     reject_criteria: RejectCriteriaSettings = Field(default_factory=RejectCriteriaSettings)
@@ -111,6 +114,7 @@ _CLASSIFIER_DEFAULTS: dict[str, dict] = {
 class DecoderSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    random_state: int = DEFAULT_RANDOM_STATE
     model:        Literal["LDA", "Logistic", "SVM"] = "LDA"
     params:       dict[str, Any] = Field(default_factory=dict)
     scale_method: Literal["standard", "median"] | None = "standard"
@@ -153,10 +157,27 @@ class ExperimentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     experiment_info: ExperimentInfo
-    random_state: int = 42
+    random_state: int = DEFAULT_RANDOM_STATE
     preprocessing: PreprocessingSettings = Field(default_factory=PreprocessingSettings)
     decoders: DecoderSettings = Field(default_factory=DecoderSettings)
     markers_mapping: MarkersMapping
+
+    @model_validator(mode="before")
+    @classmethod
+    def _propagate_random_state(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        rs = data.get("random_state", DEFAULT_RANDOM_STATE)
+        for section in ("preprocessing", "decoders"):
+            sub = data.get(section)
+            if isinstance(sub, dict):
+                if "random_state" in sub:
+                    raise ValueError(
+                        f"'random_state' must be set at the top level only, "
+                        f"not under '{section}'"
+                    )
+                sub["random_state"] = rs
+        return data
 
     @model_validator(mode="after")
     def _task_labels_exist_in_event_mapping(self) -> ExperimentConfig:
