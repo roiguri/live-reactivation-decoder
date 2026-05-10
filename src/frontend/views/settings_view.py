@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
 )
 
 from frontend.styles.theme import (
-    BORDER_GRAY, BG_LIGHT, PRIMARY_BLUE, SUCCESS_GREEN,
+    BORDER_GRAY, BG_LIGHT, CARD_WHITE, PRIMARY_BLUE, SUCCESS_GREEN,
     TEXT_MUTED, TEXT_PRIMARY,
 )
 from frontend.widgets.shared import FilePicker, ReadOnlyField, SectionCard
@@ -133,24 +133,46 @@ class SettingsView(QWidget):
     def _build_preproc_section(self) -> None:
         card = SectionCard("Preprocessing")
 
-        # Bandpass: [l_freq] to [h_freq] Hz   Method: xxx   Notch: xxx Hz
-        r = QHBoxLayout()
-        r.setSpacing(6)
-        r.addWidget(self._field_label("Bandpass"))
+        # Random State (shared seed, mirrored in Model Evaluation card)
+        rs_row = QHBoxLayout()
+        rs_row.setSpacing(6)
+        rs_row.addWidget(self._field_label("Random State"))
+        self._preproc_seed_field = ReadOnlyField("", field_width=72)
+        rs_row.addWidget(self._preproc_seed_field)
+        rs_row.addStretch()
+        card.body.addLayout(rs_row)
+
+        # Bandpass: header row + indented sub-rows (Method, Notch)
+        bp_row = QHBoxLayout()
+        bp_row.setSpacing(6)
+        bp_row.addWidget(self._field_label("Bandpass"))
         self._l_freq = ReadOnlyField("", field_width=72)
         self._h_freq = ReadOnlyField("", field_width=72)
-        self._bp_method = self._dim_label("Method: —")
-        self._notch = self._dim_label("Notch: —")
-        r.addWidget(self._l_freq)
-        r.addWidget(QLabel("to"))
-        r.addWidget(self._h_freq)
-        r.addWidget(self._dim_label("Hz"))
-        r.addSpacing(8)
-        r.addWidget(self._bp_method)
-        r.addSpacing(6)
-        r.addWidget(self._notch)
-        r.addStretch()
-        card.body.addLayout(r)
+        bp_row.addWidget(self._l_freq)
+        bp_row.addWidget(QLabel("to"))
+        bp_row.addWidget(self._h_freq)
+        bp_row.addWidget(self._dim_label("Hz"))
+        bp_row.addStretch()
+        card.body.addLayout(bp_row)
+
+        bp_method_row = QHBoxLayout()
+        bp_method_row.setSpacing(6)
+        bp_method_row.addSpacing(110)
+        bp_method_row.addWidget(self._sub_label("Method:"))
+        self._bp_method_field = ReadOnlyField("", field_width=96)
+        bp_method_row.addWidget(self._bp_method_field)
+        bp_method_row.addStretch()
+        card.body.addLayout(bp_method_row)
+
+        notch_row = QHBoxLayout()
+        notch_row.setSpacing(6)
+        notch_row.addSpacing(110)
+        notch_row.addWidget(self._sub_label("Notch:"))
+        self._notch_field = ReadOnlyField("", field_width=96)
+        notch_row.addWidget(self._notch_field)
+        notch_row.addWidget(self._dim_label("Hz"))
+        notch_row.addStretch()
+        card.body.addLayout(notch_row)
 
         # Resample: [target_rate] Hz
         r2 = QHBoxLayout()
@@ -162,34 +184,89 @@ class SettingsView(QWidget):
         r2.addStretch()
         card.body.addLayout(r2)
 
-        # ICA: [n_components] components   Method: xxx   Seed: xxx
-        r3 = QHBoxLayout()
-        r3.setSpacing(6)
-        r3.addWidget(self._field_label("ICA"))
+        # ICA: header row + indented sub-rows (Method, Fit L Freq) — no seed
+        ica_row = QHBoxLayout()
+        ica_row.setSpacing(6)
+        ica_row.addWidget(self._field_label("ICA"))
         self._ica_n = ReadOnlyField("", field_width=72)
-        self._ica_method = self._dim_label("Method: —")
-        self._ica_seed = self._dim_label("Seed: —")
-        r3.addWidget(self._ica_n)
-        r3.addWidget(self._dim_label("components"))
-        r3.addSpacing(8)
-        r3.addWidget(self._ica_method)
-        r3.addSpacing(6)
-        r3.addWidget(self._ica_seed)
-        r3.addStretch()
-        card.body.addLayout(r3)
+        ica_row.addWidget(self._ica_n)
+        ica_row.addWidget(self._dim_label("components"))
+        ica_row.addStretch()
+        card.body.addLayout(ica_row)
 
-        # Epoch Size: [tmin] to [tmax] s
-        r4 = QHBoxLayout()
-        r4.setSpacing(6)
-        r4.addWidget(self._field_label("Epoch Size"))
+        ica_method_row = QHBoxLayout()
+        ica_method_row.setSpacing(6)
+        ica_method_row.addSpacing(110)
+        ica_method_row.addWidget(self._sub_label("Method:"))
+        self._ica_method_field = ReadOnlyField("", field_width=96)
+        ica_method_row.addWidget(self._ica_method_field)
+        ica_method_row.addStretch()
+        card.body.addLayout(ica_method_row)
+
+        ica_fit_row = QHBoxLayout()
+        ica_fit_row.setSpacing(6)
+        ica_fit_row.addSpacing(110)
+        ica_fit_row.addWidget(self._sub_label("Fit L Freq:"))
+        self._ica_fit_l_freq_field = ReadOnlyField("", field_width=96)
+        ica_fit_row.addWidget(self._ica_fit_l_freq_field)
+        ica_fit_row.addWidget(self._dim_label("Hz"))
+        ica_fit_row.addStretch()
+        card.body.addLayout(ica_fit_row)
+
+        # Reject Criteria: header (hard_amplitude) + indented sub-rows
+        rc_row = QHBoxLayout()
+        rc_row.setSpacing(6)
+        rc_row.addWidget(self._field_label("Reject Criteria"))
+        self._reject_hard_amp_field = ReadOnlyField("", field_width=110)
+        rc_row.addWidget(self._reject_hard_amp_field)
+        rc_row.addWidget(self._dim_label("V"))
+        rc_row.addStretch()
+        card.body.addLayout(rc_row)
+
+        flat_row = QHBoxLayout()
+        flat_row.setSpacing(6)
+        flat_row.addSpacing(110)
+        flat_row.addWidget(self._sub_label("Flat Threshold:"))
+        self._reject_flat_field = ReadOnlyField("", field_width=110)
+        flat_row.addWidget(self._reject_flat_field)
+        flat_row.addWidget(self._dim_label("V"))
+        flat_row.addStretch()
+        card.body.addLayout(flat_row)
+
+        noisy_row = QHBoxLayout()
+        noisy_row.setSpacing(6)
+        noisy_row.addSpacing(110)
+        noisy_row.addWidget(self._sub_label("Noisy Z-Score:"))
+        self._reject_noisy_field = ReadOnlyField("", field_width=80)
+        noisy_row.addWidget(self._reject_noisy_field)
+        noisy_row.addStretch()
+        card.body.addLayout(noisy_row)
+
+        # Epoch Size: header (tmin → tmax) + Baseline sub-row
+        ep_row = QHBoxLayout()
+        ep_row.setSpacing(6)
+        ep_row.addWidget(self._field_label("Epoch Size"))
         self._tmin = ReadOnlyField("", field_width=80)
         self._tmax = ReadOnlyField("", field_width=80)
-        r4.addWidget(self._tmin)
-        r4.addWidget(QLabel("to"))
-        r4.addWidget(self._tmax)
-        r4.addWidget(self._dim_label("s"))
-        r4.addStretch()
-        card.body.addLayout(r4)
+        ep_row.addWidget(self._tmin)
+        ep_row.addWidget(QLabel("to"))
+        ep_row.addWidget(self._tmax)
+        ep_row.addWidget(self._dim_label("s"))
+        ep_row.addStretch()
+        card.body.addLayout(ep_row)
+
+        baseline_row = QHBoxLayout()
+        baseline_row.setSpacing(6)
+        baseline_row.addSpacing(110)
+        baseline_row.addWidget(self._sub_label("Baseline:"))
+        self._baseline_lo_field = ReadOnlyField("", field_width=80)
+        self._baseline_hi_field = ReadOnlyField("", field_width=80)
+        baseline_row.addWidget(self._baseline_lo_field)
+        baseline_row.addWidget(self._dim_label("to"))
+        baseline_row.addWidget(self._baseline_hi_field)
+        baseline_row.addWidget(self._dim_label("s"))
+        baseline_row.addStretch()
+        card.body.addLayout(baseline_row)
 
         card.body.addSpacing(4)
         card.body.addWidget(self._field_label("Annotations Mapping"))
@@ -203,6 +280,15 @@ class SettingsView(QWidget):
 
     def _build_model_section(self) -> None:
         card = SectionCard("Model Evaluation")
+
+        # Random State (shared seed, mirrored from Preprocessing card)
+        rs_row = QHBoxLayout()
+        rs_row.setSpacing(6)
+        rs_row.addWidget(self._field_label("Random State"))
+        self._decoder_seed_field = ReadOnlyField("", field_width=72)
+        rs_row.addWidget(self._decoder_seed_field)
+        rs_row.addStretch()
+        card.body.addLayout(rs_row)
 
         model_row = QHBoxLayout()
         model_row.setSpacing(0)
@@ -221,6 +307,21 @@ class SettingsView(QWidget):
             self._model_labels[key] = lbl
         model_row.addStretch()
         card.body.addLayout(model_row)
+
+        # Model params: indented sub-rows, dynamic (keys depend on selected model)
+        self._params_container = QWidget()
+        self._params_layout = QVBoxLayout(self._params_container)
+        self._params_layout.setContentsMargins(0, 0, 0, 0)
+        self._params_layout.setSpacing(4)
+        card.body.addWidget(self._params_container)
+
+        scale_row = QHBoxLayout()
+        scale_row.setSpacing(6)
+        scale_row.addWidget(self._field_label("Scale Method"))
+        self._scale_method_field = ReadOnlyField("", field_width=110)
+        scale_row.addWidget(self._scale_method_field)
+        scale_row.addStretch()
+        card.body.addLayout(scale_row)
 
         cv_row = QHBoxLayout()
         cv_row.setSpacing(6)
@@ -255,6 +356,14 @@ class SettingsView(QWidget):
     def _dim_label(text: str = "") -> QLabel:
         lbl = QLabel(text)
         lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
+        return lbl
+
+    @staticmethod
+    def _sub_label(text: str) -> QLabel:
+        """Sentence-case sub-row label (e.g. 'Method:'). Aligned under the
+        primary input column via an addSpacing(110) at the start of the row."""
+        lbl = QLabel(text)
+        lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
         return lbl
 
     # ── private slots ─────────────────────────────────────────────────────────
@@ -316,19 +425,28 @@ class SettingsView(QWidget):
 
     def _update_settings_display(self, settings: dict | None) -> None:
         if settings is None:
+            self._preproc_seed_field.set_value(None)
+            self._decoder_seed_field.set_value(None)
             self._l_freq.set_value(None)
             self._h_freq.set_value(None)
-            self._bp_method.setText("Method: —")
-            self._notch.setText("Notch: —")
+            self._bp_method_field.set_value(None)
+            self._notch_field.set_value(None)
             self._resample.set_value(None)
             self._ica_n.set_value(None)
-            self._ica_method.setText("Method: —")
-            self._ica_seed.setText("Seed: —")
+            self._ica_method_field.set_value(None)
+            self._ica_fit_l_freq_field.set_value(None)
+            self._reject_hard_amp_field.set_value(None)
+            self._reject_flat_field.set_value(None)
+            self._reject_noisy_field.set_value(None)
             self._tmin.set_value(None)
             self._tmax.set_value(None)
+            self._baseline_lo_field.set_value(None)
+            self._baseline_hi_field.set_value(None)
+            self._scale_method_field.set_value(None)
             self._cv_folds.set_value(None)
             _clear_layout(self._annot_layout)
             _clear_layout(self._decoders_layout)
+            _clear_layout(self._params_layout)
             for lbl in self._model_labels.values():
                 lbl.setStyleSheet(
                     f"background: #F3F4F6; color: {TEXT_MUTED}; "
@@ -340,24 +458,38 @@ class SettingsView(QWidget):
         dec = settings["decoders"]
         em  = settings["event_mapping"]
 
+        self._preproc_seed_field.set_value(pre["random_state"])
+        self._decoder_seed_field.set_value(dec["random_state"])
+
         bp = pre["bandpass"]
         self._l_freq.set_value(bp["l_freq"])
         self._h_freq.set_value(bp["h_freq"])
-        self._bp_method.setText(f"Method: {bp['method']}")
+        self._bp_method_field.set_value(bp["method"])
         notch_val = bp.get("notch")
-        self._notch.setText(
-            f"Notch: {notch_val} Hz" if notch_val is not None else "Notch: —"
-        )
+        self._notch_field.set_value(notch_val)  # None → "—"
+
         self._resample.set_value(pre["resample"]["target_rate"])
 
         ica = pre["ica"]
         self._ica_n.set_value(ica["n_components"])
-        self._ica_method.setText(f"Method: {ica['method']}")
-        self._ica_seed.setText(f"Seed: {pre['random_state']}")
+        self._ica_method_field.set_value(ica["method"])
+        self._ica_fit_l_freq_field.set_value(ica["fit_l_freq"])
+
+        rc = pre["reject_criteria"]
+        self._reject_hard_amp_field.set_value(f"{rc['hard_amplitude']:.2e}")
+        self._reject_flat_field.set_value(f"{rc['flat_threshold']:.2e}")
+        self._reject_noisy_field.set_value(rc["noisy_z_score"])
 
         ep = pre["epochs"]
         self._tmin.set_value(ep["tmin"])
         self._tmax.set_value(ep["tmax"])
+        baseline = ep["baseline"]
+        self._baseline_lo_field.set_value(
+            "start" if baseline[0] is None else baseline[0]
+        )
+        self._baseline_hi_field.set_value(
+            "end" if baseline[1] is None else baseline[1]
+        )
 
         # Annotations table
         _clear_layout(self._annot_layout)
@@ -429,6 +561,25 @@ class SettingsView(QWidget):
                     f"border: 1px solid {BORDER_GRAY}; border-radius: 2px; font-size: 12px;"
                 )
 
+        # Model params (dynamic — keys depend on selected model)
+        _clear_layout(self._params_layout)
+        params = dec.get("params") or {}
+        for key, value in params.items():
+            row_w = QWidget()
+            row = QHBoxLayout(row_w)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(6)
+            row.addSpacing(110)
+            row.addWidget(self._sub_label(f"{key}:"))
+            field = ReadOnlyField("", field_width=110)
+            field.set_value(value)
+            row.addWidget(field)
+            row.addStretch()
+            self._params_layout.addWidget(row_w)
+
+        scale = dec.get("scale_method")
+        self._scale_method_field.set_value("none" if scale is None else scale)
+
         self._cv_folds.set_value(dec["cv"]["k"])
 
         # Decoder task cards
@@ -445,23 +596,24 @@ class SettingsView(QWidget):
     def _make_decoder_card(self, task: dict) -> QWidget:
         card = QFrame()
         card.setStyleSheet(
-            f"QFrame {{ background: {BG_LIGHT}; border: 1px solid {BORDER_GRAY}; border-radius: 2px; }}"
+            f"QFrame {{ background: {CARD_WHITE}; border: 1px solid {BORDER_GRAY}; "
+            f"border-radius: 4px; }}"
         )
         v = QVBoxLayout(card)
-        v.setContentsMargins(10, 8, 10, 8)
-        v.setSpacing(4)
+        v.setContentsMargins(12, 10, 12, 10)
+        v.setSpacing(6)
 
         name_lbl = QLabel(task["name"])
         f = name_lbl.font()
         f.setWeight(QFont.Weight.DemiBold)
         f.setPointSize(10)
         name_lbl.setFont(f)
-        name_lbl.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        name_lbl.setStyleSheet(f"color: {TEXT_PRIMARY}; border: none;")
         v.addWidget(name_lbl)
 
         for labels, bg, fg, prefix in [
-            (task.get("pos_labels", []), "#DBEAFE", "#1D4ED8", "+"),
-            (task.get("neg_labels", []), "#FEE2E2", "#DC2626", "−"),
+            (task.get("pos_labels", []), "#D1FAE5", "#047857", "+"),  # emerald
+            (task.get("neg_labels", []), "#FEE2E2", "#DC2626", "−"),  # red
         ]:
             if not labels:
                 continue
@@ -471,7 +623,7 @@ class SettingsView(QWidget):
                 badge = QLabel(f"{prefix}{lbl_text}")
                 badge.setStyleSheet(
                     f"background: {bg}; color: {fg}; font-size: 10px; "
-                    f"border-radius: 2px; padding: 1px 5px;"
+                    f"border: none; border-radius: 2px; padding: 1px 6px;"
                 )
                 row.addWidget(badge)
             row.addStretch()
