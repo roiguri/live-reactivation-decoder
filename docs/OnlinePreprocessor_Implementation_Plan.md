@@ -83,12 +83,15 @@ def process_batch(
     # Returns: features (n_out, n_channels), output_timestamps (n_out,)
 ```
 
-Required keys validated in `__init__`:
-- `preprocessing_settings`: `bandpass.l_freq`, `bandpass.h_freq`, `bandpass.method`,
-  `bandpass.notch` (may be None), `resample.target_rate`
-- `online_state`: `bad_channels`, `ch_names`, `interp_weights`, `ica_unmixing`,
-  `ica_mixing`, `ica_pca_components`, `ica_pca_mean` (may be None), `ica_exclude`,
-  `sfreq_offline` (used to cross-validate against `target_rate`)
+Validation in `__init__` is minimal — only catches errors that would otherwise be silent:
+- Cross-validates `online_state["sfreq_offline"]` against `preprocessing_settings["resample"]["target_rate"]`:
+  a mismatch means filter coefficients would be designed for the wrong rate.
+- Checks `ica_pca_components.shape[1] == len(ch_names)`: a mismatch would surface as a
+  cryptic NumPy broadcast error on the first `process_batch()` call.
+
+All other key/type errors are left to Python's natural `KeyError`/`TypeError` — these dicts
+come from internal code (Pydantic-validated settings + `export_online_state()`) so upfront
+checking is redundant.
 
 ---
 
@@ -110,16 +113,16 @@ time — to extract the linear weights.
 ```
 
 ### Checklist
-- [ ] Write failing test: `export_online_state()` includes key `interp_weights`
-- [ ] Write failing test: when no bad channels, `interp_weights` is `None`
-- [ ] Write failing test: `interp_weights` shape is `(n_good_channels, n_bad_channels)`
-- [ ] Write failing test: applying `interp_weights` to ground-truth good-channel data
+- [x] Write failing test: `export_online_state()` includes key `interp_weights`
+- [x] Write failing test: when no bad channels, `interp_weights` is `None`
+- [x] Write failing test: `interp_weights` shape is `(n_good_channels, n_bad_channels)`
+- [x] Write failing test: applying `interp_weights` to ground-truth good-channel data
       reproduces what MNE's `interpolate_bads()` produces for bad channels
       (within 1e-10 tolerance — it must be an exact linear transform)
-- [ ] Implement `_compute_interp_weights()` private method using identity-basis trick
-- [ ] Call it at end of `_detect_bad_channels()`, store as `self._interp_weights`
-- [ ] Add `interp_weights` to `export_online_state()` return dict
-- [ ] All 4 new tests pass; existing preprocessor tests unchanged
+- [x] Implement `_compute_interp_weights()` private method using identity-basis trick
+- [x] Call it at end of `_detect_bad_channels()`, store as `self._interp_weights`
+- [x] Add `interp_weights` to `export_online_state()` return dict
+- [x] All 4 new tests pass; existing preprocessor tests unchanged
 
 ---
 
@@ -142,23 +145,16 @@ initialised but no processing logic.
 - Unpacked spatial transform matrices from `online_state`
 
 ### Checklist
-- [ ] Write failing test: constructor raises `ValueError` on missing `bandpass` key in settings
-- [ ] Write failing test: constructor raises `ValueError` on missing `resample` key in settings
-- [ ] Write failing test: constructor raises `ValueError` if `target_rate` is not a positive int
-- [ ] Write failing test: constructor raises `ValueError` on missing each required `online_state` key
-- [ ] Write failing test: constructor raises `ValueError` if `ch_names` and ICA matrix column
-      count are inconsistent
-- [ ] Write failing test: constructor raises `ValueError` if `online_state["sfreq_offline"]`
-      does not match `preprocessing_settings["resample"]["target_rate"]`
-      (cross-validation that Phase 1 and Phase 2 configs are in sync)
-- [ ] Write failing test: `input_sfreq` must be a positive float
-- [ ] Write failing test: `process_batch()` raises `NotImplementedError` (stub)
-- [ ] Write failing test: properties return expected values after valid construction
-      (`n_channels`, `target_sfreq`, `input_sfreq`)
-- [ ] Write failing test: `reset_state()` resets `_bandpass_zi`, `_notch_zi`, `_decimate_zi`,
+- [x] Write failing test: valid construction succeeds
+- [x] Write failing test: constructor raises `ValueError` if `sfreq_offline` mismatches `target_rate`
+- [x] Write failing test: constructor raises `ValueError` if `ica_pca_components` column count
+      does not match `len(ch_names)`
+- [x] Write failing test: `process_batch()` raises `NotImplementedError` (stub)
+- [x] Write failing test: properties return expected values (`n_channels`, `target_sfreq`, `input_sfreq`)
+- [x] Write failing test: `reset_state()` resets `_bandpass_zi`, `_notch_zi`, `_decimate_zi`,
       `_decimate_phase` to initial values
-- [ ] Implement the skeleton — constructor, properties, `reset_state()`, stub `process_batch()`
-- [ ] All tests pass
+- [x] Implement the skeleton — constructor, properties, `reset_state()`, stub `process_batch()`
+- [x] All tests pass
 
 ---
 
