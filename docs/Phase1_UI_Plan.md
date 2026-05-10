@@ -25,7 +25,7 @@ This is the **active implementation contract** for the Phase 1 PyQt6 frontend.
 | 11 | Topomap widget (isolated) | — |
 | 12 | Node 5: Train & Save (progress + complete) | — |
 
-Design reference: React mockup at `https://github.com/roiguri/decoder_gui` (`src/screens/Phase1Screen.jsx`).
+Design reference: React mockup at [`knowledge_base/02_reference/ui_demo/Phase1Screen.jsx`](../../../knowledge_base/02_reference/ui_demo/Phase1Screen.jsx) (originally from `https://github.com/roiguri/decoder_gui`).
 
 ---
 
