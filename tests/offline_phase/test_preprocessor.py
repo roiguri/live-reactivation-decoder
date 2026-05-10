@@ -304,7 +304,7 @@ class TestStage5ExportOnlineState:
         required = {
             "bad_channels", "ica_unmixing", "ica_mixing",
             "ica_pca_components", "ica_pca_mean", "ica_exclude",
-            "ch_names", "sfreq_offline",
+            "ch_names", "sfreq_offline", "interp_weights",
         }
         assert required <= state.keys()
 
@@ -331,3 +331,66 @@ class TestStage5ExportOnlineState:
         state = p.export_online_state()
         assert isinstance(state["ch_names"], list)
         assert all(isinstance(n, str) for n in state["ch_names"])
+
+    # ── interp_weights ────────────────────────────────────────────────────────
+
+    def _build_preprocessor_with_bad_channel(self, make_preprocessor, synthetic_raw, preprocessing_settings):
+        """Preprocessor with Fp1 detected as flat and interpolated, ICA applied."""
+        p = make_preprocessor
+        p.raw = synthetic_raw.copy()
+        p.settings = preprocessing_settings
+        eeg_picks = mne.pick_types(p.raw.info, eeg=True)
+        p.raw._data[eeg_picks[0], :] = 0.0  # Fp1 → flat
+        p._detect_bad_channels()
+        p._fit_ica()
+        p.ica.exclude = [0]
+        p.ica.apply(p.raw, verbose=False)
+        return p
+
+    def test_interp_weights_key_present(self, make_preprocessor, synthetic_raw, preprocessing_settings):
+        p = self._build_preprocessor_with_ica(make_preprocessor, synthetic_raw, preprocessing_settings)
+        state = p.export_online_state()
+        assert "interp_weights" in state
+
+    def test_interp_weights_none_when_no_bad_channels(self, make_preprocessor, synthetic_raw, preprocessing_settings):
+        p = self._build_preprocessor_with_ica(make_preprocessor, synthetic_raw, preprocessing_settings)
+        state = p.export_online_state()
+        assert state["interp_weights"] is None
+
+    def test_interp_weights_shape_with_bad_channels(self, make_preprocessor, synthetic_raw, preprocessing_settings):
+        p = self._build_preprocessor_with_bad_channel(make_preprocessor, synthetic_raw, preprocessing_settings)
+        state = p.export_online_state()
+
+        eeg_picks = mne.pick_types(p.raw.info, eeg=True)
+        n_eeg = len(eeg_picks)
+        n_bad = len(p._bad_channels)
+        n_good = n_eeg - n_bad
+
+        assert state["interp_weights"] is not None
+        assert state["interp_weights"].shape == (n_good, n_bad)
+
+    def test_interp_weights_correctness(self, make_preprocessor, synthetic_raw, preprocessing_settings):
+        p = make_preprocessor
+        p.raw = synthetic_raw.copy()
+        p.settings = preprocessing_settings
+
+        eeg_picks = mne.pick_types(p.raw.info, eeg=True)
+        eeg_ch_names = [p.raw.ch_names[i] for i in eeg_picks]
+        fp1_local_idx = eeg_ch_names.index("Fp1")
+        good_local_indices = [i for i in range(len(eeg_ch_names)) if i != fp1_local_idx]
+
+        # Save good-channel data before any modification
+        p.raw._data[eeg_picks[fp1_local_idx], :] = 0.0
+        good_data_before = p.raw.get_data(picks="eeg")[good_local_indices, :].copy()
+
+        # _detect_bad_channels() interpolates Fp1 and stores _interp_weights
+        p._detect_bad_channels()
+
+        # MNE's interpolated Fp1 is now in p.raw
+        mne_interpolated = p.raw.get_data(picks="eeg")[fp1_local_idx, :]
+        weights = p._interp_weights  # (n_good, 1)
+
+        # Apply weights: data_bad = W.T @ data_good  (channels × time format)
+        predicted = weights.T @ good_data_before  # (1, n_times)
+
+        np.testing.assert_allclose(predicted[0], mne_interpolated, atol=1e-10)

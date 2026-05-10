@@ -46,6 +46,7 @@ class OfflinePreprocessor:
         self.epochs: Optional[mne.Epochs] = None
         self.ica: Optional[mne.preprocessing.ICA] = None
         self._bad_channels: list[str] = []
+        self._interp_weights: Optional[np.ndarray] = None
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -134,6 +135,7 @@ class OfflinePreprocessor:
         n_comp = self.ica.n_components_
         return {
             "bad_channels": list(self._bad_channels),
+            "interp_weights": self._interp_weights,
             "ica_unmixing": self.ica.unmixing_matrix_.copy(),
             "ica_mixing": self.ica.mixing_matrix_.copy(),
             "ica_pca_components": self.ica.pca_components_[:n_comp].copy(),
@@ -222,6 +224,42 @@ class OfflinePreprocessor:
         if bads:
             logger.info("Bad channels detected: %s", bads)
             self.raw.interpolate_bads(reset_bads=True, verbose=False)
+        self._interp_weights = self._compute_interp_weights()
+
+    def _compute_interp_weights(self) -> Optional[np.ndarray]:
+        """Extract spherical-spline interpolation weights for bad channels.
+
+        Returns W of shape (n_good, n_bad) such that, for any data array X
+        with shape (n_samples, n_channels):
+            X[:, bad_indices] = X[:, good_indices] @ W
+
+        Returns None when no bad channels are present.
+        """
+        if not self._bad_channels:
+            return None
+
+        eeg_picks = mne.pick_types(self.raw.info, eeg=True)
+        eeg_ch_names = [self.raw.ch_names[i] for i in eeg_picks]
+        n_eeg = len(eeg_ch_names)
+
+        bad_local_indices = [eeg_ch_names.index(ch) for ch in self._bad_channels]
+        good_local_indices = [i for i in range(n_eeg) if i not in bad_local_indices]
+
+        # Identity basis: each time point t has channel t = 1, all others = 0.
+        # After interpolation, bad_channel[t] tells us the weight of channel t.
+        identity_data = np.eye(n_eeg)  # shape (n_eeg, n_eeg) — channels × time
+
+        eeg_info = mne.pick_info(self.raw.info, sel=eeg_picks)
+        test_raw = mne.io.RawArray(identity_data, eeg_info, verbose=False)
+        test_raw.info["bads"] = list(self._bad_channels)
+        test_raw.interpolate_bads(reset_bads=False, verbose=False)
+
+        interp_data = test_raw.get_data()  # (n_eeg, n_eeg)
+
+        # interp_data[bad_k, good_j] = weight of good channel j on bad channel k.
+        # Transpose to get W[j, k] = weight of good_j on bad_k → shape (n_good, n_bad).
+        weights = interp_data[np.ix_(bad_local_indices, good_local_indices)].T
+        return weights
 
     def _reference(self) -> None:
         self.raw.set_eeg_reference("average", projection=False, verbose=False)
