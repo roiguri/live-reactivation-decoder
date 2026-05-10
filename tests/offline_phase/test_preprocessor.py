@@ -304,7 +304,7 @@ class TestStage5ExportOnlineState:
         required = {
             "bad_channels", "ica_unmixing", "ica_mixing",
             "ica_pca_components", "ica_pca_mean", "ica_exclude",
-            "ch_names", "sfreq_offline", "interp_weights",
+            "ch_names", "sfreq_offline", "interp_weights", "pre_whitener",
         }
         assert required <= state.keys()
 
@@ -331,6 +331,17 @@ class TestStage5ExportOnlineState:
         state = p.export_online_state()
         assert isinstance(state["ch_names"], list)
         assert all(isinstance(n, str) for n in state["ch_names"])
+
+    # ── pre_whitener ──────────────────────────────────────────────────────────
+
+    def test_pre_whitener_present_and_shaped(self, make_preprocessor, synthetic_raw, preprocessing_settings):
+        """pre_whitener must be exported with shape (n_ch, 1) — required by online ICA."""
+        p = self._build_preprocessor_with_ica(make_preprocessor, synthetic_raw, preprocessing_settings)
+        state = p.export_online_state()
+
+        assert isinstance(state["pre_whitener"], np.ndarray)
+        n_ch = len(state["ch_names"])
+        assert state["pre_whitener"].shape == (n_ch, 1)
 
     # ── interp_weights ────────────────────────────────────────────────────────
 

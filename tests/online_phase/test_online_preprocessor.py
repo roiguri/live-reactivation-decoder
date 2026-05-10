@@ -55,6 +55,9 @@ def _make_online_state(
         "ica_pca_components": pca_components,
         "ica_pca_mean": np.zeros(n_ch),
         "ica_exclude": [],
+        # Default to ones so synthetic-matrix tests get an identity rescaling.
+        # The real-ICA fixture overrides this with ica.pre_whitener_.
+        "pre_whitener": np.ones((n_ch, 1)),
         "sfreq_offline": sfreq_offline,
     }
 
@@ -69,6 +72,22 @@ def _make_settings(target_rate: int = TARGET_SFREQ) -> dict:
             "notch": 50.0,
         },
         "resample": {"target_rate": target_rate},
+    }
+
+
+def _make_offline_settings(target_rate: int = TARGET_SFREQ) -> dict:
+    """Build preprocessing settings with the fields OfflinePreprocessor needs."""
+    return {
+        "random_state": 42,
+        "bandpass": {"l_freq": 1.0, "h_freq": 40.0, "method": "iir", "notch": 50.0},
+        "resample": {"target_rate": target_rate},
+        "reject_criteria": {
+            "hard_amplitude": 1e-3,
+            "flat_threshold": 0.5e-6,
+            "noisy_z_score": 3.0,
+        },
+        "ica": {"n_components": 4, "method": "fastica", "fit_l_freq": 1.0},
+        "epochs": {"tmin": -0.1, "tmax": 0.5, "baseline": [None, 0]},
     }
 
 
@@ -347,3 +366,251 @@ class TestDecimate:
         for (o1, t1), (o2, t2) in zip(outputs_first, outputs_second):
             np.testing.assert_array_equal(o1, o2)
             np.testing.assert_array_equal(t1, t2)
+
+
+# ── Commit 5: spatial transforms ──────────────────────────────────────────────
+
+def _make_preprocessor_with_bad_channel() -> OnlinePreprocessor:
+    """Preprocessor with Fp1 declared as bad and interp_weights set."""
+    import mne
+    ch_names = list(EEG_CH_NAMES)
+    bad_channels = ["Fp1"]
+    bad_idx = ch_names.index("Fp1")
+    good_indices = [i for i in range(len(ch_names)) if i != bad_idx]
+
+    # Compute real interp weights via MNE identity-basis trick
+    n_eeg = len(ch_names)
+    info = mne.create_info(ch_names=ch_names, sfreq=256.0, ch_types="eeg")
+    raw = mne.io.RawArray(np.eye(n_eeg), info, verbose=False)
+    montage = mne.channels.make_standard_montage("standard_1020")
+    raw.set_montage(montage, match_case=False, on_missing="warn", verbose=False)
+    raw.info["bads"] = bad_channels
+    raw.interpolate_bads(reset_bads=False, verbose=False)
+    interp_data = raw.get_data()
+    bad_local = [bad_idx]
+    good_local = good_indices
+    weights = interp_data[np.ix_(bad_local, good_local)].T  # (n_good, 1)
+
+    state = _make_online_state(
+        ch_names=ch_names,
+        bad_channels=bad_channels,
+        interp_weights=weights,
+    )
+    return OnlinePreprocessor(_make_settings(), state, INPUT_SFREQ)
+
+
+class TestApplyBadChannelInterpolation:
+    def test_no_bad_channels_data_unchanged(self, preprocessor):
+        data = np.random.default_rng(0).standard_normal((50, N_CHANNELS))
+        original = data.copy()
+        preprocessor._apply_bad_channel_interpolation(data)
+        np.testing.assert_array_equal(data, original)
+
+    def test_interpolated_values_match_mne(self):
+        """Bad channel values after interpolation must match MNE's interpolate_bads output."""
+        import mne
+        p = _make_preprocessor_with_bad_channel()
+        bad_idx = EEG_CH_NAMES.index("Fp1")
+        good_indices = [i for i in range(N_CHANNELS) if i != bad_idx]
+
+        rng = np.random.default_rng(3)
+        data = rng.standard_normal((30, N_CHANNELS)) * 1e-5
+
+        # Compute MNE reference: interpolate bad channel from good channels
+        weights = p._interp_weights  # (n_good, 1)
+        expected_bad = data[:, good_indices] @ weights  # (30, 1)
+
+        result = data.copy()
+        p._apply_bad_channel_interpolation(result)
+
+        np.testing.assert_allclose(
+            result[:, bad_idx:bad_idx+1], expected_bad, atol=1e-10
+        )
+
+    def test_good_channels_unchanged(self):
+        p = _make_preprocessor_with_bad_channel()
+        bad_idx = EEG_CH_NAMES.index("Fp1")
+        good_indices = [i for i in range(N_CHANNELS) if i != bad_idx]
+
+        data = np.random.default_rng(4).standard_normal((30, N_CHANNELS)) * 1e-5
+        good_before = data[:, good_indices].copy()
+        p._apply_bad_channel_interpolation(data)
+        np.testing.assert_array_equal(data[:, good_indices], good_before)
+
+
+class TestApplyAverageReference:
+    def test_mean_across_all_channels_is_zero(self, preprocessor):
+        data = np.random.default_rng(5).standard_normal((50, N_CHANNELS))
+        preprocessor._apply_average_reference(data)
+        np.testing.assert_allclose(data.mean(axis=1), 0.0, atol=1e-12)
+
+    def test_idempotent(self, preprocessor):
+        data = np.random.default_rng(6).standard_normal((50, N_CHANNELS))
+        preprocessor._apply_average_reference(data)
+        after_first = data.copy()
+        preprocessor._apply_average_reference(data)
+        # Second application changes nothing (already zero-mean), but floating-point
+        # arithmetic introduces sub-epsilon differences — use allclose, not array_equal.
+        np.testing.assert_allclose(data, after_first, atol=1e-14)
+
+
+class TestApplyICA:
+    def _make_raw_for_ica(self, sfreq: float = float(TARGET_SFREQ)) -> mne.io.RawArray:
+        rng = np.random.default_rng(42)
+        n_comp = 4
+        n_times = int(sfreq * 10)
+        t = np.arange(n_times) / sfreq
+
+        sources = np.vstack([
+            np.sin(2 * np.pi * 10 * t),
+            np.sin(2 * np.pi * 25 * t),
+            np.sign(np.sin(2 * np.pi * 7 * t)),
+            rng.standard_normal(n_times) + rng.laplace(size=n_times),
+        ])
+        mixing_true = rng.standard_normal((N_CHANNELS, n_comp))
+        data = (mixing_true @ sources) * 1e-6
+
+        info = mne.create_info(ch_names=EEG_CH_NAMES, sfreq=sfreq, ch_types="eeg")
+        raw = mne.io.RawArray(data, info, verbose=False)
+        montage = mne.channels.make_standard_montage("standard_1020")
+        raw.set_montage(montage, match_case=False, on_missing="warn", verbose=False)
+        return raw
+
+    def _build_preprocessor_with_real_ica(self) -> tuple[OnlinePreprocessor, object]:
+        """Fit a real MNE ICA on synthetic data and return both the online preprocessor
+        and the fitted ICA object so tests can compare against mne.ICA.apply().
+
+        Uses non-Gaussian sources (sinusoids + Laplace noise) mixed into N_CHANNELS
+        channels, then band-pass filtered so FastICA converges reliably.
+        """
+        import mne
+        rng = np.random.default_rng(42)
+        n_comp = 4
+        n_times = int(1000.0 * 10)
+        t = np.arange(n_times) / 1000.0
+
+        # Independent, non-Gaussian sources — FastICA requires non-Gaussianity
+        sources = np.vstack([
+            np.sin(2 * np.pi * 10 * t),
+            np.sin(2 * np.pi * 25 * t),
+            np.sign(np.sin(2 * np.pi * 7 * t)),   # square wave — strongly non-Gaussian
+            rng.standard_normal(n_times) + rng.laplace(size=n_times),
+        ])  # (4, n_times)
+        mixing_true = rng.standard_normal((N_CHANNELS, n_comp))
+        data = (mixing_true @ sources) * 1e-6  # (20, n_times)
+
+        info = mne.create_info(ch_names=EEG_CH_NAMES, sfreq=1000.0, ch_types="eeg")
+        raw = mne.io.RawArray(data, info, verbose=False)
+        raw.filter(1.0, 40.0, verbose=False)  # MNE recommends high-pass before ICA
+
+        ica = mne.preprocessing.ICA(n_components=n_comp, method="fastica",
+                                    random_state=42, max_iter=2000)
+        ica.fit(raw, verbose=False)
+        ica.exclude = [0]
+
+        n_comp_fit = ica.n_components_
+        state = _make_online_state(n_components=n_comp_fit)
+        state["ica_unmixing"] = ica.unmixing_matrix_.copy()
+        state["ica_mixing"] = ica.mixing_matrix_.copy()
+        state["ica_pca_components"] = ica.pca_components_[:n_comp_fit].copy()
+        state["ica_pca_mean"] = ica.pca_mean_.copy() if ica.pca_mean_ is not None else None
+        state["ica_exclude"] = list(ica.exclude)
+        state["pre_whitener"] = ica.pre_whitener_.copy()
+
+        p = OnlinePreprocessor(_make_settings(), state, INPUT_SFREQ)
+        return p, ica, raw
+
+    def test_ica_matches_mne_apply(self):
+        """_apply_ica() must reproduce mne.preprocessing.ICA.apply() to within 1e-8."""
+        import mne
+        p, ica, raw = self._build_preprocessor_with_real_ica()
+
+        raw_copy = raw.copy()
+        ica.apply(raw_copy, verbose=False)
+        expected = raw_copy.get_data().T  # (n_times, n_ch)
+
+        data = raw.get_data().T.copy()
+        p._apply_ica(data)
+
+        np.testing.assert_allclose(data, expected, atol=1e-8)
+
+    def test_exported_offline_state_matches_mne_apply(self, tmp_path):
+        """Offline export_online_state() must contain enough ICA state for online parity."""
+        from backend.offline_phase.preprocessor import OfflinePreprocessor
+
+        raw = self._make_raw_for_ica()
+        offline = OfflinePreprocessor(
+            data_dir=tmp_path / "Sub_001",
+            preprocessing_settings=_make_offline_settings(),
+        )
+        offline.raw = raw.copy()
+        offline._fit_ica()
+        offline.ica.exclude = [0, 2]
+
+        state = offline.export_online_state()
+        online = OnlinePreprocessor(
+            preprocessing_settings=_make_settings(),
+            online_state=state,
+            input_sfreq=INPUT_SFREQ,
+        )
+
+        raw_expected = offline.raw.copy()
+        offline.ica.apply(raw_expected, verbose=False)
+        expected = raw_expected.get_data().T
+
+        data = offline.raw.get_data().T.copy()
+        online._apply_ica(data)
+
+        np.testing.assert_allclose(data, expected, atol=1e-8)
+
+    def test_empty_exclude_leaves_data_unchanged(self):
+        """With no excluded components, ICA apply is identity (within float precision)."""
+        import mne
+        p, ica, raw = self._build_preprocessor_with_real_ica()
+        p._ica_exclude = []  # override exclusions
+
+        data = raw.get_data().T.copy()
+        original = data.copy()
+        p._apply_ica(data)
+        np.testing.assert_allclose(data, original, atol=1e-8)
+
+    def test_pca_mean_none_does_not_crash(self):
+        state = _make_online_state()
+        state["ica_pca_mean"] = None
+        p = OnlinePreprocessor(_make_settings(), state, INPUT_SFREQ)
+        data = np.random.default_rng(9).standard_normal((20, N_CHANNELS))
+        p._apply_ica(data)  # must not raise
+
+    def test_ica_chunked_matches_single_pass(self):
+        """_apply_ica is a per-sample transform (no temporal state) — chunked == single pass."""
+        p, ica, raw = self._build_preprocessor_with_real_ica()
+        data = raw.get_data().T.copy()  # (n_times, n_ch)
+
+        data_single = data.copy()
+        p._apply_ica(data_single)
+
+        # Apply in 10 equal chunks in-place on the same array
+        data_chunked = data.copy()
+        chunk_size = len(data_chunked) // 10
+        for i in range(10):
+            chunk = data_chunked[i * chunk_size:(i + 1) * chunk_size]
+            p._apply_ica(chunk)
+
+        np.testing.assert_allclose(data_single, data_chunked, atol=1e-12)
+
+    def test_ica_pca_mean_none_matches_mne(self):
+        """Output must match MNE's ICA.apply() even when pca_mean is None."""
+        p, ica, raw = self._build_preprocessor_with_real_ica()
+
+        # Force pca_mean to None in both MNE and our preprocessor
+        ica.pca_mean_ = None
+        p._ica_pca_mean = None
+
+        raw_copy = raw.copy()
+        ica.apply(raw_copy, verbose=False)
+        expected = raw_copy.get_data().T
+
+        data = raw.get_data().T.copy()
+        p._apply_ica(data)
+
+        np.testing.assert_allclose(data, expected, atol=1e-8)

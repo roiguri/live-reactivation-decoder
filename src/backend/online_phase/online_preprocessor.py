@@ -51,6 +51,9 @@ class OnlinePreprocessor:
             else None
         )
         self._ica_exclude: list[int] = list(online_state["ica_exclude"])
+        # Per-channel-type rescaling factor MNE applies inside ICA.fit/apply.
+        # Stored as (n_ch, 1); we transpose to (1, n_ch) once for row-major broadcasting.
+        self._pre_whitener: np.ndarray = np.array(online_state["pre_whitener"]).reshape(-1, 1).T
 
         # Derive good/bad channel index lists from ch_names
         self._bad_indices: list[int] = [
@@ -205,6 +208,53 @@ class OnlinePreprocessor:
         self._decimate_phase = (phase + n_in * self._up_factor) % self._down_factor
 
         return filtered[out_indices], timestamps[out_indices]
+
+    # ── Private: spatial transforms (stateless) ───────────────────────────────
+
+    def _apply_bad_channel_interpolation(self, data: np.ndarray) -> None:
+        """Replicate offline interpolate_bads() using precomputed weight matrix. In-place."""
+        if not self._bad_indices:
+            return
+        data[:, self._bad_indices] = data[:, self._good_indices] @ self._interp_weights
+
+    def _apply_average_reference(self, data: np.ndarray) -> None:
+        """Subtract mean across all channels. In-place.
+
+        Note: the offline pipeline calls set_eeg_reference("average") after
+        interpolate_bads(reset_bads=True), which clears the bad-channel list so the
+        average is computed over ALL channels (including interpolated ones). We match
+        that behaviour here — using all channels, not just good_indices.
+        """
+        data -= data.mean(axis=1, keepdims=True)
+
+    def _apply_ica(self, data: np.ndarray) -> None:
+        """Apply ICA artifact rejection using frozen Phase 1 matrices. In-place.
+
+        Replicates mne.preprocessing.ICA.apply() via a delta approach:
+            divide by pre_whitener → center → project to n_comp PCA subspace →
+            ICA unmix → zero excluded → ICA mix → add (cleaned − projected) back →
+            re-add mean → multiply by pre_whitener.
+        The delta-add (rather than overwrite) preserves PCA residual variance from
+        components beyond n_components_.
+        """
+        data /= self._pre_whitener                                        # (n, n_ch)
+
+        if self._ica_pca_mean is not None:
+            data -= self._ica_pca_mean
+
+        projected = data @ self._ica_pca_components.T                    # (n, n_comp)
+        sources = projected @ self._ica_unmixing.T                       # (n, n_comp)
+
+        if self._ica_exclude:
+            sources[:, self._ica_exclude] = 0.0
+
+        cleaned = sources @ self._ica_mixing.T                           # (n, n_comp)
+        data += (cleaned - projected) @ self._ica_pca_components         # delta in PCA space
+
+        if self._ica_pca_mean is not None:
+            data += self._ica_pca_mean
+
+        data *= self._pre_whitener
 
     # ── Validation ────────────────────────────────────────────────────────────
 

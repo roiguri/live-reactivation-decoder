@@ -143,6 +143,9 @@ class OfflinePreprocessor:
                 self.ica.pca_mean_.copy() if self.ica.pca_mean_ is not None else None
             ),
             "ica_exclude": list(self.ica.exclude),
+            # Per-channel-type rescaling MNE applies before PCA in ICA.fit/apply.
+            # Required for online ICA to match offline numerically.
+            "pre_whitener": self.ica.pre_whitener_.copy(),
             "ch_names": [self.raw.ch_names[i] for i in mne.pick_types(self.raw.info, eeg=True)],
             "sfreq_offline": float(self.raw.info["sfreq"]),
         }
