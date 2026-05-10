@@ -138,16 +138,6 @@ class TestProperties:
         assert preprocessor.input_sfreq == INPUT_SFREQ
 
 
-# ── Commit 2: process_batch stub ──────────────────────────────────────────────
-
-class TestProcessBatchStub:
-    def test_raises_not_implemented(self, preprocessor):
-        batch = np.zeros((40, N_CHANNELS))
-        timestamps = np.linspace(0, 0.04, 40)
-        with pytest.raises(NotImplementedError):
-            preprocessor.process_batch(batch, timestamps)
-
-
 # ── Commit 2: reset_state ────────────────────────────────────────────────────
 
 class TestResetState:
@@ -614,3 +604,88 @@ class TestApplyICA:
         p._apply_ica(data)
 
         np.testing.assert_allclose(data, expected, atol=1e-8)
+
+
+# ── Commit 6: process_batch() ─────────────────────────────────────────────────
+
+class TestProcessBatch:
+    def _make_p(self) -> OnlinePreprocessor:
+        return OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+
+    def _make_batch(self, n: int) -> tuple[np.ndarray, np.ndarray]:
+        rng = np.random.default_rng(11)
+        data = rng.standard_normal((n, N_CHANNELS)) * 1e-5
+        timestamps = np.arange(n, dtype=float) / INPUT_SFREQ
+        return data, timestamps
+
+    def test_wrong_channel_count_raises(self):
+        p = self._make_p()
+        bad_batch = np.zeros((40, N_CHANNELS + 1))
+        timestamps = np.zeros(40)
+        with pytest.raises(ValueError):
+            p.process_batch(bad_batch, timestamps)
+
+    def test_timestamp_length_mismatch_raises(self):
+        p = self._make_p()
+        batch = np.zeros((40, N_CHANNELS))
+        timestamps = np.zeros(39)
+        with pytest.raises(ValueError):
+            p.process_batch(batch, timestamps)
+
+    def test_empty_batch_returns_empty_without_state_change(self):
+        p = self._make_p()
+        assert p._bandpass_zi is None
+        out, out_ts = p.process_batch(np.empty((0, N_CHANNELS)), np.empty(0))
+        assert out.shape == (0, N_CHANNELS)
+        assert out_ts.shape == (0,)
+        assert p._bandpass_zi is None  # state not touched
+
+    def test_output_shape(self):
+        p = self._make_p()
+        batch, timestamps = self._make_batch(40)
+        out, out_ts = p.process_batch(batch, timestamps)
+        assert out.ndim == 2
+        assert out.shape[1] == N_CHANNELS
+        assert out_ts.shape == (out.shape[0],)
+
+    def test_chunked_matches_single_pass_values(self):
+        """Processing 400 samples in 40-sample chunks must give values identical
+        to processing all 400 at once (validates full pipeline state continuity)."""
+        rng = np.random.default_rng(12)
+        n_total = 400
+        data = rng.standard_normal((n_total, N_CHANNELS)) * 1e-5
+        timestamps = np.arange(n_total, dtype=float) / INPUT_SFREQ
+
+        p1 = self._make_p()
+        out_single, ts_single = p1.process_batch(data, timestamps)
+
+        p2 = self._make_p()
+        out_chunks, ts_chunks = [], []
+        for i in range(10):
+            o, t = p2.process_batch(data[i*40:(i+1)*40], timestamps[i*40:(i+1)*40])
+            out_chunks.append(o)
+            ts_chunks.append(t)
+        out_chunked = np.concatenate(out_chunks)
+        ts_chunked = np.concatenate(ts_chunks)
+
+        np.testing.assert_allclose(out_single, out_chunked, atol=1e-10)
+        np.testing.assert_allclose(ts_single, ts_chunked, atol=1e-12)
+
+    def test_reset_then_reprocess_gives_identical_output(self):
+        """After reset, reprocessing the same data produces identical output to the first run."""
+        p = self._make_p()
+        batch, timestamps = self._make_batch(400)
+
+        out1, ts1 = p.process_batch(batch, timestamps)
+        p.reset_state()
+        out2, ts2 = p.process_batch(batch, timestamps)
+
+        np.testing.assert_allclose(out1, out2, atol=1e-10)
+        np.testing.assert_allclose(ts1, ts2, atol=1e-12)
+
+    def test_does_not_mutate_input(self):
+        p = self._make_p()
+        batch, timestamps = self._make_batch(40)
+        original = batch.copy()
+        p.process_batch(batch, timestamps)
+        np.testing.assert_array_equal(batch, original)

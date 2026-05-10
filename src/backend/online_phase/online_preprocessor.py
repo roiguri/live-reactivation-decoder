@@ -134,7 +134,26 @@ class OnlinePreprocessor:
         Returns:
             Tuple of (features, output_timestamps) at target_sfreq.
         """
-        raise NotImplementedError
+        if eeg_batch.ndim != 2 or eeg_batch.shape[1] != self.n_channels:
+            raise ValueError(
+                f"eeg_batch must be (n_samples, {self.n_channels}), got {eeg_batch.shape}"
+            )
+        if timestamps.shape[0] != eeg_batch.shape[0]:
+            raise ValueError(
+                f"timestamps length {timestamps.shape[0]} != eeg_batch rows {eeg_batch.shape[0]}"
+            )
+        # Guard must come before _apply_filter — zi warm-start does data[0] and
+        # would raise IndexError on an empty array.
+        if eeg_batch.shape[0] == 0:
+            return np.empty((0, self.n_channels)), np.empty((0,))
+
+        data = eeg_batch.copy().astype(float)
+        data = self._apply_filter(data)
+        data, out_timestamps = self._decimate(data, timestamps)
+        self._apply_bad_channel_interpolation(data)
+        self._apply_average_reference(data)
+        self._apply_ica(data)
+        return data, out_timestamps
 
     # ── Private: filtering ────────────────────────────────────────────────────
 
