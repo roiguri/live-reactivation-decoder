@@ -8,7 +8,7 @@ Back to [Backend Architecture](backend_architecture.md) or [Docs Index](README.m
 
 This is the **active implementation contract** for the Phase 1 PyQt6 frontend.
 
-**Progress:** Step 4 complete (Node 1: Pipeline Settings, backend wired). Step 4 follow-up also landed: `BaseWorker` + `ConfigLoaderWorker` (so `AppSession` construction no longer blocks the GUI thread) and a reusable `LoadingOverlay` widget mounted on the workspace card. Both are general-purpose and Step 5 reuses them. Next: Step 5 — Node 2: Load Data (backend wired).
+**Progress:** Step 4 complete (Node 1: Pipeline Settings, backend wired). Step 4 follow-up also landed: `BaseWorker` + `ConfigLoaderWorker` (so `AppSession` construction no longer blocks the GUI thread), a reusable `LoadingOverlay` widget mounted on the workspace card, and the reusable **Ready Protocol** (`ready_changed(bool)` view signal + `JourneyPanel.set_node_ready` slot) that gates the journey-panel action button until the active view's prerequisites are satisfied. All three are general-purpose and Step 5 reuses them. Next: Step 5 — Node 2: Load Data (backend wired).
 
 | Step | Description | Status |
 |---|---|---|
@@ -197,16 +197,15 @@ Build the frontend from the outside in. Each step is **independently runnable an
 
 **Create:**
 - `views/settings_view.py` (replace stub) — two file-picker rows + read-only settings display:
-  - "Load Config File" `QPushButton` → `QFileDialog.getOpenFileName` filter `"Config (*.yaml *.yml)"` → stores `_config_path`; shows a checkmark label on success
-  - "Select Output Directory" `QPushButton` → `QFileDialog.getExistingDirectory` → stores `_output_dir`; shows selected path
-  - Read-only `QGroupBox` sections: **Preprocessing** (bandpass, resample, ICA, epochs) and **Model Evaluation** (model, CV folds, decoders) populated from `SettingsManager` after config load
-  - "Continue" button (disabled until both paths are set); on click: `self.session = AppSession(config_path, output_dir)` → `journey_panel.advance(1)`
+  - "Load Config File" `FilePicker` → `QFileDialog.getOpenFileName` filter `"Config (*.yaml *.yml)"` → stores `_config_path`; shows a checkmark label on success
+  - "Select Output Directory" `FilePicker` → `QFileDialog.getExistingDirectory` → stores `_output_dir`; shows selected path
+  - Read-only `SectionCard`s: **Preprocessing** (bandpass, resample, ICA, epochs) and **Model Evaluation** (model, CV folds, decoders) populated from `SettingsManager` after config load
 
-**Wire:** Node 1 action button is the "Load Config File" trigger. "Continue" is a separate button inside the view (enabled only when both paths are filled).
+**Wire:** Node 1 has no in-view "Continue" button — the **journey-panel** action button is the sole Continue affordance. It is gated by the [Ready Protocol](#ready-protocol): `SettingsView` emits `ready_changed(bool)` whenever both paths are set (or cleared), and `Phase1Screen` forwards it to `journey_panel.set_node_ready(0, ready)`. The panel button is wired to `SettingsView.trigger_continue`, which builds the `AppSession` and emits `session_ready`.
 
 On `AppSession` construction error: `QMessageBox.critical(...)`, paths cleared, user can retry.
 
-**Test:** pick the real `experiment_config.yaml` + a writable output dir → settings sections populate with correct values → "Continue" becomes enabled → click → trail animates to Node 2.
+**Test:** pick the real `experiment_config.yaml` + a writable output dir → settings sections populate with correct values → the journey-panel "Continue" button (Node 1) becomes enabled → click → trail animates to Node 2.
 
 ---
 
@@ -362,6 +361,34 @@ Views should not introduce their own in-view `QProgressBar` for transient backen
 
 ---
 
+## Ready Protocol
+
+Each node's primary "advance" action lives on the **journey-panel** action button — there is no duplicate Continue button inside the view. The button is gated by the view itself via a reusable signal/slot contract:
+
+```python
+# In a view that gates its node's action button:
+ready_changed = Signal(bool)        # emit whenever prerequisites flip
+
+def trigger_<action>(self) -> None:  # public slot the panel button calls
+    ...
+```
+
+**Wiring (done once in `Phase1Screen.__init__`):**
+
+```python
+self._journey_panel.set_node_action(node_idx, view.trigger_<action>)
+self._journey_panel.set_node_ready(node_idx, False)   # gate by default
+view.ready_changed.connect(
+    lambda ready, n=node_idx: self._journey_panel.set_node_ready(n, ready)
+)
+```
+
+The view owns "what makes me ready" (file paths picked, timepoint selected, ICA confirmed, …) and never references the journey panel directly. `JourneyPanel.set_node_ready(node_index, ready)` toggles the action button's enabled state via `JourneyNode.set_action_enabled`.
+
+Nodes 2–5 adopt the same protocol as they are implemented (e.g. `LoadDataView.ready_changed` flips when the data directory is picked; the panel button becomes `trigger_load`).
+
+---
+
 ## Journey Panel
 
 **Layout:** right sidebar, fixed 320 px wide, `QVBoxLayout` with 5 `JourneyNode` widgets and a vertical trail line.
@@ -385,11 +412,11 @@ Views should not introduce their own in-view `QProgressBar` for transient backen
 
 ### Node 1 — Pipeline Settings (`settings_view.py`)
 
-- "Load Config File" `QPushButton` → `QFileDialog.getOpenFileName` filter `"Config (*.yaml *.yml)"` → displays a "✓ Config loaded" label on success; shows read-only parsed settings in two `QGroupBox` sections:
+- "Load Config File" `FilePicker` → `QFileDialog.getOpenFileName` filter `"Config (*.yaml *.yml)"` → displays a "✓ Config loaded" label on success; shows read-only parsed settings in two `SectionCard`s:
   - **Preprocessing**: bandpass, resample rate, ICA components/method, epoch tmin/tmax
   - **Model Evaluation**: model type, CV folds, decoder task list
-- "Select Output Directory" `QPushButton` → `QFileDialog.getExistingDirectory` → shows selected path.
-- "Continue" button (disabled until both paths are set); on click: `self.session = AppSession(config_path, output_dir)` → `journey_panel.advance(1)`.
+- "Select Output Directory" `FilePicker` → `QFileDialog.getExistingDirectory` → shows selected path.
+- **No in-view Continue button.** The journey-panel Node 1 action button is the sole Continue affordance — gated via the [Ready Protocol](#ready-protocol). `SettingsView.trigger_continue()` is invoked when the panel button is clicked: it builds `AppSession`, emits `session_ready`, and `Phase1Screen` calls `journey_panel.advance(1)`.
 - On `AppSession` construction error: `QMessageBox.critical(...)`, paths cleared, user can retry.
 
 ---

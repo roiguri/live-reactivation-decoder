@@ -4,7 +4,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal as Signal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QMessageBox,
-    QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QScrollArea, QVBoxLayout, QWidget,
 )
 
 from frontend.styles.theme import (
@@ -32,6 +32,8 @@ class SettingsView(QWidget):
     # Loading overlay protocol — handled by Phase1Screen
     loading_requested = Signal(str)
     loading_done = Signal()
+    # Ready protocol — gates the journey-panel action button for this node
+    ready_changed = Signal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -40,6 +42,7 @@ class SettingsView(QWidget):
         self._temp_session = None  # AppSession after config load, before orchestrator
         self._config_thread: QThread | None = None
         self._config_worker: ConfigLoaderWorker | None = None
+        self._was_ready: bool = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -66,7 +69,6 @@ class SettingsView(QWidget):
         self._build_setup_section()
         self._build_preproc_section()
         self._build_model_section()
-        self._build_continue_row()
         self._content.addStretch()
 
         self._main.addWidget(inner, 0, Qt.AlignmentFlag.AlignHCenter)
@@ -77,9 +79,27 @@ class SettingsView(QWidget):
 
     # ── public ───────────────────────────────────────────────────────────────
 
-    def request_load_config(self) -> None:
-        """Open the config file dialog. Also connected to Journey Panel Node 1 button."""
-        self._config_picker._open_dialog()
+    def trigger_continue(self) -> None:
+        """Build the AppSession and emit `session_ready`.
+
+        Wired to the journey-panel Node 1 action button by Phase1Screen.
+        Safe no-op when prerequisites are missing (panel button is gated, but
+        this guard keeps the slot self-contained).
+        """
+        if not (self._temp_session and self._output_dir):
+            return
+        try:
+            self._temp_session.configure_output(self._output_dir)
+        except Exception as exc:
+            QMessageBox.critical(self, "Session Error", str(exc))
+            self._temp_session = None
+            self._config_path = None
+            self._config_picker.clear()
+            self._config_status_lbl.hide()
+            self._update_settings_display(None)
+            self._update_continue_state()
+            return
+        self.session_ready.emit(self._temp_session)
 
     # ── private builders ─────────────────────────────────────────────────────
 
@@ -220,17 +240,6 @@ class SettingsView(QWidget):
 
         self._content.addWidget(card)
 
-    def _build_continue_row(self) -> None:
-        self._content.addSpacing(8)
-        row = QHBoxLayout()
-        row.addStretch()
-        self._continue_btn = QPushButton("Continue")
-        self._continue_btn.setProperty("class", "primary")
-        self._continue_btn.setEnabled(False)
-        self._continue_btn.clicked.connect(self._on_continue)
-        row.addWidget(self._continue_btn)
-        self._content.addLayout(row)
-
     # ── widget factories ─────────────────────────────────────────────────────
 
     @staticmethod
@@ -297,26 +306,11 @@ class SettingsView(QWidget):
         self._output_dir = path
         self._update_continue_state()
 
-    def _on_continue(self) -> None:
-        if not (self._temp_session and self._output_dir):
-            return
-        try:
-            self._temp_session.configure_output(self._output_dir)
-        except Exception as exc:
-            QMessageBox.critical(self, "Session Error", str(exc))
-            self._temp_session = None
-            self._config_path = None
-            self._config_picker.clear()
-            self._config_status_lbl.hide()
-            self._update_settings_display(None)
-            self._update_continue_state()
-            return
-        self.session_ready.emit(self._temp_session)
-
     def _update_continue_state(self) -> None:
-        self._continue_btn.setEnabled(
-            bool(self._config_path and self._output_dir)
-        )
+        ready = bool(self._config_path and self._output_dir)
+        if ready != self._was_ready:
+            self._was_ready = ready
+            self.ready_changed.emit(ready)
 
     # ── settings population ───────────────────────────────────────────────────
 

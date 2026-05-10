@@ -103,6 +103,10 @@ class JourneyNode(QWidget):
         self._apply_state()
         self.update()
 
+    def set_action_enabled(self, enabled: bool) -> None:
+        """Enable/disable the node's action button independently of node state."""
+        self._btn.setEnabled(enabled)
+
     def start_fill_animation(self) -> None:
         """Play a top-to-bottom circle fill, then transition to active."""
         self._filling = True
@@ -300,6 +304,15 @@ class JourneyPanel(QWidget):
         except TypeError:
             pass
         node.action_clicked.connect(handler)
+
+    def set_node_ready(self, node_index: int, ready: bool) -> None:
+        """Gate the action button on node_index (0-based).
+
+        Views declare their prerequisites by emitting a `ready_changed(bool)`
+        signal; `Phase1Screen` forwards it here so the panel reflects the gate.
+        """
+        if 0 <= node_index < len(self._nodes):
+            self._nodes[node_index].set_action_enabled(ready)
 
     def advance(self, completed_node: int) -> None:
         """Complete node `completed_node` (1-indexed); trail animates then next node fills in."""

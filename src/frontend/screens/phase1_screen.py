@@ -101,7 +101,11 @@ class Phase1Screen(QWidget):
         root.addWidget(self._journey_panel)
 
         # ── Wiring ────────────────────────────────────────────────────────────
-        self._journey_panel.set_node_action(0, self._settings_view.request_load_config)
+        self._journey_panel.set_node_action(0, self._settings_view.trigger_continue)
+        self._journey_panel.set_node_ready(0, False)
+        self._settings_view.ready_changed.connect(
+            lambda ready: self._journey_panel.set_node_ready(0, ready)
+        )
         self._settings_view.session_ready.connect(self._on_session_ready)
         self._settings_view.loading_requested.connect(self.show_loading)
         self._settings_view.loading_done.connect(self.hide_loading)
