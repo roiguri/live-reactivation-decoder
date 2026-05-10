@@ -11,7 +11,7 @@ from frontend.styles.theme import (
     BORDER_GRAY, BG_LIGHT, PRIMARY_BLUE, SUCCESS_GREEN,
     TEXT_MUTED, TEXT_PRIMARY,
 )
-from frontend.widgets.shared import FilePicker, ReadOnlyField
+from frontend.widgets.shared import FilePicker, ReadOnlyField, SectionCard
 
 
 def _clear_layout(layout) -> None:
@@ -52,13 +52,12 @@ class SettingsView(QWidget):
         self._main.setSpacing(0)
 
         inner = QWidget()
-        inner.setMaximumWidth(720)
+        inner.setFixedWidth(680)
         self._content = QVBoxLayout(inner)
         self._content.setContentsMargins(0, 0, 0, 0)
-        self._content.setSpacing(20)
+        self._content.setSpacing(16)
 
         self._build_setup_section()
-        self._build_separator()
         self._build_preproc_section()
         self._build_model_section()
         self._build_continue_row()
@@ -79,11 +78,10 @@ class SettingsView(QWidget):
     # ── private builders ─────────────────────────────────────────────────────
 
     def _build_setup_section(self) -> None:
-        """Top section: both file pickers before the settings display."""
-        # Config picker row: [FilePicker]  ✓ Config loaded
+        card = SectionCard("Setup")
+
         config_row = QHBoxLayout()
         config_row.setSpacing(10)
-
         self._config_picker = FilePicker(
             "Load Config File", mode="file",
             file_filter="Config (*.yaml *.yml)"
@@ -98,29 +96,16 @@ class SettingsView(QWidget):
         self._config_status_lbl.hide()
         config_row.addWidget(self._config_status_lbl)
         config_row.addStretch()
+        card.body.addLayout(config_row)
 
-        self._content.addLayout(config_row)
-
-        # Output dir picker row
         self._output_picker = FilePicker("Select Output Directory", mode="dir")
         self._output_picker.path_selected.connect(self._on_output_dir_selected)
-        self._content.addWidget(self._output_picker)
+        card.body.addWidget(self._output_picker)
 
-    def _build_separator(self) -> None:
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.HLine)
-        line.setFrameShadow(QFrame.Shadow.Plain)
-        line.setStyleSheet(f"background-color: {BORDER_GRAY};")
-        line.setFixedHeight(1)
-        self._content.addWidget(line)
+        self._content.addWidget(card)
 
     def _build_preproc_section(self) -> None:
-        self._content.addWidget(self._section_header("Preprocessing"))
-
-        body = QWidget()
-        v = QVBoxLayout(body)
-        v.setContentsMargins(24, 0, 0, 0)
-        v.setSpacing(10)
+        card = SectionCard("Preprocessing")
 
         # Bandpass: [l_freq] to [h_freq] Hz   Method: xxx   Notch: xxx Hz
         r = QHBoxLayout()
@@ -128,8 +113,8 @@ class SettingsView(QWidget):
         r.addWidget(self._field_label("Bandpass"))
         self._l_freq = ReadOnlyField("", field_width=72)
         self._h_freq = ReadOnlyField("", field_width=72)
-        self._bp_method = self._dim_label()
-        self._notch = self._dim_label()
+        self._bp_method = self._dim_label("Method: —")
+        self._notch = self._dim_label("Notch: —")
         r.addWidget(self._l_freq)
         r.addWidget(QLabel("to"))
         r.addWidget(self._h_freq)
@@ -139,7 +124,7 @@ class SettingsView(QWidget):
         r.addSpacing(6)
         r.addWidget(self._notch)
         r.addStretch()
-        v.addLayout(r)
+        card.body.addLayout(r)
 
         # Resample: [target_rate] Hz
         r2 = QHBoxLayout()
@@ -149,15 +134,15 @@ class SettingsView(QWidget):
         r2.addWidget(self._resample)
         r2.addWidget(self._dim_label("Hz"))
         r2.addStretch()
-        v.addLayout(r2)
+        card.body.addLayout(r2)
 
         # ICA: [n_components] components   Method: xxx   Seed: xxx
         r3 = QHBoxLayout()
         r3.setSpacing(6)
         r3.addWidget(self._field_label("ICA"))
         self._ica_n = ReadOnlyField("", field_width=72)
-        self._ica_method = self._dim_label()
-        self._ica_seed = self._dim_label()
+        self._ica_method = self._dim_label("Method: —")
+        self._ica_seed = self._dim_label("Seed: —")
         r3.addWidget(self._ica_n)
         r3.addWidget(self._dim_label("components"))
         r3.addSpacing(8)
@@ -165,7 +150,7 @@ class SettingsView(QWidget):
         r3.addSpacing(6)
         r3.addWidget(self._ica_seed)
         r3.addStretch()
-        v.addLayout(r3)
+        card.body.addLayout(r3)
 
         # Epoch Size: [tmin] to [tmax] s
         r4 = QHBoxLayout()
@@ -178,28 +163,21 @@ class SettingsView(QWidget):
         r4.addWidget(self._tmax)
         r4.addWidget(self._dim_label("s"))
         r4.addStretch()
-        v.addLayout(r4)
+        card.body.addLayout(r4)
 
-        # Annotations mapping table
-        v.addSpacing(4)
-        v.addWidget(self._field_label("Annotations Mapping"))
+        card.body.addSpacing(4)
+        card.body.addWidget(self._field_label("Annotations Mapping"))
         self._annot_container = QWidget()
         self._annot_layout = QVBoxLayout(self._annot_container)
         self._annot_layout.setContentsMargins(0, 4, 0, 0)
         self._annot_layout.setSpacing(2)
-        v.addWidget(self._annot_container)
+        card.body.addWidget(self._annot_container)
 
-        self._content.addWidget(body)
+        self._content.addWidget(card)
 
     def _build_model_section(self) -> None:
-        self._content.addWidget(self._section_header("Model Evaluation"))
+        card = SectionCard("Model Evaluation")
 
-        body = QWidget()
-        v = QVBoxLayout(body)
-        v.setContentsMargins(24, 0, 0, 0)
-        v.setSpacing(10)
-
-        # Model selector badges (visual only, read-only)
         model_row = QHBoxLayout()
         model_row.setSpacing(0)
         model_row.addWidget(self._field_label("Model"))
@@ -216,27 +194,25 @@ class SettingsView(QWidget):
             model_row.addSpacing(4)
             self._model_labels[key] = lbl
         model_row.addStretch()
-        v.addLayout(model_row)
+        card.body.addLayout(model_row)
 
-        # CV Folds
         cv_row = QHBoxLayout()
         cv_row.setSpacing(6)
         cv_row.addWidget(self._field_label("CV Folds"))
         self._cv_folds = ReadOnlyField("", field_width=72)
         cv_row.addWidget(self._cv_folds)
         cv_row.addStretch()
-        v.addLayout(cv_row)
+        card.body.addLayout(cv_row)
 
-        # Decoder tasks
-        v.addSpacing(4)
-        v.addWidget(self._field_label("Decoders"))
+        card.body.addSpacing(4)
+        card.body.addWidget(self._field_label("Decoders"))
         self._decoders_container = QWidget()
         self._decoders_layout = QVBoxLayout(self._decoders_container)
         self._decoders_layout.setContentsMargins(0, 4, 0, 0)
         self._decoders_layout.setSpacing(4)
-        v.addWidget(self._decoders_container)
+        card.body.addWidget(self._decoders_container)
 
-        self._content.addWidget(body)
+        self._content.addWidget(card)
 
     def _build_continue_row(self) -> None:
         self._content.addSpacing(8)
@@ -250,16 +226,6 @@ class SettingsView(QWidget):
         self._content.addLayout(row)
 
     # ── widget factories ─────────────────────────────────────────────────────
-
-    @staticmethod
-    def _section_header(text: str) -> QLabel:
-        lbl = QLabel(text)
-        f = lbl.font()
-        f.setPointSize(11)
-        f.setWeight(QFont.Weight.DemiBold)
-        lbl.setFont(f)
-        lbl.setStyleSheet(f"color: {TEXT_PRIMARY};")
-        return lbl
 
     @staticmethod
     def _field_label(text: str) -> QLabel:
@@ -330,12 +296,12 @@ class SettingsView(QWidget):
         if settings is None:
             self._l_freq.set_value(None)
             self._h_freq.set_value(None)
-            self._bp_method.setText("")
-            self._notch.setText("")
+            self._bp_method.setText("Method: —")
+            self._notch.setText("Notch: —")
             self._resample.set_value(None)
             self._ica_n.set_value(None)
-            self._ica_method.setText("")
-            self._ica_seed.setText("")
+            self._ica_method.setText("Method: —")
+            self._ica_seed.setText("Seed: —")
             self._tmin.set_value(None)
             self._tmax.set_value(None)
             self._cv_folds.set_value(None)

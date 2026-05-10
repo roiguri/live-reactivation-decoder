@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal as Signal
+from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
-    QFileDialog, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QSizePolicy, QWidget,
+    QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from frontend.styles.theme import BORDER_GRAY, TEXT_MUTED, TEXT_PRIMARY
@@ -148,3 +149,62 @@ class FilePicker(QWidget):
             f"color: {TEXT_PRIMARY}; font-size: 11px; font-family: monospace;"
         )
         self.path_selected.emit(path)
+
+
+class SectionCard(QFrame):
+    """Titled card container for grouping related form content.
+
+    Add widgets and layouts via the ``.body`` attribute (QVBoxLayout,
+    16 px padding, 10 px spacing).
+
+    Usage::
+        card = SectionCard("Preprocessing")
+        card.body.addLayout(row)
+        card.body.addWidget(widget)
+    """
+
+    def __init__(self, title: str = "", parent=None):
+        super().__init__(parent)
+        self.setObjectName("section_card")
+        self.setStyleSheet(
+            "QFrame#section_card {"
+            "  background: #FFFFFF;"
+            f"  border: 1px solid {BORDER_GRAY};"
+            "  border-radius: 6px;"
+            "}"
+        )
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        if title:
+            header = QWidget()
+            header.setObjectName("card_header")
+            header.setStyleSheet(
+                "#card_header {"
+                "  background: #F9FAFB;"
+                f"  border-bottom: 1px solid {BORDER_GRAY};"
+                "  border-top-left-radius: 5px;"
+                "  border-top-right-radius: 5px;"
+                "}"
+            )
+            h_layout = QHBoxLayout(header)
+            h_layout.setContentsMargins(16, 10, 16, 10)
+            title_lbl = QLabel(title)
+            f = title_lbl.font()
+            f.setPointSize(10)
+            f.setWeight(QFont.Weight.DemiBold)
+            title_lbl.setFont(f)
+            title_lbl.setStyleSheet(
+                f"color: {TEXT_PRIMARY}; background: transparent;"
+            )
+            h_layout.addWidget(title_lbl)
+            outer.addWidget(header)
+
+        body_widget = QWidget()
+        body_widget.setObjectName("card_body")
+        self.body = QVBoxLayout(body_widget)
+        self.body.setContentsMargins(16, 16, 16, 16)
+        self.body.setSpacing(10)
+        outer.addWidget(body_widget)
