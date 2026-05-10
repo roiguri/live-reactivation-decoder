@@ -689,3 +689,15 @@ class TestProcessBatch:
         original = batch.copy()
         p.process_batch(batch, timestamps)
         np.testing.assert_array_equal(batch, original)
+
+
+# ── Commit 7: public API export ───────────────────────────────────────────────
+
+class TestPublicAPI:
+    def test_importable_from_online_phase(self):
+        from backend.online_phase import OnlinePreprocessor as OP
+        assert OP is not None
+
+    def test_in_all(self):
+        import backend.online_phase as pkg
+        assert "OnlinePreprocessor" in pkg.__all__
