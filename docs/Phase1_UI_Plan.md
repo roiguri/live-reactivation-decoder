@@ -8,14 +8,14 @@ Back to [Backend Architecture](backend_architecture.md) or [Docs Index](README.m
 
 This is the **active implementation contract** for the Phase 1 PyQt6 frontend.
 
-**Progress:** Step 3 complete (stub views + workspace wiring). Next: Step 4 — Node 1: Pipeline Settings (backend wired).
+**Progress:** Step 4 complete (Node 1: Pipeline Settings, backend wired). Next: Step 5 — Node 2: Load Data (backend wired).
 
 | Step | Description | Status |
 |---|---|---|
 | 1 | App shell + theme | ✅ Done |
 | 2 | Journey panel (static) + Phase1Screen layout | ✅ Done |
 | 3 | Stub workspace views + left–right wiring | ✅ Done |
-| 4 | Node 1: Pipeline Settings (backend wired) | — |
+| 4 | Node 1: Pipeline Settings (backend wired) | ✅ Done |
 | 5 | Node 2: Load Data (backend wired) | — |
 | 6 | Node 3 page 0: Preprocessing Step 1 + progress | — |
 | 7 | Node 3 page 1: ICA component review | — |

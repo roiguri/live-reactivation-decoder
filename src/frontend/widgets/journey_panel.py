@@ -289,6 +289,18 @@ class JourneyPanel(QWidget):
 
     # --- public API ---
 
+    def set_node_action(self, node_index: int, handler) -> None:
+        """Override the action button handler for the node at node_index (0-based).
+
+        Disconnects the default advance() connection and wires handler instead.
+        """
+        node = self._nodes[node_index]
+        try:
+            node.action_clicked.disconnect()
+        except TypeError:
+            pass
+        node.action_clicked.connect(handler)
+
     def advance(self, completed_node: int) -> None:
         """Complete node `completed_node` (1-indexed); trail animates then next node fills in."""
         idx = completed_node - 1
