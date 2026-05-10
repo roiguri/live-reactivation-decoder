@@ -358,6 +358,69 @@ class TestDecimate:
             np.testing.assert_array_equal(t1, t2)
 
 
+@pytest.mark.parametrize("target_sfreq", [100, 128, 200, 250, 256, 500, 512])
+class TestDecimateFrequencies:
+    """Decimation correctness across a range of target sample rates.
+
+    Covers both simple integer-ratio cases (1000→500, 1000→200, 1000→250,
+    1000→100) and non-trivial GCD cases (1000→128, 1000→256, 1000→512)
+    where up_factor > 1.
+    """
+
+    def _make_p(self, target_sfreq: int) -> OnlinePreprocessor:
+        return OnlinePreprocessor(
+            _make_settings(target_rate=target_sfreq),
+            _make_online_state(sfreq_offline=float(target_sfreq)),
+            input_sfreq=INPUT_SFREQ,
+        )
+
+    def _make_data(self, n: int) -> tuple[np.ndarray, np.ndarray]:
+        rng = np.random.default_rng(42)
+        data = rng.standard_normal((n, N_CHANNELS)) * 1e-5
+        timestamps = np.arange(n, dtype=float) / INPUT_SFREQ
+        return data, timestamps
+
+    def test_output_count_approximately_correct(self, target_sfreq: int) -> None:
+        """n_out must be within ±1 of n_in × target / input."""
+        n_in = 1000
+        data, ts = self._make_data(n_in)
+        out, _ = self._make_p(target_sfreq)._decimate(data, ts)
+        expected = n_in * target_sfreq / INPUT_SFREQ
+        assert abs(out.shape[0] - expected) <= 1
+
+    def test_chunked_equals_single_pass_count(self, target_sfreq: int) -> None:
+        """Total output samples are the same regardless of how input is chunked."""
+        n_total = 500
+        chunk_size = 40
+        data, ts = self._make_data(n_total)
+
+        _, single_ts = self._make_p(target_sfreq)._decimate(data, ts)
+
+        p_chunked = self._make_p(target_sfreq)
+        n_chunked = 0
+        for start in range(0, n_total, chunk_size):
+            _, o = p_chunked._decimate(
+                data[start : start + chunk_size], ts[start : start + chunk_size]
+            )
+            n_chunked += len(o)
+
+        assert len(single_ts) == n_chunked
+
+    def test_output_timestamps_are_subset_of_input(self, target_sfreq: int) -> None:
+        """Every output timestamp must correspond to a real input sample."""
+        data, ts = self._make_data(200)
+        _, out_ts = self._make_p(target_sfreq)._decimate(data, ts)
+        for t in out_ts:
+            assert np.any(np.isclose(ts, t)), f"Output timestamp {t:.6f} not in input"
+
+    def test_empty_input_returns_empty(self, target_sfreq: int) -> None:
+        out, out_ts = self._make_p(target_sfreq)._decimate(
+            np.empty((0, N_CHANNELS)), np.empty((0,))
+        )
+        assert out.shape == (0, N_CHANNELS)
+        assert out_ts.shape == (0,)
+
+
 # ── Commit 5: spatial transforms ──────────────────────────────────────────────
 
 def _make_preprocessor_with_bad_channel() -> OnlinePreprocessor:
@@ -701,3 +764,108 @@ class TestPublicAPI:
     def test_in_all(self):
         import backend.online_phase as pkg
         assert "OnlinePreprocessor" in pkg.__all__
+
+
+# ── Commit 8: integration tests with real offline-exported state ───────────────
+
+class TestIntegration:
+    """process_batch() called with state from OfflinePreprocessor.export_online_state()."""
+
+    def _build_offline_with_ica(self, tmp_path):
+        """Return (offline, raw) with ICA fitted on synthetic non-Gaussian data."""
+        from backend.offline_phase.preprocessor import OfflinePreprocessor
+
+        rng = np.random.default_rng(42)
+        n_comp = 4
+        n_times = int(float(TARGET_SFREQ) * 10)
+        t = np.arange(n_times) / float(TARGET_SFREQ)
+        sources = np.vstack([
+            np.sin(2 * np.pi * 10 * t),
+            np.sin(2 * np.pi * 25 * t),
+            np.sign(np.sin(2 * np.pi * 7 * t)),
+            rng.standard_normal(n_times) + rng.laplace(size=n_times),
+        ])
+        mixing_true = rng.standard_normal((N_CHANNELS, n_comp))
+        data = (mixing_true @ sources) * 1e-6
+
+        info = mne.create_info(ch_names=EEG_CH_NAMES, sfreq=float(TARGET_SFREQ), ch_types="eeg")
+        montage = mne.channels.make_standard_montage("standard_1020")
+        raw = mne.io.RawArray(data, info, verbose=False)
+        raw.set_montage(montage, match_case=False, on_missing="warn", verbose=False)
+
+        offline = OfflinePreprocessor(
+            data_dir=tmp_path / "Sub_001",
+            preprocessing_settings=_make_offline_settings(),
+        )
+        offline.raw = raw.copy()
+        offline._fit_ica()
+        offline.ica.exclude = [0]
+        return offline, raw
+
+    def test_process_batch_smoke_with_real_offline_state(self, tmp_path):
+        """process_batch() must run without error using state from export_online_state()."""
+        offline, _ = self._build_offline_with_ica(tmp_path)
+        state = offline.export_online_state()
+
+        online = OnlinePreprocessor(
+            preprocessing_settings=_make_settings(),
+            online_state=state,
+            input_sfreq=INPUT_SFREQ,
+        )
+
+        rng = np.random.default_rng(20)
+        batch = rng.standard_normal((400, N_CHANNELS)) * 1e-5
+        timestamps = np.arange(400, dtype=float) / INPUT_SFREQ
+
+        out, out_ts = online.process_batch(batch, timestamps)
+
+        assert out.ndim == 2
+        assert out.shape[1] == N_CHANNELS
+        assert out_ts.shape[0] == out.shape[0]
+        assert out.dtype == float
+
+    def test_process_batch_bad_channel_is_overwritten_by_interpolation(self, tmp_path):
+        """Bad channel is overwritten by interpolation: different input values → same output."""
+        from backend.offline_phase.preprocessor import OfflinePreprocessor
+
+        offline, _ = self._build_offline_with_ica(tmp_path)
+
+        # Zero out Fp1 to force it to be detected as flat/bad
+        eeg_picks = mne.pick_types(offline.raw.info, eeg=True)
+        fp1_local = 0
+        fp1_name = offline.raw.ch_names[eeg_picks[fp1_local]]
+        offline.raw._data[eeg_picks[fp1_local], :] = 0.0
+        offline._detect_bad_channels()
+        assert fp1_name in offline._bad_channels
+
+        offline._fit_ica()
+        offline.ica.exclude = [0]
+        state = offline.export_online_state()
+        assert state["interp_weights"] is not None
+
+        online = OnlinePreprocessor(
+            preprocessing_settings=_make_settings(),
+            online_state=state,
+            input_sfreq=INPUT_SFREQ,
+        )
+
+        bad_ch_idx = state["ch_names"].index(fp1_name)
+        rng = np.random.default_rng(21)
+        base = rng.standard_normal((400, N_CHANNELS)) * 1e-5
+        timestamps = np.arange(400, dtype=float) / INPUT_SFREQ
+
+        # Two batches with identical good channels but different bad-channel values.
+        batch_a = base.copy()
+        batch_b = base.copy()
+        batch_a[:, bad_ch_idx] = +1.0
+        batch_b[:, bad_ch_idx] = -1.0
+
+        out_a, _ = online.process_batch(batch_a, timestamps)
+        online.reset_state()
+        out_b, _ = online.process_batch(batch_b, timestamps)
+
+        # Interpolation overwrites the bad channel from the good channels,
+        # so different input values in the bad slot produce identical output.
+        np.testing.assert_allclose(out_a[:, bad_ch_idx], out_b[:, bad_ch_idx], atol=1e-10)
+        good_indices = [i for i in range(N_CHANNELS) if i != bad_ch_idx]
+        np.testing.assert_allclose(out_a[:, good_indices], out_b[:, good_indices], atol=1e-10)
