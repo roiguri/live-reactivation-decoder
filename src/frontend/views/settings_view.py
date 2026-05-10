@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal as Signal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal as Signal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QMessageBox,
@@ -12,6 +12,7 @@ from frontend.styles.theme import (
     TEXT_MUTED, TEXT_PRIMARY,
 )
 from frontend.widgets.shared import FilePicker, ReadOnlyField, SectionCard
+from frontend.workers.config_loader_worker import ConfigLoaderWorker
 
 
 def _clear_layout(layout) -> None:
@@ -34,6 +35,8 @@ class SettingsView(QWidget):
         self._config_path: str | None = None
         self._output_dir: str | None = None
         self._temp_session = None  # AppSession after config load, before orchestrator
+        self._config_thread: QThread | None = None
+        self._config_worker: ConfigLoaderWorker | None = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -245,25 +248,44 @@ class SettingsView(QWidget):
     # ── private slots ─────────────────────────────────────────────────────────
 
     def _on_config_selected(self, path: str) -> None:
-        try:
-            from backend.session import AppSession
-            session = AppSession(path)
-            settings = session.settings
-        except Exception as exc:
-            QMessageBox.critical(self, "Config Error", str(exc))
-            self._config_picker.clear()
-            self._config_status_lbl.hide()
-            self._temp_session = None
-            self._config_path = None
-            self._update_settings_display(None)
-            self._update_continue_state()
-            return
+        self._config_picker.setEnabled(False)
 
-        self._config_path = path
+        self._config_thread = QThread()
+        self._config_worker = ConfigLoaderWorker(path)
+        self._config_worker.moveToThread(self._config_thread)
+
+        self._config_thread.started.connect(self._config_worker.run)
+        self._config_worker.result_ready.connect(self._on_config_loaded)
+        self._config_worker.error_occurred.connect(self._on_config_error)
+        self._config_worker.finished.connect(self._config_thread.quit)
+        self._config_thread.finished.connect(self._config_worker.deleteLater)
+        self._config_thread.finished.connect(self._config_thread.deleteLater)
+        self._config_thread.finished.connect(self._on_config_thread_finished)
+
+        self._config_thread.start()
+
+    def _on_config_loaded(self, session) -> None:
+        self._config_path = self._config_picker.path
         self._temp_session = session
         self._config_status_lbl.show()
-        self._update_settings_display(settings)
+        self._update_settings_display(session.settings)
         self._update_continue_state()
+        self._config_picker.setEnabled(True)
+
+    def _on_config_error(self, message: str) -> None:
+        QMessageBox.critical(self, "Config Error", message)
+        self._config_picker.clear()
+        self._config_status_lbl.hide()
+        self._temp_session = None
+        self._config_path = None
+        self._update_settings_display(None)
+        self._update_continue_state()
+        self._config_picker.setEnabled(True)
+
+    def _on_config_thread_finished(self) -> None:
+        """Drop Python refs only after the QThread is fully stopped."""
+        self._config_thread = None
+        self._config_worker = None
 
     def _on_output_dir_selected(self, path: str) -> None:
         self._output_dir = path
