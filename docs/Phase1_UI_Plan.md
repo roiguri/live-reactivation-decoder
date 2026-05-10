@@ -8,9 +8,24 @@ Back to [Backend Architecture](backend_architecture.md) or [Docs Index](README.m
 
 This is the **active implementation contract** for the Phase 1 PyQt6 frontend.
 
-No frontend code is committed yet. When implementation begins, `src/frontend/` is the target directory.
+**Progress:** Step 1 complete (app shell + theme). Next: Step 2 — Journey panel (static) + Phase1Screen layout.
 
-Design reference: React mockup at `https://github.com/roiguri/decoder_gui` (`Phase1Screen.jsx`).
+| Step | Description | Status |
+|---|---|---|
+| 1 | App shell + theme | ✅ Done |
+| 2 | Journey panel (static) + Phase1Screen layout | — |
+| 3 | Stub workspace views + left–right wiring | — |
+| 4 | Node 1: Pipeline Settings (backend wired) | — |
+| 5 | Node 2: Load Data (backend wired) | — |
+| 6 | Node 3 page 0: Preprocessing Step 1 + progress | — |
+| 7 | Node 3 page 1: ICA component review | — |
+| 8 | Node 3 pages 2–3: Preprocessing Step 2 + complete | — |
+| 9 | Chart widgets (isolated) | — |
+| 10 | Node 4: Evaluation (progress + results view) | — |
+| 11 | Topomap widget (isolated) | — |
+| 12 | Node 5: Train & Save (progress + complete) | — |
+
+Design reference: React mockup at `https://github.com/roiguri/decoder_gui` (`src/screens/Phase1Screen.jsx`).
 
 ---
 
