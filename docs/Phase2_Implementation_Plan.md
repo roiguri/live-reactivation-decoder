@@ -2,12 +2,22 @@
 
 > Quick implementation plan for the active stateful micro-batch architecture. For rationale and trade-offs, see [../../knowledge_base/01_timeline/03_online_stage_design/Phase2_Architecture_Discussion.md](../../knowledge_base/01_timeline/03_online_stage_design/Phase2_Architecture_Discussion.md). For the maintained backend contract, see [backend_architecture.md](backend_architecture.md).
 
-Last reconciled with code on **2026-05-10**.
+Last design update on **2026-05-11**.
 
 ## Architecture Outline
 
 ```text
-LSLReceiver -> StreamWorker -> OnlinePreprocessor -> LiveInferenceEngine -> logs/UI
+AppSession.build_live_stream_session(...)
+  -> constructs LSLReceiver, OnlinePreprocessor, LiveInferenceEngine,
+     StreamWorker, and optional PredictionLogger
+  -> returns LiveStreamSession
+
+LiveStreamSession.start()/stop()
+  -> owns lifecycle and cleanup
+
+StreamWorker.run()
+  -> LSLReceiver -> batch accumulator -> OnlinePreprocessor
+     -> LiveInferenceEngine -> prediction_ready signal -> UI/logger
 ```
 
 - Input stream: 1000 Hz EEG from LSL, expected as 64 EEG channels plus one trigger channel.
@@ -15,6 +25,8 @@ LSLReceiver -> StreamWorker -> OnlinePreprocessor -> LiveInferenceEngine -> logs
 - Model-facing output: features at the locked Phase 1 target rate; prediction
   count per micro-batch depends on the target rate.
 - Critical invariant: filtering state and decimation phase persist across batches.
+- Lifecycle invariant: `StreamWorker` has dependency references but does not create,
+  start/stop, or close the receiver/logger. `LiveStreamSession` owns that lifecycle.
 - Obsolete approach: do not reintroduce `RingBuffer` or full-window reprocessing.
 
 ## Status Legend
@@ -35,7 +47,9 @@ LSLReceiver -> StreamWorker -> OnlinePreprocessor -> LiveInferenceEngine -> logs
 - `[x]` `DecoderPipelineArtifact` loader exists and unwraps the Phase 1 artifact.
 - `[x]` `OnlinePreprocessor` is implemented and fully tested (76 tests).
 - `[x]` `LiveInferenceEngine` receives unwrapped models/metadata and predicts positive-class probabilities.
-- `[ ]` `StreamWorker` is missing — next planned step.
+- `[x]` `PredictionLogger` CSV sink is implemented.
+- `[x]` `StreamWorker` is implemented as the injected-dependency micro-batch loop.
+- `[ ]` Session-level composition needs refactor to the target API: `AppSession.build_live_stream_session(...) -> LiveStreamSession`.
 - `[x]` Phase 1 sample rate locked: configurable via `resample.target_rate` in YAML (default 256 Hz). `online_state` schema locked.
 
 ## Component Plan
@@ -56,11 +70,11 @@ LSLReceiver -> StreamWorker -> OnlinePreprocessor -> LiveInferenceEngine -> logs
 **Current output contract:**
 - `timestamps`: NumPy array, shape `(n_samples,)`.
 - `eeg_chunk`: NumPy array, shape `(n_samples, 64)`.
-- `markers`: list of integer marker codes detected during the pull.
+- `markers`: list of `(timestamp, code)` tuples detected during the pull.
 
 **Cleanup TODOs:**
 - `[x]` Reconcile docs/scripts/tests that still expect `start()` to return `True` or `False`; current code returns `None` and raises on failure.
-- `[ ]` Add richer marker output if needed: marker code plus timestamp and/or sample index.
+- `[x]` Add richer marker output: marker code plus LSL timestamp.
 - `[ ]` Run final validation on the real lab stream with `LSLProxy.exe` on the decoding machine.
 - `[ ]` Decide whether malformed chunks should always be skipped or escalated to the UI in live mode.
 
@@ -149,26 +163,88 @@ engine = LiveInferenceEngine(
 
 ### `StreamWorker` - Online Orchestrator
 
-**Status:** `[ ]` Not implemented.
+**Status:** `[x]` Implemented in `online_decoder/src/backend/online_phase/stream_worker.py`.
 
 **Responsibilities:**
-- Own the online run loop in a background thread.
+- Own the online run loop and batch accumulator in a background thread.
+- Keep references to injected `LSLReceiver`, `OnlinePreprocessor`, and `LiveInferenceEngine` dependencies for use inside `run()`.
 - Call `LSLReceiver.pull_new_data()` repeatedly.
 - Accumulate variable-size LSL chunks into 40-sample batches.
 - Keep leftover samples for the next batch.
 - Call `OnlinePreprocessor.process_batch()`.
 - Call `LiveInferenceEngine.predict()`.
-- Emit or log all predictions, not only the latest prediction.
-- Surface errors cleanly to the UI.
+- Emit all predictions, aligned timestamps, and markers via `prediction_ready`.
+- Stop the run loop when `stop()` is requested.
+
+**Non-responsibilities:**
+- Does not create the receiver, preprocessor, inference engine, or logger.
+- Does not load `decoder_pipeline.joblib`.
+- Does not start/stop the LSL connection.
+- Does not close log files.
+- Does not know about frontend plots or buffers.
 
 **Boundary rule:**
 - Batching belongs in `StreamWorker`, not in `LSLReceiver`.
+- Lifecycle belongs in `LiveStreamSession`, not in `StreamWorker`.
 
 **Tests before live use:**
-- `[ ]` Variable-size chunks produce stable 40-sample batches.
-- `[ ]` Leftover samples are preserved across pulls.
+- `[x]` Variable-size chunks produce stable 40-sample batches.
+- `[x]` Leftover samples are preserved across pulls.
+- `[x]` Marker timestamps are included/deferred according to batch boundaries.
+- `[x]` Prediction timestamps remain aligned to the emitted probability rows.
 - `[ ]` Receiver, preprocessing, and inference errors are surfaced instead of silently swallowed.
-- `[ ]` Prediction timestamps remain aligned to the emitted probability rows.
+
+### `PredictionLogger` - CSV Sink
+
+**Status:** `[x]` Implemented in `online_decoder/src/backend/online_phase/prediction_logger.py`.
+
+**Responsibilities:**
+- Consume `prediction_ready` signal payloads.
+- Write one CSV row per prediction timestamp.
+- Match marker timestamps to nearest prediction rows within `0.5 / target_sfreq`.
+- Flush after each batch and close idempotently.
+
+**Boundary rule:**
+- `PredictionLogger` is a signal consumer, not part of the worker loop.
+- `LiveStreamSession` closes the logger during shutdown.
+
+### `LiveStreamSession` - Online Lifecycle
+
+**Status:** `[ ]` Target design; refactor current session composition to this API.
+
+**Responsibilities:**
+- Represent one composed live decoding run.
+- Expose `prediction_ready` by forwarding the underlying worker signal.
+- Start in order: `receiver.start()` then `worker.start()`.
+- Stop in order: `worker.stop()`, `worker.wait()`, `logger.close()` if present, then `receiver.stop()`.
+- Make `start()` and `stop()` idempotent.
+
+**Boundary rule:**
+- `LiveStreamSession` owns lifecycle, but does not implement the micro-batch loop.
+- `StreamWorker` has references to runtime dependencies, but `LiveStreamSession` owns the start/stop/cleanup sequence.
+
+### `AppSession.build_live_stream_session(...)` - Composition Boundary
+
+**Status:** `[ ]` Target API; replace the current `session.online`/handle shape.
+
+**Responsibilities:**
+- Keep `AppSession` as the only backend class imported by the frontend.
+- Load `DecoderPipelineArtifact`.
+- Construct `LSLReceiver`, `OnlinePreprocessor`, `LiveInferenceEngine`, `StreamWorker`, and optional `PredictionLogger`.
+- Connect logger to `worker.prediction_ready` when `log_path` is provided.
+- Return a `LiveStreamSession` without starting it.
+
+**Target frontend usage:**
+```python
+live = session.build_live_stream_session(decoder_pipeline_path, log_path)
+live.prediction_ready.connect(probability_buffer.on_predictions)
+live.start()
+live.stop()
+```
+
+**Boundary rule:**
+- Do not introduce `OnlinePhase` or expose `session.online`.
+- Do not make `StreamWorker` construct or own the whole online runtime.
 
 ## Resolved Phase 1 Decisions
 
@@ -200,10 +276,12 @@ The artifact loader treats `online_state` as opaque. `LiveInferenceEngine` never
 2. `[x]` Implement artifact loader and `LiveInferenceEngine`.
 3. `[x]` Lock the Phase 1 sample rate, artifact envelope, and `online_state` schema.
 4. `[x]` Implement `OnlinePreprocessor` with full test suite and benchmark.
-5. `[ ]` Implement `StreamWorker` ← **next**.
-6. `[ ]` Add latency logging to `StreamWorker`.
-7. `[ ]` Run replay-based dry run.
-8. `[ ]` Validate with the real lab LSL stream.
+5. `[x]` Implement `StreamWorker`.
+6. `[x]` Implement `PredictionLogger`.
+7. `[ ]` Refactor session composition to `LiveStreamSession` and `AppSession.build_live_stream_session(...)`.
+8. `[ ]` Add latency logging to `StreamWorker`.
+9. `[ ]` Run replay-based dry run.
+10. `[ ]` Validate with the real lab LSL stream.
 
 ## Test Plan
 

@@ -32,7 +32,7 @@ The application is built on a decoupled architecture. The "Backend" (Python data
 
 Because EEG processing and live inference are computationally demanding, mixing them directly with the UI thread will cause the app to freeze.
 - Phase 1 (Offline) Integration: The UI acts as a State Machine. When the researcher clicks "Start Preprocessing", the UI disables its buttons, shows a loading bar, and calls the backend methods. For tasks requiring user input (like selecting ICA components), the backend halts, returns data to the UI, the UI displays interactive MNE/PyQtGraph plots, and upon user selection, the UI passes the choices back into the backend to resume processing.
-- Phase 2 (Online) Integration: The UI uses a Producer-Consumer model via QThread. The UI launches the backend StreamWorker in a separate background thread. This worker accumulates small EEG micro-batches, preprocesses them with persistent state, predicts on the decimated outputs, and communicates with the UI strictly via `pyqtSignal`, keeping the frontend responsive while the backend processes the 1000 Hz stream.
+- Phase 2 (Online) Integration: The UI uses a Producer-Consumer model via QThread. The UI asks `AppSession` to build a `LiveStreamSession`, connects to `live.prediction_ready`, and then calls `live.start()`. Internally, `StreamWorker` runs the background micro-batch loop, while `LiveStreamSession` owns start/stop cleanup for the receiver, worker, and optional logger.
 
 ## 2. Phase 1: Offline Training
 **Context:** This phase occurs during the subject's break. Latency is not an issue here. The goal is to clean a large block of recorded .vhdr data, evaluate where the brain signal is strongest, let the user manually reject artifacts, and compile a final set of predictive models.
@@ -644,12 +644,13 @@ This section defines the **active** Phase 2 backend contract.
 
 Older full-window / `RingBuffer` descriptions are obsolete and are kept only in historical design material. The active design is **stateful micro-batch processing**.
 
-**Status (2026-05-10):**
+**Status (2026-05-11):**
 - `LSLReceiver` is implemented in code
 - `DecoderPipelineArtifact` loader is implemented in code
 - `OnlinePreprocessor` is implemented in code (`src/backend/online_phase/online_preprocessor.py`)
 - `LiveInferenceEngine` is implemented in code
-- `StreamWorker` is planned, not committed — next step
+- `StreamWorker` and `PredictionLogger` are implemented in code
+- Target session composition: `AppSession.build_live_stream_session(...) -> LiveStreamSession`; do not introduce `OnlinePhase` or `session.online`
 
 ### **Data Flow (Active Micro-Batch Design)**
 Startup/composition code loads the Phase 1 artifact once before the run:
@@ -662,7 +663,7 @@ and `metadata`. `OnlinePreprocessor` receives only `online_state`;
 3. When about `40 ms` of samples are available, `StreamWorker` hands one batch to `OnlinePreprocessor.process_batch()`.
 4. `OnlinePreprocessor` applies causal bandpass/notch filtering with persistent state, decimation to the configured target rate, fixed bad-channel handling from Phase 1, average reference, and fixed ICA transform from Phase 1.
 5. `LiveInferenceEngine.predict()` scores all decimated outputs from that batch.
-6. `StreamWorker` emits or logs the probabilities, aligned timestamps, and any markers.
+6. `StreamWorker` emits probabilities, aligned timestamps, and markers through `prediction_ready`; `PredictionLogger` and the UI are consumers of that signal.
 
 ### **The Components**
 
@@ -720,10 +721,50 @@ and `metadata`. `OnlinePreprocessor` receives only `online_state`;
 
 #### **4. StreamWorker (The Conductor)**
 
-* **Role:** The background `QThread` that owns the batch accumulator and orchestrates components 1 through 3.
-* **Inputs:** injected backend components plus GUI Start/Stop control.
+* **Role:** The background `QThread` that owns the batch accumulator and runs the micro-batch loop using injected dependencies.
+* **Inputs:** injected `LSLReceiver`, `OnlinePreprocessor`, and `LiveInferenceEngine`.
 * **Outputs:** Qt signals carrying probabilities, timestamps, and markers.
-* **Status:** Planned, not committed.
+* **Status:** Implemented.
+* **Does not own:** artifact loading, logger files, receiver start/stop, or frontend lifecycle. Those belong to `AppSession`/`LiveStreamSession`.
+
+#### **5. PredictionLogger (CSV Sink)**
+
+* **Role:** Optional consumer of `prediction_ready` that writes live prediction rows to CSV.
+* **Inputs:** task names, target sampling rate, output path, and `prediction_ready` payloads.
+* **Outputs:** CSV file with timestamp, optional marker code, and one probability column per task.
+* **Status:** Implemented.
+
+#### **6. LiveStreamSession (Online Lifecycle Wrapper)**
+
+* **Role:** Represents one composed live decoding run. It exposes `prediction_ready`, `start()`, and `stop()` so the frontend does not manage backend internals.
+* **Inputs:** constructed receiver, worker, and optional logger.
+* **Lifecycle:** `start()` calls `receiver.start()` then `worker.start()`. `stop()` calls `worker.stop()`, `worker.wait()`, `logger.close()` if present, then `receiver.stop()`. Both methods are idempotent.
+* **Status:** Target session API; replaces the current `session.online`/handle shape.
+
+#### **7. AppSession Phase 2 Factory**
+
+* **Role:** The app-level composition boundary. The frontend imports only `AppSession`.
+* **Target API:** `AppSession.build_live_stream_session(decoder_pipeline_path, log_path=None, batch_size_samples=40) -> LiveStreamSession`.
+* **Responsibilities:** load the Phase 1 artifact, construct `LSLReceiver`, `OnlinePreprocessor`, `LiveInferenceEngine`, `StreamWorker`, and optional `PredictionLogger`, connect logger if needed, and return the stopped `LiveStreamSession`.
+
+### Backend to Frontend Contract: Live Decoder Output
+
+**Entry point:** `AppSession.build_live_stream_session(decoder_pipeline_path, log_path=None, batch_size_samples=40) -> LiveStreamSession`
+
+**Lifecycle:**
+1. Frontend calls `build_live_stream_session(...)` to get a `LiveStreamSession`.
+2. Frontend connects UI-side slots to `live.prediction_ready`.
+3. Frontend calls `live.start()`.
+4. On shutdown, frontend calls `live.stop()`.
+
+**Signal:** `StreamWorker.prediction_ready = pyqtSignal(dict, np.ndarray, list)`
+
+**Payload:**
+- `predictions: dict[str, np.ndarray]` — task name to positive-class probability array, shape `(n_rows,)`.
+- `timestamps: np.ndarray` — LSL clock seconds, shape `(n_rows,)`, aligned to prediction rows.
+- `markers: list[tuple[float, int]]` — `(timestamp, trigger_code)` marker events.
+
+**Frontend rule:** use only `live.prediction_ready`, `live.start()`, and `live.stop()` during normal operation. Do not reach into the underlying worker or private live-session members.
 
 ### Components Interface
 
@@ -1144,7 +1185,10 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 class StreamWorker(QThread):
     """
-    The background Conductor thread that orchestrates the Phase 2 micro-batch loop.
+    The background thread that runs the Phase 2 micro-batch loop.
+
+    Dependencies are injected and kept as references for use inside run().
+    The worker does not construct them and does not own their lifecycle.
     """
 
     # Emits: (probabilities_dict, output_timestamps, list_of_markers_found)
@@ -1187,8 +1231,8 @@ class StreamWorker(QThread):
 
     def stop(self) -> None:
         """
-        Signals the loop in run() to break, stops the LSLReceiver securely,
-        and tears down the worker thread.
+        Signals the loop in run() to break. The caller owns worker.wait()
+        and receiver/logger cleanup.
         """
         pass
 
@@ -1206,6 +1250,46 @@ class StreamWorker(QThread):
         """
         Returns the next ready batch when enough samples have accumulated,
         otherwise returns None.
+        """
+        pass
+
+
+class LiveStreamSession:
+    """
+    Lifecycle wrapper for one composed live decoding run.
+    """
+
+    @property
+    def prediction_ready(self):
+        """
+        Forward StreamWorker.prediction_ready without exposing worker internals.
+        """
+        pass
+
+    def start(self) -> None:
+        """
+        Start receiver, then start worker. Idempotent.
+        """
+        pass
+
+    def stop(self) -> None:
+        """
+        Stop worker, wait for it to join, close optional logger,
+        then stop receiver. Idempotent.
+        """
+        pass
+
+
+class AppSession:
+    def build_live_stream_session(
+        self,
+        decoder_pipeline_path: str | Path,
+        log_path: str | Path | None = None,
+        batch_size_samples: int = 40,
+    ) -> LiveStreamSession:
+        """
+        Compose the online runtime and return it stopped.
+        The frontend connects to live.prediction_ready, then calls live.start().
         """
         pass
 ```
@@ -1247,8 +1331,9 @@ online_decoder/
 │           ├── online_preprocessor.py # OnlinePreprocessor - Implemented
 │           ├── live_inference.py      # LiveInferenceEngine - Implemented
 │           ├── artifact_loader.py     # DecoderPipelineArtifact loader - Implemented
-│           ├── __init__.py            # Public API exports
-│           └── stream_worker.py       # StreamWorker (QThread) - Planned
+│           ├── prediction_logger.py   # PredictionLogger - Implemented
+│           ├── stream_worker.py       # StreamWorker (QThread) - Implemented
+│           └── __init__.py            # Public API exports
 │
 ├── scripts/                       # Current support scripts
 │   ├── characterize_lsl.py        # LSL stream characterization

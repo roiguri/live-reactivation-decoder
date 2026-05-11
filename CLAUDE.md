@@ -28,11 +28,11 @@ online_decoder/
 
 ## Current Backend Scope
 
-- Committed Phase 1 surface: config models, `SettingsManager`, `OfflinePreprocessor`, `ModelEvaluator`, `ModelTrainer`, and shared `utils.py` (`build_classifier`, `get_task_data`).
-- `OfflinePhaseOrchestrator` is the **next planned Phase 1 step** — it will be the single frontend entry point for Phase 1, holding intermediate state and owning `decoder_pipeline.joblib` export.
-- Committed Phase 2 surface: `LSLReceiver`, `DecoderPipelineArtifact` loader, `LiveInferenceEngine`, and `OnlinePreprocessor`.
-- `StreamWorker` and `src/frontend/` are not committed yet. `StreamWorker` is the next planned Phase 2 step.
-- The active Phase 2 direction is **stateful micro-batch processing**. `RingBuffer` is obsolete in this app.
+- Phase 2 backend surface in the current branch: `LSLReceiver`, `DecoderPipelineArtifact` loader, `OnlinePreprocessor`, `LiveInferenceEngine`, `StreamWorker`, and `PredictionLogger`.
+- Target Phase 2 session API: `AppSession.build_live_stream_session(...) -> LiveStreamSession`. `AppSession` remains the app-level composition boundary; do not introduce `OnlinePhase` or expose `session.online`.
+- `StreamWorker` owns only the injected-dependency micro-batch loop. It keeps references to receiver/preprocessor/inference objects for `run()`, but `LiveStreamSession` owns start/stop/cleanup for the receiver, worker, and optional logger.
+- Committed Phase 1 surface: config models, `SettingsManager`, `OfflinePreprocessor`, `ModelEvaluator`, `ModelTrainer`, shared `utils.py` (`build_classifier`, `get_task_data`), `OfflineOrchestrator` (Phase 1 state machine, owns file I/O and `decoder_pipeline.joblib` export), and `AppSession` (`src/backend/session.py` — the single frontend entry point; owns `SettingsManager` lifetime and exposes `session.offline` for Phase 1).
+
 
 ## Dependency Management
 

@@ -1,12 +1,12 @@
-# StreamWorker + PredictionLogger — Backend-Only Plan
+# StreamWorker + LiveStreamSession + PredictionLogger — Backend-Only Plan
 
 ## Context
 
-The online-phase backend has three committed components — `LSLReceiver`, `OnlinePreprocessor`, `LiveInferenceEngine` — but no live runtime that drives them. This PR adds the runtime (`StreamWorker`) and a persistence sink (`PredictionLogger`), plus a factory on `AppSession` so the frontend (partner's PR) can spin them up without knowing the internals.
+The online-phase backend has three committed components — `LSLReceiver`, `OnlinePreprocessor`, `LiveInferenceEngine` — but no live runtime that drives them. This PR adds the runtime loop (`StreamWorker`), a live-session lifecycle wrapper (`LiveStreamSession`), and a persistence sink (`PredictionLogger`), plus a factory on `AppSession` so the frontend (partner's PR) can spin them up without knowing the internals.
 
 **Work split:**
-- **This PR (backend, you):** `StreamWorker`, `PredictionLogger`, `AppSession.online` factory, headless smoke test, updates to `backend_architecture.md` documenting the contract.
-- **Partner's PR (frontend):** `ProbabilityBuffer`, `ProbabilityPlotWidget`, UI lifecycle, button-to-action wiring. They connect to the backend through the documented `AppSession.online` interface.
+- **This PR (backend, you):** `StreamWorker`, `LiveStreamSession`, `PredictionLogger`, `AppSession.build_live_stream_session(...)` factory, headless smoke test, updates to `backend_architecture.md` documenting the contract.
+- **Partner's PR (frontend):** `ProbabilityBuffer`, `ProbabilityPlotWidget`, UI lifecycle, button-to-action wiring. They connect to the backend through the documented `AppSession` interface.
 
 The deliverable from this PR is a **contract**: signals + types + threading guarantees that the frontend partner can build against in isolation.
 
@@ -15,7 +15,8 @@ The deliverable from this PR is a **contract**: signals + types + threading guar
 **In:**
 - `StreamWorker` (QThread orchestrator)
 - `PredictionLogger` (CSV sink)
-- `AppSession.online.build_stream_session(...)` factory
+- `LiveStreamSession` (online lifecycle wrapper)
+- `AppSession.build_live_stream_session(...)` factory
 - **Modifications to `LSLReceiver` + `split_eeg_and_markers`** to return per-marker timestamps (decision: exact timing — see Resolved Decisions §1)
 - Headless smoke test (worker + logger driven by replayed/fake LSL → CSV)
 - `docs/backend_architecture.md` updates: StreamWorker section rewrite + new "Frontend integration contract" subsection
@@ -42,8 +43,8 @@ The deliverable from this PR is a **contract**: signals + types + threading guar
 │                  also feeds:                 │
 │                  └─► PredictionLogger ──► CSV│
 │                                              │
-│  Factory: AppSession.online.build_stream_session(...)
-│  Returns: a handle exposing the worker + signal
+│  Factory: AppSession.build_live_stream_session(...)
+│  Returns: LiveStreamSession exposing signal + start/stop
 └──────────────────────────────────────────────┘
                        │
               prediction_ready signal
@@ -52,14 +53,14 @@ The deliverable from this PR is a **contract**: signals + types + threading guar
 ┌──────────────────────────────────────────────┐
 │           FRONTEND (partner's PR)            │
 │                                              │
-│  worker.prediction_ready ─► ProbabilityBuffer│
+│  live.prediction_ready ─► ProbabilityBuffer  │
 │                              │               │
 │                              ▼               │
 │                       ProbabilityPlotWidget  │
 └──────────────────────────────────────────────┘
 ```
 
-`StreamWorker` is a pure orchestrator. It emits raw per-batch numeric data and knows nothing about plots, files, or windows. `PredictionLogger` is one consumer of that signal (CSV). The frontend partner attaches other consumers (buffer, plot) via the same signal.
+`StreamWorker` owns only the background micro-batch loop. It receives `LSLReceiver`, `OnlinePreprocessor`, and `LiveInferenceEngine` as constructor dependencies and keeps references to use inside `run()`, but it does not create them, start/stop the LSL connection, own logging, or close files. `LiveStreamSession` owns the lifecycle of the composed live run. `PredictionLogger` is one consumer of the worker signal (CSV); the frontend partner attaches other consumers (buffer, plot) via the same signal.
 
 ## Class specs
 
@@ -112,7 +113,7 @@ prediction_ready = pyqtSignal(dict, np.ndarray, list)
 
 **Threading guarantee:** `prediction_ready` is connected with the default `Qt.AutoConnection`. When the receiving slot lives on a different thread (the UI thread), Qt uses a queued connection — the slot runs in the receiver's thread, not the worker's. Numpy arrays passed in the signal payload are shared by reference; we accept that and document that slots must NOT mutate them.
 
-**Does NOT know about:** plots, ring buffers, files, task display names, the UI thread.
+**Does NOT know about:** artifact loading, config loading, plots, ring buffers, files, task display names, the UI thread, or the start/stop lifecycle of the receiver/logger.
 
 ---
 
@@ -156,22 +157,27 @@ Writes one row per timestamp. Marker codes are matched to rows by nearest-timest
 
 ---
 
-### 3. `AppSession.online.build_stream_session(...)` factory
+### 3. `LiveStreamSession` + `AppSession.build_live_stream_session(...)`
 
 **File:** `online_decoder/src/backend/session.py` (extend existing `AppSession`)
 
-Mirror the existing `session.offline` shape. Add a new `session.online` namespace exposing factories for Phase 2.
+`AppSession` is the app-level orchestrator of orchestrators. The frontend imports only `AppSession`; `AppSession` owns `SettingsManager`, creates `session.offline` for Phase 1, and exposes `build_live_stream_session(...)` directly for Phase 2. Do not introduce a separate `OnlinePhase` namespace/class.
+
+`LiveStreamSession` is the object returned by the factory. It owns the lifecycle of one composed live run: start the receiver, start the worker, stop the worker, wait for the thread, close the optional logger, and stop the receiver. It may expose the worker's `prediction_ready` signal as a property, but the frontend should not need to reach into the worker for normal use.
 
 **Proposed interface:**
 ```python
 @dataclass
-class StreamSessionHandle:
-    """Bundle returned by build_stream_session. Frontend connects to .worker.prediction_ready."""
-    worker: StreamWorker
-    logger: PredictionLogger | None
-    receiver: LSLReceiver
-    preprocessor: OnlinePreprocessor
-    inference_engine: LiveInferenceEngine
+class LiveStreamSession:
+    """One composed live decoding run. Frontend connects to .prediction_ready."""
+    _receiver: LSLReceiver
+    _worker: StreamWorker
+    _logger: PredictionLogger | None
+
+    @property
+    def prediction_ready(self):
+        """Forward the worker signal without exposing worker internals."""
+        return self._worker.prediction_ready
 
     def start(self) -> None:
         """Start receiver and worker. Idempotent."""
@@ -180,20 +186,22 @@ class StreamSessionHandle:
         """Stop worker, wait for join, close logger, stop receiver. Idempotent."""
 
 
-class OnlinePhase:  # exposed as AppSession.online
-    def build_stream_session(
+class AppSession:
+    offline: OfflineOrchestrator | None
+
+    def build_live_stream_session(
         self,
         decoder_pipeline_path: Path,
         log_path: Path | None = None,
         batch_size_samples: int = 40,
-    ) -> StreamSessionHandle:
+    ) -> LiveStreamSession:
         """Construct the full backend pipeline, wired but not started.
 
         decoder_pipeline_path: path to decoder_pipeline.joblib (Phase 1 export).
         log_path: if provided, a PredictionLogger is created and connected. If None, no logging.
         batch_size_samples: passed to StreamWorker.
 
-        Returns a handle the caller (frontend) connects signals to and then calls .start().
+        Returns a live session the caller (frontend) connects signals to and then calls .start().
         """
 ```
 
@@ -202,9 +210,9 @@ The factory:
 2. Constructs `LSLReceiver`, `OnlinePreprocessor`, `LiveInferenceEngine` from artifact + settings.
 3. Constructs `StreamWorker`.
 4. If `log_path`: constructs `PredictionLogger` and `worker.prediction_ready.connect(logger.on_predictions)`.
-5. Returns the handle. Does NOT call `.start()` — the caller does that after attaching its own consumers.
+5. Returns `LiveStreamSession`. Does NOT call `.start()` — the caller does that after attaching its own consumers.
 
-**Why a handle instead of just returning the worker:** the frontend partner needs `worker` (to `.connect` to its buffer), plus the logger needs to be `.close()`d on shutdown, plus the receiver needs to be `.stop()`ed. Bundling lifecycle into the handle keeps the frontend ignorant of which lower-level objects exist.
+**Why `LiveStreamSession` instead of just returning the worker:** the frontend needs a signal plus `start()`/`stop()`, but shutdown also needs `worker.wait()`, optional `logger.close()`, and `receiver.stop()`. Keeping that lifecycle in `LiveStreamSession` avoids pushing backend internals into the frontend and avoids making `StreamWorker` responsible for artifact loading, logging, or external resource cleanup.
 
 ---
 
@@ -214,13 +222,13 @@ This section is the exact thing the frontend partner builds against. Copy this v
 
 > ### Backend → Frontend contract: live decoder output
 >
-> **Entry point:** `AppSession.online.build_stream_session(decoder_pipeline_path, log_path=None, batch_size_samples=40) -> StreamSessionHandle`
+> **Entry point:** `AppSession.build_live_stream_session(decoder_pipeline_path, log_path=None, batch_size_samples=40) -> LiveStreamSession`
 >
 > **Lifecycle:**
-> 1. Frontend calls `build_stream_session(...)` to get a `StreamSessionHandle`.
-> 2. Frontend connects its UI-side slots to `handle.worker.prediction_ready`.
-> 3. Frontend calls `handle.start()`.
-> 4. On shutdown (e.g., window close), frontend calls `handle.stop()`.
+> 1. Frontend calls `build_live_stream_session(...)` to get a `LiveStreamSession`.
+> 2. Frontend connects its UI-side slots to `live.prediction_ready`.
+> 3. Frontend calls `live.start()`.
+> 4. On shutdown (e.g., window close), frontend calls `live.stop()`.
 >
 > **Signal:** `StreamWorker.prediction_ready = pyqtSignal(dict, np.ndarray, list)`
 >
@@ -241,10 +249,10 @@ This section is the exact thing the frontend partner builds against. Copy this v
 > **What the frontend is expected to build:**
 > - A consumer (e.g., `ProbabilityBuffer`) that maintains a rolling window of (timestamps, predictions, markers) and emits a plot-ready signal.
 > - A renderer (e.g., `ProbabilityPlotWidget`) that consumes the buffer's signal and draws.
-> - Wiring code that calls `build_stream_session(...)`, connects slots, and manages `start()/stop()`.
+> - Wiring code that calls `build_live_stream_session(...)`, connects slots, and manages `start()/stop()`.
 >
 > **What the frontend should NOT do:**
-> - Reach into `handle.worker.<private>` or any of the other handle members. Use the signal and `start()/stop()` only.
+> - Reach into `LiveStreamSession` private members or the underlying `StreamWorker`. Use `prediction_ready` and `start()/stop()` only.
 > - Block in slots — slots run on the UI thread.
 
 ---
@@ -285,7 +293,7 @@ online_decoder/src/backend/
 │   ├── live_inference.py          (exists)
 │   ├── stream_worker.py           (NEW)
 │   └── prediction_logger.py       (NEW)
-└── session.py                     (extend with .online namespace)
+└── session.py                     (extend AppSession with build_live_stream_session and LiveStreamSession)
 
 online_decoder/tests/online_phase/
 ├── test_stream_worker.py          (NEW)
@@ -302,7 +310,8 @@ online_decoder/scripts/
 |---|---|---|
 | `StreamWorker` | Integration (Qt) | `pytest-qt`, stub LSLReceiver (use existing `FakeInlet` pattern), real preprocessor, deterministic fake inference. Assert via `qtbot.waitSignal(worker.prediction_ready)`. Cover: empty pulls, partial batches, marker timing, stop()/join. |
 | `PredictionLogger` | Pure unit | `tmp_path`, direct slot calls with synthetic numpy arrays, parse output with `pandas.read_csv`. |
-| `AppSession.online.build_stream_session` | Construction smoke | Patch `LSLReceiver.start`, assert the handle's members are wired and `.stop()` is idempotent. |
+| `LiveStreamSession` | Lifecycle unit | Fakes for receiver/worker/logger; assert start/stop order and idempotence. |
+| `AppSession.build_live_stream_session` | Construction smoke | Patch runtime dependencies, assert returned session exposes `prediction_ready` and `.stop()` is idempotent. |
 | End-to-end | Opt-in smoke | `scripts/smoke_stream_worker.py` plays back a recorded session against a fake LSL inlet; assert CSV row count matches expected after N seconds. |
 
 Tests live alongside existing tests; smoke script follows the `scripts/smoke_test_lsl_receiver.py` convention.
@@ -430,41 +439,41 @@ Future decisions discovered mid-implementation that aren't worth blocking on go 
 
 ---
 
-### Commit 4 — `feat(session): add AppSession.online factory`
+### Commit 4 — `feat(session): add live stream session factory`
 
 **Files:**
-- `online_decoder/src/backend/session.py` (extend with `.online` namespace)
+- `online_decoder/src/backend/session.py` (extend `AppSession` directly)
 - `online_decoder/tests/test_session_online.py` (NEW, or extend existing `test_session.py` if present)
 
 **Implementation:**
-- [ ] `@dataclass class StreamSessionHandle` with members `worker, logger, receiver, preprocessor, inference_engine` and methods `start()`, `stop()`.
-- [ ] `class OnlinePhase` exposing `build_stream_session(decoder_pipeline_path, log_path=None, batch_size_samples=40) -> StreamSessionHandle`.
-- [ ] Add `AppSession.online` property returning an `OnlinePhase` instance (lazy or eager — match `session.offline` style).
-- [ ] In `build_stream_session`:
+- [ ] `@dataclass class LiveStreamSession` with private members `_receiver`, `_worker`, optional `_logger`, `prediction_ready` property, and idempotent `start()`, `stop()`.
+- [ ] Add `AppSession.build_live_stream_session(decoder_pipeline_path, log_path=None, batch_size_samples=40) -> LiveStreamSession`.
+- [ ] Do not add `OnlinePhase`; do not expose `session.online`.
+- [ ] In `AppSession.build_live_stream_session`:
   - [ ] Load `DecoderPipelineArtifact` from `decoder_pipeline_path`.
   - [ ] Construct `LSLReceiver`, `OnlinePreprocessor`, `LiveInferenceEngine` from artifact + `SettingsManager` settings.
-  - [ ] Construct `StreamWorker`.
+  - [ ] Construct `StreamWorker` with injected receiver/preprocessor/inference dependencies.
   - [ ] If `log_path`: construct `PredictionLogger`; `worker.prediction_ready.connect(logger.on_predictions)`.
-  - [ ] Return handle. **Do not call `start()`.**
-- [ ] `handle.start()`: `receiver.start()` then `worker.start()`. Idempotent.
-- [ ] `handle.stop()`: `worker.stop(); worker.wait(); logger.close() if logger; receiver.stop()`. Idempotent.
+  - [ ] Return `LiveStreamSession`. **Do not call `start()`.**
+- [ ] `live.start()`: `receiver.start()` then `worker.start()`. Idempotent.
+- [ ] `live.stop()`: `worker.stop(); worker.wait(); logger.close() if logger; receiver.stop()`. Idempotent.
 
 **Tests:**
-- [ ] Patch `LSLReceiver.start` so no real LSL connection is attempted; construct via factory and assert handle members exist.
-- [ ] With `log_path=None`: assert `handle.logger is None` and only one slot is connected to `prediction_ready`.
-- [ ] With `log_path` set: assert two slots are connected.
-- [ ] `handle.start()` then `handle.start()` again — no exception.
-- [ ] `handle.stop()` then `handle.stop()` again — no exception.
+- [ ] Patch `LSLReceiver.start` so no real LSL connection is attempted; construct via `session.build_live_stream_session(...)` and assert `prediction_ready` is exposed.
+- [ ] With `log_path=None`: assert no logger slot is connected to `prediction_ready`.
+- [ ] With `log_path` set: assert the logger slot is connected and receives emitted predictions.
+- [ ] `live.start()` then `live.start()` again — no duplicate start calls.
+- [ ] `live.stop()` then `live.stop()` again — no duplicate stop/close calls.
 
 **TODOs in code:**
-- [ ] `# TODO(open): see docs/stream_worker_design.md Open §2 — accept in-memory DecoderPipelineArtifact` at the artifact load site.
-- [ ] `# TODO(open): see docs/stream_worker_design.md Open §3 — read LSL stream name / target_sfreq from SettingsManager once Phase 2 config schema is defined` at the receiver/preprocessor construction site.
+- [x] `# TODO(open): see docs/stream_worker_design.md Open §2 — accept in-memory DecoderPipelineArtifact` at the artifact load site.
+- [x] `# TODO(open): see docs/stream_worker_design.md Open §3 — read LSL stream name / target_sfreq from SettingsManager once Phase 2 config schema is defined` at the receiver/preprocessor construction site.
 
 **Verify:**
 - [ ] `pytest online_decoder/tests/ -v` everything green.
 
 **Commit:**
-- [ ] `git commit -m "feat(session): add AppSession.online factory"`
+- [ ] `git commit -m "feat(session): add live stream session factory"`
 
 ---
 
@@ -475,8 +484,8 @@ Future decisions discovered mid-implementation that aren't worth blocking on go 
 
 **Implementation:**
 - [ ] CLI args: `--duration` (seconds, default 5), `--log` (CSV path, default `/tmp/smoke.csv`), `--pipeline` (path to `decoder_pipeline.joblib`).
-- [ ] Construct `AppSession`, call `session.online.build_stream_session(pipeline_path, log_path)`.
-- [ ] `handle.start()`; sleep for `duration`; `handle.stop()`.
+- [ ] Construct `AppSession`, call `session.build_live_stream_session(pipeline_path, log_path)`.
+- [ ] `live.start()`; sleep for `duration`; `live.stop()`.
 - [ ] Print row count from log file and timestamp monotonicity check at the end.
 - [ ] Follow the existing `scripts/smoke_test_lsl_receiver.py` conventions (logging, argparse).
 
@@ -502,8 +511,8 @@ Future decisions discovered mid-implementation that aren't worth blocking on go 
 **Implementation:**
 - [ ] Replace the tentative StreamWorker sketch in [backend_architecture.md:1136-1202](online_decoder/docs/backend_architecture.md#L1136-L1202) with the final spec from `stream_worker_design.md` §1 (constructor, signal, loop body summary, threading guarantees).
 - [ ] Add a new section `## Backend → Frontend contract: live decoder output` after the StreamWorker section, copying the contract block from `stream_worker_design.md`.
-- [ ] In `Phase2_Implementation_Plan.md`: tick off StreamWorker, add and tick PredictionLogger and `AppSession.online`.
-- [ ] In `CLAUDE.md`: update "Current Backend Scope" — StreamWorker, PredictionLogger, AppSession.online are now committed; remove "next planned" note for StreamWorker.
+- [ ] In `Phase2_Implementation_Plan.md`: tick off StreamWorker, add and tick PredictionLogger and `AppSession.build_live_stream_session(...)`.
+- [x] In `CLAUDE.md`: update "Current Backend Scope" — StreamWorker, LiveStreamSession, PredictionLogger, and `AppSession.build_live_stream_session(...)` are the target backend scope; remove "next planned" note for StreamWorker.
 
 **Tests:** none (documentation only).
 
@@ -520,7 +529,7 @@ Future decisions discovered mid-implementation that aren't worth blocking on go 
 ### After commit 6
 
 - [ ] Push branch, open PR for review.
-- [ ] Notify partner that `AppSession.online.build_stream_session(...)` is ready and `docs/backend_architecture.md` describes the contract.
+- [ ] Notify partner that `AppSession.build_live_stream_session(...)` is ready and `docs/backend_architecture.md` describes the contract.
 
 ## Resolved decisions
 
