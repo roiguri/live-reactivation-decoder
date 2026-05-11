@@ -8,7 +8,7 @@ Back to [Backend Architecture](backend_architecture.md) or [Docs Index](README.m
 
 This is the **active implementation contract** for the Phase 1 PyQt6 frontend.
 
-**Progress:** Step 4 complete (Node 1: Pipeline Settings, backend wired). Step 4 follow-up also landed: `BaseWorker` + `ConfigLoaderWorker` (so `AppSession` construction no longer blocks the GUI thread), a reusable `LoadingOverlay` widget mounted on the workspace card, and the reusable **Ready Protocol** (`ready_changed(bool)` view signal + `JourneyPanel.set_node_ready` slot) that gates the journey-panel action button until the active view's prerequisites are satisfied. All three are general-purpose and Step 5 reuses them. Next: Step 5 — Node 2: Load Data (backend wired).
+**Progress:** Step 5 complete (Node 2: Load Data, backend wired). The shared `LoadingOverlay` is now the canonical pattern for every blocking backend call in Phase 1 — Steps 6+ reuse it directly instead of introducing embedded progress pages. Next: combined Step 6 — Node 3 Step 1 (overlay) + ICA review.
 
 | Step | Description | Status |
 |---|---|---|
@@ -16,14 +16,14 @@ This is the **active implementation contract** for the Phase 1 PyQt6 frontend.
 | 2 | Journey panel (static) + Phase1Screen layout | ✅ Done |
 | 3 | Stub workspace views + left–right wiring | ✅ Done |
 | 4 | Node 1: Pipeline Settings (backend wired) | ✅ Done |
-| 5 | Node 2: Load Data (backend wired) | — |
-| 6 | Node 3 page 0: Preprocessing Step 1 + progress | — |
-| 7 | Node 3 page 1: ICA component review | — |
-| 8 | Node 3 pages 2–3: Preprocessing Step 2 + complete | — |
-| 9 | Chart widgets (isolated) | — |
-| 10 | Node 4: Evaluation (progress + results view) | — |
-| 11 | Topomap widget (isolated) | — |
-| 12 | Node 5: Train & Save (progress + complete) | — |
+| 5 | Node 2: Load Data (backend wired) | ✅ Done |
+| 6 | Node 3: Step 1 (overlay) + ICA review | — |
+| 7 | Node 3: Preprocessing Step 2 + complete | — |
+| 8 | Chart widgets (isolated) | — |
+| 9 | Node 4: Evaluation (overlay + results view) | — |
+| 10 | Topomap widget (isolated) | — |
+| 11 | Node 5: Train & Save (overlay + complete) | — |
+| 12 | (Optional) Embedded progress pages for Nodes 3 & 4 | — |
 
 Design reference: React mockup at [`knowledge_base/02_reference/ui_demo/Phase1Screen.jsx`](../../../knowledge_base/02_reference/ui_demo/Phase1Screen.jsx) (originally from `https://github.com/roiguri/decoder_gui`).
 
@@ -223,45 +223,42 @@ On `AppSession` construction error: `QMessageBox.critical(...)`, paths cleared, 
 
 ---
 
-### Step 6 — Node 3, page 0: Preprocessing Step 1 + progress
+### Step 6 — Node 3: Step 1 (overlay) + ICA review
+
+Combines the original Step 6 (preprocessing-step1 worker) and Step 7 (ICA component review). Step 1 progress is shown via the shared `LoadingOverlay` rather than an embedded progress page, so the inner stack drops from 4 pages to 2.
 
 **Create:**
-- `workers/preprocessing_worker.py` — `PreprocessingStep1Worker` calls `orchestrator.run_step1_prepare_ica()`
-- `views/preprocessing_view.py` — inner `QStackedWidget`; Page 0 = indeterminate `QProgressBar` + status label; Pages 1–3 are stubs
+- `workers/preprocessing_worker.py` — `PreprocessingStep1Worker` calls `orchestrator.run_step1_prepare_ica()`; plus a no-op `PreprocessingStep2Worker` placeholder (immediately emits `result_ready({})`) so the Page 0 → Page 1 transition can be exercised end-to-end.
+- `widgets/ica_component_card.py` — `ICAComponentCard(QWidget)`: embedded `FigureCanvas` with two axes (left: `mne.viz.plot_topomap(ica.get_components()[:, i], ica.info)`, right: time-series placeholder pending the backend exposure noted below); amber/muted color badge; keep/reject `QPushButton` (checkable).
+- `views/preprocessing_view.py` (replace stub) — inner `QStackedWidget` with **3 pages**:
+  - Page 0 = "Ready to Preprocess" landing (play-circle icon, title, description, in-view "Start Preprocessing" button).
+  - Page 1 = ICA review grid (`QScrollArea` → 4-column grid of `ICAComponentCard` built from `(ica_obj, suggested_components)`); "Confirm" button below grid.
+  - Page 2 = stub for the complete view (Step 7 next will replace).
 
-**Wire:** Node 3 action button → start `PreprocessingStep1Worker` → `result_ready(ica_obj, suggested_components)` → advance inner stack to Page 1 stub.
+**Wire:**
+- In-view "Start Preprocessing" (Page 0) → `PreprocessingView.trigger_start` → emit `loading_requested("Running preprocessing…")` → start `PreprocessingStep1Worker` → on `result_ready((ica, suggested))`: hide overlay, populate grid, advance inner stack to Page 1, enable in-view "Confirm" button.
+- Confirm (Page 1) → collect rejected indices → emit `loading_requested("Finishing preprocessing pipeline…")` → start placeholder `PreprocessingStep2Worker` → on `result_ready({})`: hide overlay, advance inner stack to Page 2 stub.
+- The journey-panel Node 3 action is still wired to `trigger_start` for parity (so the Ready Protocol contract holds), and `ready_changed` follows the same gate as the in-view Start button: True while the user is on the Ready page with data loaded, False once preprocessing starts or completes. Clicking either button is equivalent.
 
-**Test:** after Node 2, click Node 3 → progress bar runs for the real preprocessing → transitions to the stub ICA page. No UI freeze during EEG computation.
+**Backend data gap (unchanged from the prior plan):** the time-series axis on each ICA card requires `ica.get_sources(raw).get_data()[i, :500]`, but `raw` is private to the orchestrator. The frontend must not access orchestrator internals; render the topomap axis only and leave a placeholder for the time series until a backend exposure plan is in place.
+
+**Test:** after Node 2, the workspace shows the Ready page → click in-view "Start Preprocessing" → overlay covers the workspace card during real preprocessing → grid renders on Page 1 with real MNE topomaps; toggling keep/reject changes the card style; Confirm → overlay shows briefly → Page 2 stub.
 
 ---
 
-### Step 7 — Node 3, page 1: ICA component review
+### Step 7 — Node 3: Preprocessing Step 2 + complete
 
 **Create:**
-- `widgets/ica_component_card.py` — `ICAComponentCard(QWidget)`: embedded `FigureCanvas` with two axes (left: `mne.viz.plot_topomap(ica.get_components()[:, i], ica.info)`, right: `ica.get_sources(raw).get_data()[i, :500]`); color badge; keep/reject `QPushButton` (checkable)
-- Update `views/preprocessing_view.py` Page 1 — `QScrollArea` → 4-column grid of `ICAComponentCard` built from `(ica_obj, suggested_components)`; "Confirm" button below grid
+- Replace the placeholder `PreprocessingStep2Worker` in `workers/preprocessing_worker.py` with a real implementation that calls `orchestrator.run_step2_finish_pipeline(excluded_components)`.
+- Update `views/preprocessing_view.py` Page 1 — stats labels (epochs retained, components removed); calls `journey_panel.advance(3)` on display.
 
-**Wire:** "Confirm" → collect rejected indices → start `PreprocessingStep2Worker` placeholder (immediately emits `result_ready({})`) → Page 2 stub.
+**Wire:** Confirm (from Step 6) → real `PreprocessingStep2Worker` (via the shared `LoadingOverlay`) → stats Page 1 → `journey_panel.advance(3)`.
 
-**Test:** after Step 6, the real ICA grid renders; toggling keep/reject changes button color; clicking Confirm transitions forward.
+**Test:** full Node 3 flow: preprocessing → ICA grid → Confirm → overlay → epoch stats → trail to Node 4.
 
 ---
 
-### Step 8 — Node 3, pages 2–3: Preprocessing Step 2 + complete
-
-**Create:**
-- Add `PreprocessingStep2Worker` to `workers/preprocessing_worker.py` — calls `orchestrator.run_step2_finish_pipeline(excluded_components)`
-- Update `views/preprocessing_view.py`:
-  - Page 2 = indeterminate `QProgressBar` + status label
-  - Page 3 = stats labels (epochs retained, components removed); calls `journey_panel.advance(3)` on display
-
-**Wire:** Confirm (Step 7) → real `PreprocessingStep2Worker` → progress (Page 2) → stats (Page 3) → `journey_panel.advance(3)`.
-
-**Test:** full Node 3 flow: preprocessing → ICA grid → confirm → step 2 progress → epoch stats → trail to Node 4.
-
----
-
-### Step 9 — Chart widgets (isolated)
+### Step 8 — Chart widgets (isolated)
 
 **Create:**
 - `widgets/charts/__init__.py`
@@ -272,23 +269,21 @@ On `AppSession` construction error: `QMessageBox.critical(...)`, paths cleared, 
 
 ---
 
-### Step 10 — Node 4: Evaluation (progress + results view)
+### Step 9 — Node 4: Evaluation (overlay + results view)
 
 **Create:**
 - `workers/evaluation_worker.py` — calls `orchestrator.run_evaluation()`
-- Update `views/evaluation_view.py`:
-  - Page 0 = indeterminate `QProgressBar` + `EvaluationWorker`
-  - Page 1 = `QTabWidget`:
-    - Summary tab: `AUCChart` (all decoders) + stats panel (selected time, per-decoder AUC) + "Confirm Timepoint" button (disabled until timepoint selected)
-    - Per-decoder tabs: individual `AUCChart` + `TGMChart`
+- Update `views/evaluation_view.py`: single `QTabWidget` results view.
+  - Summary tab: `AUCChart` (all decoders) + stats panel (selected time, per-decoder AUC) + "Confirm Timepoint" button (disabled until timepoint selected)
+  - Per-decoder tabs: individual `AUCChart` + `TGMChart`
 
-**Wire:** Node 4 button → `EvaluationWorker` → `result_ready` → build charts → Page 1. Timepoint click → update stats panel. "Confirm Timepoint" → `Phase1Screen._selected_timepoint = t` → `journey_panel.advance(4)`.
+**Wire:** Node 4 button → emit `loading_requested("Running evaluation…")` → start `EvaluationWorker` → on `result_ready`: hide overlay, build charts. Timepoint click → update stats panel. "Confirm Timepoint" → `Phase1Screen._selected_timepoint = t` → `journey_panel.advance(4)`.
 
-**Test:** after Node 3, click "Run Evaluation" → progress → AUC chart with all decoder lines; click different timepoints → stats panel updates; confirm → trail to Node 5.
+**Test:** after Node 3, click "Run Evaluation" → overlay → AUC chart with all decoder lines; click different timepoints → stats panel updates; confirm → trail to Node 5.
 
 ---
 
-### Step 11 — Topomap widget (isolated)
+### Step 10 — Topomap widget (isolated)
 
 **Create:**
 - `widgets/charts/topomap_widget.py` — `TopomapWidget(FigureCanvas)`: calls `mne.viz.plot_topomap(pattern, info, axes=ax, show=False)`
@@ -297,17 +292,21 @@ On `AppSession` construction error: `QMessageBox.critical(...)`, paths cleared, 
 
 ---
 
-### Step 12 — Node 5: Train & Save (progress + complete)
+### Step 11 — Node 5: Train & Save (overlay + complete)
 
 **Create:**
 - `workers/training_worker.py` — calls `orchestrator.run_training(selected_timepoint)`
-- Update `views/train_view.py`:
-  - Page 0 = indeterminate `QProgressBar` + `TrainingWorker`
-  - Page 1 = read-only `QLineEdit` showing `model_filepath`; grid of `TopomapWidget` (one per decoder task using `spatial_patterns[task]` + `mne_info`)
+- Update `views/train_view.py`: single complete view = read-only `QLineEdit` showing `model_filepath`; grid of `TopomapWidget` (one per decoder task using `spatial_patterns[task]` + `mne_info`).
 
-**Wire:** Node 5 button → `TrainingWorker(orchestrator, Phase1Screen._selected_timepoint)` → `result_ready` → build topomap grid → Page 1.
+**Wire:** Node 5 button → emit `loading_requested("Training decoders…")` → start `TrainingWorker(orchestrator, Phase1Screen._selected_timepoint)` → on `result_ready`: hide overlay, build the topomap grid.
 
-**Test (full pipeline):** run all 12 steps end-to-end: settings → load → preprocess → ICA review → evaluate → confirm timepoint → train → topomaps render; confirm `decoder_pipeline.joblib` exists in output dir; confirm no UI freeze at any stage.
+**Test (full pipeline):** run all steps end-to-end: settings → load → preprocess → ICA review → evaluate → confirm timepoint → train → topomaps render; confirm `decoder_pipeline.joblib` exists in output dir; confirm no UI freeze at any stage.
+
+---
+
+### Step 12 — (Optional) Embedded progress pages for Nodes 3 & 4
+
+Purely a UX polish, may be skipped. Replace the shared `LoadingOverlay` for the preprocessing-step1, preprocessing-step2, and evaluation calls with embedded indeterminate `QProgressBar` pages inside the inner stack, so that progress lives on the workspace card itself rather than as a transient block. If this step is taken, the "Loading Overlay" section above must be updated to allow the carve-out, and the Node 3 / Node 4 detail sections must add the progress pages back.
 
 ---
 
@@ -357,7 +356,7 @@ loading_done = Signal()
 
 `Phase1Screen` connects them once in `__init__` to its own `show_loading(message)` / `hide_loading()`. Views never reference `Phase1Screen` directly — this matches the existing `session_ready` pattern and keeps view ↔ screen coupling one-way.
 
-Views should not introduce their own in-view `QProgressBar` for transient backend calls; use the shared overlay instead. (Indeterminate `QProgressBar`s embedded directly in inner stacked sub-pages — e.g. Node 3 page 0, Node 4 page 0 — are still appropriate when the progress is part of the page's state rather than a transient block.)
+Every blocking backend call in Phase 1 routes through this overlay via `loading_requested` / `loading_done`. Views should not introduce their own in-view `QProgressBar` for transient backend calls; use the shared overlay instead. Embedded indeterminate progress pages inside inner stacked sub-pages are deferred — see the optional final step in the Serial Build Plan.
 
 ---
 
@@ -432,14 +431,15 @@ Nodes 2–5 adopt the same protocol as they are implemented (e.g. `LoadDataView.
 
 ### Node 3 — Preprocessing (`preprocessing_view.py`)
 
-Inner `QStackedWidget` with 4 pages:
+Inner `QStackedWidget` with 3 pages. Both blocking calls (`run_step1_prepare_ica`, `run_step2_finish_pipeline`) are wrapped by the shared `LoadingOverlay`; the view does not render its own progress page.
 
 | Page | What's shown | What happens |
 |---|---|---|
-| 0 | Indeterminate `QProgressBar` + status label | `PreprocessingStep1Worker` calls `run_step1_prepare_ica()` |
-| 1 | ICA review grid (4 columns, N rows) | User reviews and toggles components |
-| 2 | Indeterminate `QProgressBar` + status label | `PreprocessingStep2Worker` calls `run_step2_finish_pipeline(excluded)` |
-| 3 | Stats: epochs retained, components removed | `journey_panel.advance(3)` called |
+| 0 | "Ready to Preprocess" landing: big play-circle icon, title, descriptive text, in-view "Start Preprocessing" primary button | User clicks Start → `PreprocessingStep1Worker` runs (overlay covers workspace) |
+| 1 | ICA review grid (4 columns, N rows) + in-view "Confirm" button | User reviews and toggles components; Confirm triggers `PreprocessingStep2Worker` (overlay covers workspace) |
+| 2 | Stats: epochs retained, components removed | `journey_panel.advance(3)` called |
+
+Both intra-node transitions (Page 0 → 1 and 1 → 2) are driven by **in-view buttons**, not the journey-panel button — Node 3's mockup explicitly hands the trigger to the workspace. The journey-panel Node 3 button is reserved for the final "Continue to Evaluation" action wired in the Step 7 follow-up once Page 2 renders.
 
 **`ICAComponentCard(QWidget)` — Page 1:**
 - `FigureCanvas` (matplotlib) with two axes: left = `mne.viz.plot_topomap(ica.get_components()[:, i], ica.info)`, right = ICA time series.
@@ -454,12 +454,9 @@ The time series axis requires `ica.get_sources(raw).get_data()[i, :500]`, but `r
 
 ### Node 4 — Evaluation (`evaluation_view.py`)
 
-Inner `QStackedWidget` with 2 pages:
+Single results page (no inner stack — evaluation runs through the shared `LoadingOverlay`, then results render directly).
 
-**Page 0 — Running:**
-`EvaluationWorker` calls `orchestrator.run_evaluation()`. On completion → Page 1.
-
-**Page 1 — Results (`QTabWidget`):**
+**Results (`QTabWidget`):**
 
 *Summary tab:*
 - `AUCChart`: one colored `matplotlib` line per decoder (`tasks[name]["diagonal_auc"]` vs `times`). Vertical dashed line at `suggested_timepoint`.
@@ -476,12 +473,9 @@ Inner `QStackedWidget` with 2 pages:
 
 ### Node 5 — Train & Save (`train_view.py`)
 
-Inner `QStackedWidget` with 2 pages:
+Single complete page (no inner stack — training runs through the shared `LoadingOverlay`, then the complete view renders directly).
 
-**Page 0 — Running:**
-`TrainingWorker` calls `orchestrator.run_training(selected_timepoint)`. On completion → Page 1.
-
-**Page 1 — Complete:**
+**Complete:**
 - Read-only `QLineEdit` showing `model_filepath`.
 - Grid of `TopomapWidget` instances, one per task: `mne.viz.plot_topomap(spatial_patterns[task], mne_info)`.
 - Summary: number of decoders trained, selected timepoint in ms.
@@ -549,11 +543,10 @@ When implementation begins, verify end-to-end:
 
 1. `python -m frontend.main` — window opens immediately (no dialogs).
 2. **Node 1**: pick config YAML + output dir → settings sections populate → "Continue" becomes enabled → click → trail animates to Node 2.
-3. **Node 2**: pick data dir → "Load Data" → indeterminate bar runs → trail animates to Node 3.
-4. **Node 3 step 1**: "Run Preprocessing" → progress → ICA grid renders with real MNE topomaps.
-5. **Node 3 step 2**: toggle rejections → "Confirm" → progress → complete view with epoch stats → trail to Node 4.
-6. **Node 4 step 1**: "Run Evaluation" → progress → AUC chart renders with clickable timepoints.
-7. **Node 4 step 2**: click timepoint → stats update → "Confirm Timepoint" → trail to Node 5.
-8. **Node 5**: "Run Training" → progress → spatial topomaps render per decoder.
-9. `decoder_pipeline.joblib` exists in the output directory.
-10. No UI freeze during any backend call (main thread always responsive).
+3. **Node 2**: pick data dir → "Load Data" → shared overlay shows → trail animates to Node 3.
+4. **Node 3 step 1**: "Run Preprocessing" → overlay shows → ICA grid renders with real MNE topomaps when overlay clears.
+5. **Node 3 step 2**: toggle rejections → "Confirm" → overlay shows → complete view with epoch stats → trail to Node 4.
+6. **Node 4**: "Run Evaluation" → overlay shows → AUC chart renders with clickable timepoints; click timepoint → stats update → "Confirm Timepoint" → trail to Node 5.
+7. **Node 5**: "Run Training" → overlay shows → spatial topomaps render per decoder.
+8. `decoder_pipeline.joblib` exists in the output directory.
+9. No UI freeze during any backend call (main thread always responsive).
