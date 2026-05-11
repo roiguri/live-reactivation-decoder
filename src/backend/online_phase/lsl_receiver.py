@@ -59,7 +59,7 @@ def split_eeg_and_markers(
     eeg_channel_count: int = DEFAULT_EEG_CHANNEL_COUNT,
     trigger_channel_index: int = DEFAULT_TRIGGER_CHANNEL_INDEX,
     previous_trigger_code: int = 0,
-) -> tuple[np.ndarray, list[int], int]:
+) -> tuple[np.ndarray, list[tuple[int, int]], int]:
     """Split the trigger channel from EEG samples and decode marker edges."""
 
     chunk = np.asarray(samples, dtype=float)
@@ -86,10 +86,13 @@ def split_eeg_and_markers(
             f"got {eeg_chunk.shape[1]}."
         )
 
-    markers, last_code = extract_markers_from_trigger_channel(
-        raw_trigger_values,
-        previous_trigger_code=previous_trigger_code,
-    )
+    markers: list[tuple[int, int]] = []
+    last_code = previous_trigger_code
+    for sample_index, raw_value in enumerate(raw_trigger_values):
+        trigger_code = decode_trigger_value(raw_value)
+        if trigger_code != 0 and trigger_code != last_code:
+            markers.append((sample_index, trigger_code))
+        last_code = trigger_code
     return eeg_chunk, markers, last_code
 
 
@@ -259,13 +262,13 @@ class LSLReceiver:
         self._last_trigger_code = 0
         logger.info("LSLReceiver started successfully")
 
-    def pull_new_data(self) -> tuple[np.ndarray, np.ndarray, list[int]]:
+    def pull_new_data(self) -> tuple[np.ndarray, np.ndarray, list[tuple[float, int]]]:
         if self.inlet is None:
             raise RuntimeError("LSLReceiver.start() must be called before pull_new_data().")
 
         timestamps_parts: list[np.ndarray] = []
         eeg_parts: list[np.ndarray] = []
-        markers: list[int] = []
+        markers: list[tuple[float, int]] = []
 
         while True:
             samples, timestamps = self.inlet.pull_chunk(timeout=self.pull_timeout_sec)
@@ -292,7 +295,10 @@ class LSLReceiver:
 
             timestamps_parts.append(timestamps_array)
             eeg_parts.append(eeg_chunk)
-            markers.extend(chunk_markers)
+            markers.extend(
+                (float(timestamps_array[sample_index]), code)
+                for sample_index, code in chunk_markers
+            )
 
         if not timestamps_parts:
             return (

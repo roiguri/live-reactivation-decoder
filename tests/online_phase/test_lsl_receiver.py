@@ -68,7 +68,7 @@ def test_split_eeg_and_markers_removes_trigger_channel():
 
     assert eeg_chunk.shape == (3, 64)
     assert np.array_equal(eeg_chunk[:, 0], np.array([0.0, 1.0, 2.0]))
-    assert markers == [1]
+    assert markers == [(1, 1)]
     assert last_code == 0
 
 
@@ -93,7 +93,18 @@ def test_pull_new_data_drains_available_chunks_and_decodes_markers():
 
     assert np.array_equal(timestamps, np.array([1.0, 1.001, 1.002, 1.003, 1.004]))
     assert eeg_chunk.shape == (5, 64)
-    assert markers == [1, 2]
+    assert markers == [(1.001, 1), (1.004, 2)]
+
+
+def test_pull_new_data_marker_timestamp_matches_trigger_sample():
+    chunk = _chunk_from_trigger_values([0, 0, 7 << 8, 0])
+    timestamps_in = [10.0, 10.001, 10.002, 10.003]
+    receiver = LSLReceiver(launch_proxy=False)
+    receiver.inlet = FakeInlet([(chunk, timestamps_in)])
+
+    _, _, markers = receiver.pull_new_data()
+
+    assert markers == [(timestamps_in[2], 7)]
 
 
 def test_pull_new_data_preserves_trigger_state_across_calls():
@@ -105,8 +116,21 @@ def test_pull_new_data_preserves_trigger_state_across_calls():
     receiver.inlet = FakeInlet([(_chunk_from_trigger_values([1 << 8, 0, 1 << 8]), [1.003, 1.004, 1.005])])
     _, _, markers_second = receiver.pull_new_data()
 
-    assert markers_first == [1]
-    assert markers_second == [1]
+    assert markers_first == [(1.001, 1)]
+    assert markers_second == [(1.005, 1)]
+
+
+def test_pull_new_data_held_trigger_across_calls_emits_once():
+    receiver = LSLReceiver(launch_proxy=False)
+    receiver.inlet = FakeInlet([(_chunk_from_trigger_values([0, 1 << 8, 1 << 8]), [1.0, 1.001, 1.002])])
+
+    _, _, markers_first = receiver.pull_new_data()
+
+    receiver.inlet = FakeInlet([(_chunk_from_trigger_values([1 << 8, 1 << 8]), [1.003, 1.004])])
+    _, _, markers_second = receiver.pull_new_data()
+
+    assert markers_first == [(1.001, 1)]
+    assert markers_second == []
 
 
 def test_stop_closes_inlet_when_present():
@@ -142,7 +166,7 @@ def test_pull_new_data_skips_malformed_chunks_gracefully(caplog):
     # Should have data from good chunks only (2 + 2 samples)
     assert timestamps.shape[0] == 4
     assert eeg_chunk.shape == (4, 64)
-    assert markers == [1, 2]
+    assert markers == [(1.001, 1), (1.005, 2)]
 
     # Should have logged a warning about the malformed chunk
     assert "Malformed chunk received" in caplog.text
