@@ -366,29 +366,29 @@ Future decisions discovered mid-implementation that aren't worth blocking on go 
 - `online_decoder/tests/online_phase/test_prediction_logger.py` (NEW)
 
 **Implementation:**
-- [ ] `PredictionLogger(QObject)`: ctor `(out_path, task_names, target_sfreq, parent=None)`.
-- [ ] On init: open `out_path` in `"w"` mode (line-buffered), write header `timestamp,marker_code,<task_1>,<task_2>,...` using `csv.writer`.
-- [ ] Slot `on_predictions(predictions, timestamps, markers)`:
-  - [ ] For each row `i`: build row `[timestamps[i], <code or "">, predictions[task][i] for task in task_names]`.
-  - [ ] Marker matching: tolerance = `0.5 / target_sfreq`; nearest marker within tolerance gets attached to the row.
-  - [ ] `csv.writer.writerow(row)`; flush after each batch.
-- [ ] `close()`: flush + close; idempotent.
+- [x] `PredictionLogger(QObject)`: ctor `(out_path, task_names, target_sfreq, parent=None)`.
+- [x] On init: open `out_path` in `"w"` mode (line-buffered), write header `timestamp,marker_code,<task_1>,<task_2>,...` using `csv.writer`.
+- [x] Slot `on_predictions(predictions, timestamps, markers)`:
+  - [x] For each row `i`: build row `[timestamps[i], <code or "">, predictions[task][i] for task in task_names]`.
+  - [x] Marker matching: tolerance = `0.5 / target_sfreq`; nearest marker within tolerance gets attached to the row.
+  - [x] `csv.writer.writerow(row)`; flush after each batch.
+- [x] `close()`: flush + close; idempotent.
 
 **Tests:**
-- [ ] Construct with `tmp_path / "session.csv"`, feed one batch (3 rows, empty markers); assert header + 3 rows with empty `marker_code`.
-- [ ] Feed a batch where one marker's timestamp matches a row's timestamp; assert that row's `marker_code` is the trigger code.
-- [ ] Feed two batches sequentially; assert rows accumulate in input order.
-- [ ] Call `close()` twice; assert no exception.
-- [ ] Assert header column order matches `task_names` order.
+- [x] Construct with `tmp_path / "session.csv"`, feed one batch (3 rows, empty markers); assert header + 3 rows with empty `marker_code`.
+- [x] Feed a batch where one marker's timestamp matches a row's timestamp; assert that row's `marker_code` is the trigger code.
+- [x] Feed two batches sequentially; assert rows accumulate in input order.
+- [x] Call `close()` twice; assert no exception.
+- [x] Assert header column order matches `task_names` order.
 
 **TODOs in code:**
-- [ ] `# TODO(open): see docs/stream_worker_design.md Open §1 — wire tolerance from SettingsManager` at the tolerance calculation site.
+- [x] `# TODO(open): see docs/stream_worker_design.md Open §1 — wire tolerance from SettingsManager` at the tolerance calculation site.
 
 **Verify:**
-- [ ] `pytest online_decoder/tests/online_phase/test_prediction_logger.py -v` green.
+- [x] `pytest online_decoder/tests/online_phase/test_prediction_logger.py -v` green.
 
 **Commit:**
-- [ ] `git commit -m "feat(online_phase): add PredictionLogger"`
+- [x] `git commit -m "feat(online_phase): add PredictionLogger"`
 
 ---
 
