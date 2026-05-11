@@ -400,33 +400,33 @@ Future decisions discovered mid-implementation that aren't worth blocking on go 
 - `online_decoder/requirements-dev.txt` (add `pytest-qt` if missing)
 
 **Implementation:**
-- [ ] Add `pytest-qt` to `requirements-dev.txt` if not already present.
-- [ ] `StreamWorker(QThread)`: ctor `(receiver, preprocessor, inference_engine, batch_size_samples=40, poll_interval_sec=0.01, parent=None)`.
-- [ ] Signal: `prediction_ready = pyqtSignal(dict, np.ndarray, list)`.
-- [ ] Internal state: `_batch_ts`, `_batch_eeg`, `_pending_markers`, `_stop_requested`.
-- [ ] `run()` loop body (see class spec §1 above for steps):
-  - [ ] pull → accumulate → extend `_pending_markers`
-  - [ ] while accumulated ≥ batch_size: pop batch, preprocess, predict, take ripe markers, emit
-  - [ ] short sleep if no batch was ready
-  - [ ] honor `_stop_requested`
-- [ ] `stop()`: set `_stop_requested = True`.
+- [x] Add `pytest-qt` to `requirements-dev.txt` if not already present.
+- [x] `StreamWorker(QThread)`: ctor `(receiver, preprocessor, inference_engine, batch_size_samples=40, poll_interval_sec=0.01, parent=None)`.
+- [x] Signal: `prediction_ready = pyqtSignal(dict, np.ndarray, list)`.
+- [x] Internal state: `_batch_ts`, `_batch_eeg`, `_pending_markers`, `_stop_requested`.
+- [x] `run()` loop body (see class spec §1 above for steps):
+  - [x] pull → accumulate → extend `_pending_markers`
+  - [x] while accumulated ≥ batch_size: pop batch, preprocess, predict, take ripe markers, emit
+  - [x] short sleep if no batch was ready
+  - [x] honor `_stop_requested`
+- [x] `stop()`: set `_stop_requested = True`.
 
 **Tests:**
-- [ ] Build a `FakeReceiver` exposing `pull_new_data()` returning a scripted sequence of chunks (some empty, some with markers).
-- [ ] Build a deterministic fake `LiveInferenceEngine` (returns input-dependent dict).
-- [ ] Use real `OnlinePreprocessor` with simple settings.
-- [ ] `qtbot.waitSignal(worker.prediction_ready)` — assert payload types and shapes match the contract.
-- [ ] Below-threshold accumulation does not emit until a batch is ready.
-- [ ] Marker with `ts <= batch_end_ts` is included in that emission; marker with `ts > batch_end_ts` is deferred to the next emission.
-- [ ] `worker.stop()` → `worker.wait(timeout=2000)` returns True; thread is no longer running.
+- [x] Build a `FakeReceiver` exposing `pull_new_data()` returning a scripted sequence of chunks (some empty, some with markers).
+- [x] Build a deterministic fake `LiveInferenceEngine` (returns input-dependent dict).
+- [x] Use real `OnlinePreprocessor` with simple settings.
+- [x] `qtbot.waitSignal(worker.prediction_ready)` — assert payload types and shapes match the contract.
+- [x] Below-threshold accumulation does not emit until a batch is ready.
+- [x] Marker with `ts <= batch_end_ts` is included in that emission; marker with `ts > batch_end_ts` is deferred to the next emission.
+- [x] `worker.stop()` → `worker.wait(timeout=2000)` returns True; thread is no longer running.
 
 **TODOs in code:** none.
 
 **Verify:**
-- [ ] `pytest online_decoder/tests/online_phase/test_stream_worker.py -v` green.
+- [x] `pytest online_decoder/tests/online_phase/test_stream_worker.py -v` green.
 
 **Commit:**
-- [ ] `git commit -m "feat(online_phase): add StreamWorker"`
+- [x] `git commit -m "feat(online_phase): add StreamWorker"`
 
 ---
 
