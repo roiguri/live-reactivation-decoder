@@ -72,7 +72,7 @@ online_decoder/src/frontend/
 │   ├── journey_panel.py           # JourneyNode + JourneyPanel (right sidebar, 320 px)
 │   ├── loading_overlay.py         # Semi-transparent overlay (message + indeterminate bar), parented to workspace card
 │   ├── shared.py                  # FilePicker, ReadOnlyField, SectionCard
-│   ├── ica_component_card.py      # Card: matplotlib topomap + waveform + keep/reject toggle
+│   ├── ica_component_card.py      # Card: matplotlib topomap + keep/reject toggle (richer diagnostics deferred)
 │   └── charts/
 │       ├── __init__.py
 │       ├── auc_chart.py           # FigureCanvas: AUC curves + clickable timepoint marker
@@ -229,7 +229,7 @@ Combines the original Step 6 (preprocessing-step1 worker) and Step 7 (ICA compon
 
 **Create:**
 - `workers/preprocessing_worker.py` — `PreprocessingStep1Worker` calls `orchestrator.run_step1_prepare_ica()`; plus a no-op `PreprocessingStep2Worker` placeholder (immediately emits `result_ready({})`) so the Page 0 → Page 1 transition can be exercised end-to-end.
-- `widgets/ica_component_card.py` — `ICAComponentCard(QWidget)`: embedded `FigureCanvas` with two axes (left: `mne.viz.plot_topomap(ica.get_components()[:, i], ica.info)`, right: time-series placeholder pending the backend exposure noted below); amber/muted color badge; keep/reject `QPushButton` (checkable).
+- `widgets/ica_component_card.py` — `ICAComponentCard(QWidget)`: embedded `FigureCanvas` with a single axis showing `mne.viz.plot_topomap(ica.get_components()[:, i], ica.info)`; amber/muted color badge; keep/reject `QPushButton` (checkable). Per-component time series, PSD, and ICLabel labels are deferred — see "Deferred per-component enhancements" under Node 3 detail.
 - `views/preprocessing_view.py` (replace stub) — inner `QStackedWidget` with **3 pages**:
   - Page 0 = "Ready to Preprocess" landing (play-circle icon, title, description, in-view "Start Preprocessing" button).
   - Page 1 = ICA review grid (`QScrollArea` → 4-column grid of `ICAComponentCard` built from `(ica_obj, suggested_components)`); "Confirm" button below grid.
@@ -240,7 +240,7 @@ Combines the original Step 6 (preprocessing-step1 worker) and Step 7 (ICA compon
 - Confirm (Page 1) → collect rejected indices → emit `loading_requested("Finishing preprocessing pipeline…")` → start placeholder `PreprocessingStep2Worker` → on `result_ready({})`: hide overlay, advance inner stack to Page 2 stub.
 - The journey-panel Node 3 action is still wired to `trigger_start` for parity (so the Ready Protocol contract holds), and `ready_changed` follows the same gate as the in-view Start button: True while the user is on the Ready page with data loaded, False once preprocessing starts or completes. Clicking either button is equivalent.
 
-**Backend data gap (unchanged from the prior plan):** the time-series axis on each ICA card requires `ica.get_sources(raw).get_data()[i, :500]`, but `raw` is private to the orchestrator. The frontend must not access orchestrator internals; render the topomap axis only and leave a placeholder for the time series until a backend exposure plan is in place.
+**Card scope:** topomap + suggested/keep badge + Keep/Reject toggle only. The richer per-component signals (time series, PSD, ICLabel category) are explicitly deferred — see "Deferred per-component enhancements" under Node 3 detail for the rationale and recommended ordering.
 
 **Test:** after Node 2, the workspace shows the Ready page → click in-view "Start Preprocessing" → overlay covers the workspace card during real preprocessing → grid renders on Page 1 with real MNE topomaps; toggling keep/reject changes the card style; Confirm → overlay shows briefly → Page 2 stub.
 
@@ -442,13 +442,28 @@ Inner `QStackedWidget` with 3 pages. Both blocking calls (`run_step1_prepare_ica
 Both intra-node transitions (Page 0 → 1 and 1 → 2) are driven by **in-view buttons**, not the journey-panel button — Node 3's mockup explicitly hands the trigger to the workspace. The journey-panel Node 3 button is reserved for the final "Continue to Evaluation" action wired in the Step 7 follow-up once Page 2 renders.
 
 **`ICAComponentCard(QWidget)` — Page 1:**
-- `FigureCanvas` (matplotlib) with two axes: left = `mne.viz.plot_topomap(ica.get_components()[:, i], ica.info)`, right = ICA time series.
+- `FigureCanvas` (matplotlib) with a single axis showing `mne.viz.plot_topomap(ica.get_components()[:, i], ica.info)`.
 - Color badge: "SUGGESTED REJECT" (amber) or "KEEP" (gray), set from `suggested_components`.
 - Keep / Reject toggle button (`QPushButton`, checkable).
 - "Confirm" button below the grid reads all toggle states and transitions to Page 2.
 
-**⚠ Backend data gap — resolve before implementing Step 7:**
-The time series axis requires `ica.get_sources(raw).get_data()[i, :500]`, but `raw` is private to the orchestrator and not returned by any current API call. **The frontend must not access the orchestrator's internals or import backend classes to work around this.** Instead, open a separate backend plan to decide how to expose the data — for example, `run_step1_prepare_ica()` could return a third value (a pre-computed `(n_components, n_samples)` source array), or the orchestrator could gain a `get_ica_sources_preview() -> np.ndarray` method. Until that plan is written and the orchestrator updated, implement Step 7 with the topomap axis only and leave the time series axis as a placeholder.
+#### Deferred per-component enhancements
+
+The card intentionally shows only the topomap plus the suggested/keep badge in the current implementation. Three richer per-component signals were considered and are deferred — they should be designed together rather than landed piecemeal, because they all hang off the same backend exposure point (the dict returned by `run_step1_prepare_ica`). The in-code anchor is the TODO block at the top of `widgets/ica_component_card.py`.
+
+1. **Per-component time series** — `ica.get_sources(raw).get_data()[i, :N]`. Visually distinguishes blinks (sharp transients) / ECG (rhythmic) / muscle (broadband). Requires backend exposure: `raw` is private to the orchestrator and the frontend must not reach for it directly. Likely shape: extend the diagnostics dict on each component with a `sources_short` field (first ~2 s for a card glance) and optionally `sources_long` for a future inspect dialog.
+
+2. **Per-component PSD** — frequency-domain plot. Single most informative signal after the topomap for triage: line-noise spikes at 50/60 Hz, eye blinks concentrate <4 Hz, muscle is broadband >30 Hz, brain components show alpha (~10 Hz). Cheap to compute backend-side (FFT on the source). Card real estate (260×240) won't fit a readable PSD inline alongside the topomap — likely belongs in an `ICAComponentInspectDialog` opened by an "Inspect" affordance on each card.
+
+3. **ICLabel category + confidence** — `mne-icalabel` classifies each component as `brain / muscle / eye / heart / line_noise / channel_noise / other` with a 7-way probability vector. Surfaces as a coloured class badge **alongside** the existing amber "SUGGESTED REJECT" badge (not replacing it — the two signals are complementary). **Caveats before adopting:** ICLabel was trained on a specific data preparation (1–100 Hz bandpass, extended-infomax ICA). Our pipeline currently uses a narrower bandpass and `fastica`, so ICLabel runs off-distribution and its confidences are miscalibrated. Two known fixes:
+   - One-line config switch: ICA method `fastica` → `picard` with `fit_params={'ortho': False, 'extended': True}` (equivalent to extended infomax, faster, MNE-recommended).
+   - Pipeline reorder so the production low-pass is applied **after** ICA fit, freeing ICA to see the wider band ICLabel expects. This is a deeper change to the preprocessor stage ordering.
+
+   Until those land, ICLabel outputs would be hints, not authoritative. The product question: should the UI surface raw probabilities (requires the fixes above) or coarse buckets ("likely eye / likely brain / uncertain") that don't make false-precision claims?
+
+**Recommended order when picked up:** (1) make the backend decision and extend the diagnostics dict returned by `run_step1_prepare_ica` with whichever per-component fields the UI will consume; (2) build the inspect dialog scaffolding for the heavier visuals (PSD, longer time series); (3) add the overview-card badges (ICLabel category) last, once the backend can produce calibrated outputs.
+
+**Frontend rule (unchanged):** Do **not** access `raw` via `session.offline._raw` or any other orchestrator-internal field. The fix for every gap above belongs in the backend, documented and reviewed before the frontend step that needs it is implemented.
 
 ---
 
@@ -517,7 +532,7 @@ These are open questions that affect the robustness of the app but are not block
 
 `AppSession` (`src/backend/session.py`) is the **only** backend class the frontend may import. All UI code reaches the orchestrator via `session.offline`. No widget, view, or worker may import or instantiate `OfflineOrchestrator`, `OfflinePreprocessor`, `ModelEvaluator`, `ModelTrainer`, or `SettingsManager` directly.
 
-**If data the UI needs is not exposed by the orchestrator's current API, stop and write a separate backend plan.** Do not work around the gap by importing backend internals, accessing private attributes, or adding temporary shims in the frontend. The fix belongs in the backend, documented and reviewed before the frontend step that needs it is implemented. An example of this pattern is the ICA time series data needed by `ICAComponentCard` (see Step 7 above).
+**If data the UI needs is not exposed by the orchestrator's current API, stop and write a separate backend plan.** Do not work around the gap by importing backend internals, accessing private attributes, or adding temporary shims in the frontend. The fix belongs in the backend, documented and reviewed before the frontend step that needs it is implemented. The ICA time-series / PSD / ICLabel diagnostics needed by `ICAComponentCard` are the canonical example — see "Deferred per-component enhancements" under Node 3 detail.
 
 ### Error handling
 
