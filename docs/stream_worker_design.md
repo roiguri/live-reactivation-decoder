@@ -275,7 +275,7 @@ To deliver per-sample-accurate marker timestamps, two committed files change.
 - Existing tests under `online_decoder/tests/online_phase/test_lsl_receiver.py` (the `FakeInlet` / `FakePylslModule` tests) assert on the marker return type. Update assertions to expect `list[tuple[float, int]]` instead of `list[int]`.
 - Add at least one new case asserting marker timestamps line up with the right sample (synthetic chunk where a trigger fires at a known sample index → assert the returned `ts` equals the corresponding `timestamps_array` entry).
 
-**Compatibility:** Nothing else in the committed codebase consumes `pull_new_data()` (StreamWorker is the only planned consumer), so this is a contained break.
+**Compatibility:** Nothing else in the committed codebase consumes `pull_new_data()` directly (`StreamWorker` is the intended consumer), so this is a contained break.
 
 ## `docs/backend_architecture.md` changes
 
@@ -466,8 +466,8 @@ Future decisions discovered mid-implementation that aren't worth blocking on go 
 - [x] `live.stop()` then `live.stop()` again — no duplicate stop/close calls.
 
 **TODOs in code:**
-- [x] `# TODO(open): see docs/stream_worker_design.md Open §2 — accept in-memory DecoderPipelineArtifact` at the artifact load site.
-- [x] `# TODO(open): see docs/stream_worker_design.md Open §3 — read LSL stream name / target_sfreq from SettingsManager once Phase 2 config schema is defined` at the receiver/preprocessor construction site.
+- [x] `# TODO(open): Avoid unnecessary disk reload when Phase 1 already has an in-memory DecoderPipelineArtifact...` at the artifact load site.
+- [x] `# TODO(open): Stop hardcoding default LSLReceiver settings once Phase 2 config defines stream name/type...` at the receiver construction site.
 
 **Verify:**
 - [x] `pytest tests/online_phase tests/test_session_live_stream.py -q` green.
@@ -498,7 +498,7 @@ Future decisions discovered mid-implementation that aren't worth blocking on go 
 - [ ] `python online_decoder/scripts/smoke_stream_worker.py --duration 5 --log /tmp/smoke.csv --pipeline <path>` against a fake/replayed LSL stream → CSV produced, row count ≈ `duration × target_sfreq`, header matches task names, timestamps monotonic, ≥1 marker code present when triggers were replayed.
 
 **Commit:**
-- [ ] `git commit -m "feat(scripts): add headless StreamWorker smoke script"`
+- [x] `git commit -m "feat(scripts): add headless StreamWorker smoke script"`
 
 ---
 
@@ -510,10 +510,10 @@ Future decisions discovered mid-implementation that aren't worth blocking on go 
 - `online_decoder/CLAUDE.md` (update Current Backend Scope)
 
 **Implementation:**
-- [ ] Replace the tentative StreamWorker sketch in [backend_architecture.md:1136-1202](online_decoder/docs/backend_architecture.md#L1136-L1202) with the final spec from `stream_worker_design.md` §1 (constructor, signal, loop body summary, threading guarantees).
-- [ ] Add a new section `## Backend → Frontend contract: live decoder output` after the StreamWorker section, copying the contract block from `stream_worker_design.md`.
-- [ ] In `Phase2_Implementation_Plan.md`: tick off StreamWorker, add and tick PredictionLogger and `AppSession.build_live_stream_session(...)`.
-- [x] In `CLAUDE.md`: update "Current Backend Scope" — StreamWorker, LiveStreamSession, PredictionLogger, and `AppSession.build_live_stream_session(...)` are the target backend scope; remove "next planned" note for StreamWorker.
+- [x] Replace the tentative StreamWorker sketch in [backend_architecture.md:1136-1202](online_decoder/docs/backend_architecture.md#L1136-L1202) with the final spec from `stream_worker_design.md` §1 (constructor, signal, loop body summary, threading guarantees).
+- [x] Add a new section `## Backend → Frontend contract: live decoder output` after the StreamWorker section, copying the contract block from `stream_worker_design.md`.
+- [x] In `Phase2_Implementation_Plan.md`: tick off StreamWorker, add and tick PredictionLogger and `AppSession.build_live_stream_session(...)`.
+- [x] In `CLAUDE.md`: update "Current Backend Scope" — StreamWorker, LiveStreamSession, PredictionLogger, and `AppSession.build_live_stream_session(...)` are the current backend scope; remove "next planned" note for StreamWorker.
 
 **Tests:** none (documentation only).
 

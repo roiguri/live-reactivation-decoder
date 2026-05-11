@@ -49,7 +49,8 @@ StreamWorker.run()
 - `[x]` `LiveInferenceEngine` receives unwrapped models/metadata and predicts positive-class probabilities.
 - `[x]` `PredictionLogger` CSV sink is implemented.
 - `[x]` `StreamWorker` is implemented as the injected-dependency micro-batch loop.
-- `[ ]` Session-level composition needs refactor to the target API: `AppSession.build_live_stream_session(...) -> LiveStreamSession`.
+- `[x]` Session-level composition is implemented as `AppSession.build_live_stream_session(...) -> LiveStreamSession`.
+- `[x]` `scripts/smoke_stream_worker.py` exists for headless worker/logger smoke checks.
 - `[x]` Phase 1 sample rate locked: configurable via `resample.target_rate` in YAML (default 256 Hz). `online_state` schema locked.
 
 ## Component Plan
@@ -210,7 +211,7 @@ engine = LiveInferenceEngine(
 
 ### `LiveStreamSession` - Online Lifecycle
 
-**Status:** `[ ]` Target design; refactor current session composition to this API.
+**Status:** `[x]` Implemented in `online_decoder/src/backend/session.py`.
 
 **Responsibilities:**
 - Represent one composed live decoding run.
@@ -225,7 +226,7 @@ engine = LiveInferenceEngine(
 
 ### `AppSession.build_live_stream_session(...)` - Composition Boundary
 
-**Status:** `[ ]` Target API; replace the current `session.online`/handle shape.
+**Status:** `[x]` Implemented in `online_decoder/src/backend/session.py`.
 
 **Responsibilities:**
 - Keep `AppSession` as the only backend class imported by the frontend.
@@ -278,10 +279,11 @@ The artifact loader treats `online_state` as opaque. `LiveInferenceEngine` never
 4. `[x]` Implement `OnlinePreprocessor` with full test suite and benchmark.
 5. `[x]` Implement `StreamWorker`.
 6. `[x]` Implement `PredictionLogger`.
-7. `[ ]` Refactor session composition to `LiveStreamSession` and `AppSession.build_live_stream_session(...)`.
-8. `[ ]` Add latency logging to `StreamWorker`.
-9. `[ ]` Run replay-based dry run.
-10. `[ ]` Validate with the real lab LSL stream.
+7. `[x]` Refactor session composition to `LiveStreamSession` and `AppSession.build_live_stream_session(...)`.
+8. `[x]` Add headless `scripts/smoke_stream_worker.py`.
+9. `[ ]` Add latency logging to `StreamWorker`.
+10. `[ ]` Run replay-based dry run.
+11. `[ ]` Validate with the real lab LSL stream.
 
 ## Test Plan
 

@@ -650,7 +650,7 @@ Older full-window / `RingBuffer` descriptions are obsolete and are kept only in 
 - `OnlinePreprocessor` is implemented in code (`src/backend/online_phase/online_preprocessor.py`)
 - `LiveInferenceEngine` is implemented in code
 - `StreamWorker` and `PredictionLogger` are implemented in code
-- Target session composition: `AppSession.build_live_stream_session(...) -> LiveStreamSession`; do not introduce `OnlinePhase` or `session.online`
+- Session composition is implemented as `AppSession.build_live_stream_session(...) -> LiveStreamSession`; do not introduce `OnlinePhase` or `session.online`
 
 ### **Data Flow (Active Micro-Batch Design)**
 Startup/composition code loads the Phase 1 artifact once before the run:
@@ -739,12 +739,12 @@ and `metadata`. `OnlinePreprocessor` receives only `online_state`;
 * **Role:** Represents one composed live decoding run. It exposes `prediction_ready`, `start()`, and `stop()` so the frontend does not manage backend internals.
 * **Inputs:** constructed receiver, worker, and optional logger.
 * **Lifecycle:** `start()` calls `receiver.start()` then `worker.start()`. `stop()` calls `worker.stop()`, `worker.wait()`, `logger.close()` if present, then `receiver.stop()`. Both methods are idempotent.
-* **Status:** Target session API; replaces the current `session.online`/handle shape.
+* **Status:** Implemented in `src/backend/session.py`.
 
 #### **7. AppSession Phase 2 Factory**
 
 * **Role:** The app-level composition boundary. The frontend imports only `AppSession`.
-* **Target API:** `AppSession.build_live_stream_session(decoder_pipeline_path, log_path=None, batch_size_samples=40) -> LiveStreamSession`.
+* **API:** `AppSession.build_live_stream_session(decoder_pipeline_path, log_path=None, batch_size_samples=40) -> LiveStreamSession`.
 * **Responsibilities:** load the Phase 1 artifact, construct `LSLReceiver`, `OnlinePreprocessor`, `LiveInferenceEngine`, `StreamWorker`, and optional `PredictionLogger`, connect logger if needed, and return the stopped `LiveStreamSession`.
 
 ### Backend to Frontend Contract: Live Decoder Output
