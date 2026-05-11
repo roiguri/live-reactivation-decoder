@@ -108,14 +108,17 @@ class PreprocessingView(QWidget):
         center.setSpacing(0)
         center.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        icon = QLabel("▶")
-        icon.setFixedSize(96, 96)
-        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon.setStyleSheet(
-            f"background: #EFF6FF; color: {PRIMARY_BLUE}; "
-            f"border-radius: 48px; font-size: 36px;"
+        self._start_btn = QPushButton("▶")
+        self._start_btn.setFixedSize(96, 96)
+        self._start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._start_btn.setStyleSheet(
+            f"QPushButton {{ background: #EFF6FF; color: {PRIMARY_BLUE}; "
+            f"border: none; border-radius: 48px; font-size: 36px; }}"
+            f"QPushButton:hover {{ background: #DBEAFE; }}"
+            f"QPushButton:pressed {{ background: #BFDBFE; }}"
         )
-        center.addWidget(icon, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._start_btn.clicked.connect(self.trigger_start)
+        center.addWidget(self._start_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         center.addSpacing(28)
 
         title = QLabel("Ready to Preprocess")
@@ -129,7 +132,8 @@ class PreprocessingView(QWidget):
         center.addSpacing(10)
 
         desc = QLabel(
-            "Settings configured. Click Start to begin the preprocessing pipeline."
+            "Settings configured. Click the play button to begin "
+            "the preprocessing pipeline."
         )
         desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -137,12 +141,6 @@ class PreprocessingView(QWidget):
         desc.setFixedWidth(360)
         desc.setMinimumHeight(36)
         center.addWidget(desc, 0, Qt.AlignmentFlag.AlignHCenter)
-        center.addSpacing(24)
-
-        self._start_btn = QPushButton("Start Preprocessing")
-        self._start_btn.setProperty("class", "primary")
-        self._start_btn.clicked.connect(self.trigger_start)
-        center.addWidget(self._start_btn, 0, Qt.AlignmentFlag.AlignHCenter)
 
         layout.addLayout(center)
         layout.addStretch()
