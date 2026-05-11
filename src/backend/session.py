@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from PyQt6.QtCore import Qt
+
 from backend.core.settings_manager import SettingsManager
 from backend.offline_phase.orchestrator import OfflineOrchestrator
 from backend.online_phase.artifact_loader import load_decoder_pipeline_artifact
@@ -30,6 +32,11 @@ class LiveStreamSession:
     def prediction_ready(self) -> Any:
         """Forward the worker signal without exposing worker internals."""
         return self._worker.prediction_ready
+
+    @property
+    def error_occurred(self) -> Any:
+        """Forward worker runtime errors without exposing worker internals."""
+        return self._worker.error_occurred
 
     def start(self) -> None:
         """Start receiver and worker. Safe to call more than once."""
@@ -118,7 +125,10 @@ class AppSession:
                 task_names=list(artifact.models.keys()),
                 target_sfreq=preprocessor.target_sfreq,
             )
-            worker.prediction_ready.connect(logger.on_predictions)
+            worker.prediction_ready.connect(
+                logger.on_predictions,
+                Qt.ConnectionType.DirectConnection,
+            )
 
         return LiveStreamSession(
             _receiver=receiver,

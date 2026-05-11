@@ -89,6 +89,9 @@ prediction_ready = pyqtSignal(dict, np.ndarray, list)
 # (predictions: dict[task_name -> (n_rows,) float ndarray of P(class=1)],
 #  timestamps:  (n_rows,) float64 ndarray, LSL clock, monotonic non-decreasing,
 #  markers:     list[(timestamp: float, code: int)] — LSL clock, per-sample-accurate)
+
+error_occurred = pyqtSignal(str)        # worker/runtime failures
+latency_ready = pyqtSignal(dict)        # planned hardening: timing diagnostics
 ```
 
 **Public methods:**
@@ -114,6 +117,36 @@ prediction_ready = pyqtSignal(dict, np.ndarray, list)
 **Threading guarantee:** `prediction_ready` is connected with the default `Qt.AutoConnection`. When the receiving slot lives on a different thread (the UI thread), Qt uses a queued connection — the slot runs in the receiver's thread, not the worker's. Numpy arrays passed in the signal payload are shared by reference; we accept that and document that slots must NOT mutate them.
 
 **Does NOT know about:** artifact loading, config loading, plots, ring buffers, files, task display names, the UI thread, or the start/stop lifecycle of the receiver/logger.
+
+---
+
+## Post-basic validation and hardening
+
+The basic Phase 2 backend flow is considered implemented once replayed LSL data can run through `LiveStreamSession` and produce a prediction CSV. The following items are additions/hardening before experiment use, not prerequisites for the core architecture:
+
+1. **Error surfacing from `StreamWorker`.**
+   - Status: implemented in the working tree; commit pending.
+   - `StreamWorker.error_occurred = pyqtSignal(str)` reports unrecoverable receiver, preprocessing, batch accumulation, and inference failures.
+   - `LiveStreamSession.error_occurred` forwards the worker signal so callers do not reach into worker internals.
+   - The worker stops the loop cleanly after emitting the error.
+   - Tests: fake receiver/preprocessor/inference failures and malformed receiver payloads emit the error signal and stop the worker instead of silently killing the thread.
+
+2. **Latency/runtime diagnostics.**
+   - Track per-batch timings for pull, preprocessing, inference, total batch handling, and optionally signal/log writing.
+   - Emit a diagnostics payload such as `latency_ready = pyqtSignal(dict)` or log periodically.
+   - Tests: use deterministic fakes or monkeypatched timers to assert diagnostics fields exist and are non-negative.
+
+3. **Real Phase 1 artifact compatibility.**
+   - Add an explicit smoke/test path using a `decoder_pipeline.joblib` exported by `OfflineOrchestrator.run_training(...)`, not only a synthetic artifact.
+   - Verify that the exported artifact loads through `AppSession.build_live_stream_session(...)`, feature width matches live preprocessor output, and predictions contain finite probabilities for every task.
+   - This validates Phase 1 → Phase 2 artifact compatibility, not decoder scientific quality.
+
+4. **Replay and lab validation.**
+   - Replay validation: run `scripts/smoke_stream_worker.py` against `scripts/recordings/eeg_recording_with_trigger.xdf` and a compatible artifact; require nonzero rows, monotonic timestamps, expected task headers, and marker propagation.
+   - Real lab validation: repeat the smoke against the NeurOne/LSLProxy live stream on the decoding machine.
+
+5. **Decoder quality validation.**
+   - Out of scope for this backend plan. The backend can validate finite probabilities, task keys, shape, timestamps, and class labels; scientific decoder quality needs separate model/performance criteria.
 
 ---
 
@@ -163,7 +196,7 @@ Writes one row per timestamp. Marker codes are matched to rows by nearest-timest
 
 `AppSession` is the app-level orchestrator of orchestrators. The frontend imports only `AppSession`; `AppSession` owns `SettingsManager`, creates `session.offline` for Phase 1, and exposes `build_live_stream_session(...)` directly for Phase 2. Do not introduce a separate `OnlinePhase` namespace/class.
 
-`LiveStreamSession` is the object returned by the factory. It owns the lifecycle of one composed live run: start the receiver, start the worker, stop the worker, wait for the thread, close the optional logger, and stop the receiver. It may expose the worker's `prediction_ready` signal as a property, but the frontend should not need to reach into the worker for normal use.
+`LiveStreamSession` is the object returned by the factory. It owns the lifecycle of one composed live run: start the receiver, start the worker, stop the worker, wait for the thread, close the optional logger, and stop the receiver. It exposes the worker's `prediction_ready` and `error_occurred` signals as properties, but the frontend should not need to reach into the worker for normal use.
 
 **Proposed interface:**
 ```python
@@ -178,6 +211,11 @@ class LiveStreamSession:
     def prediction_ready(self):
         """Forward the worker signal without exposing worker internals."""
         return self._worker.prediction_ready
+
+    @property
+    def error_occurred(self):
+        """Forward worker runtime errors without exposing worker internals."""
+        return self._worker.error_occurred
 
     def start(self) -> None:
         """Start receiver and worker. Idempotent."""
@@ -226,11 +264,15 @@ This section is the exact thing the frontend partner builds against. Copy this v
 >
 > **Lifecycle:**
 > 1. Frontend calls `build_live_stream_session(...)` to get a `LiveStreamSession`.
-> 2. Frontend connects its UI-side slots to `live.prediction_ready`.
+> 2. Frontend connects its UI-side slots to `live.prediction_ready` and `live.error_occurred`.
 > 3. Frontend calls `live.start()`.
 > 4. On shutdown (e.g., window close), frontend calls `live.stop()`.
 >
-> **Signal:** `StreamWorker.prediction_ready = pyqtSignal(dict, np.ndarray, list)`
+> **Signals:**
+> - `StreamWorker.prediction_ready = pyqtSignal(dict, np.ndarray, list)`, exposed as `live.prediction_ready`.
+> - `StreamWorker.error_occurred = pyqtSignal(str)`, exposed as `live.error_occurred`.
+>
+> If `live.error_occurred` fires, the worker loop has exited but external resources are still owned by `LiveStreamSession`; caller code should still call `live.stop()` to close the logger and stop the receiver.
 >
 > **Payload:**
 > - `predictions: dict[str, np.ndarray]` — keys are task names (model identifiers from the loaded `DecoderPipelineArtifact`); values are `float32` arrays of shape `(n_rows,)`. Each value is `P(class=1)` for that task at that timestamp.
@@ -252,7 +294,7 @@ This section is the exact thing the frontend partner builds against. Copy this v
 > - Wiring code that calls `build_live_stream_session(...)`, connects slots, and manages `start()/stop()`.
 >
 > **What the frontend should NOT do:**
-> - Reach into `LiveStreamSession` private members or the underlying `StreamWorker`. Use `prediction_ready` and `start()/stop()` only.
+> - Reach into `LiveStreamSession` private members or the underlying `StreamWorker`. Use `prediction_ready`, `error_occurred`, and `start()/stop()` only.
 > - Block in slots — slots run on the UI thread.
 
 ---
@@ -313,6 +355,9 @@ online_decoder/scripts/
 | `LiveStreamSession` | Lifecycle unit | Fakes for receiver/worker/logger; assert start/stop order and idempotence. |
 | `AppSession.build_live_stream_session` | Construction smoke | Patch runtime dependencies, assert returned session exposes `prediction_ready` and `.stop()` is idempotent. |
 | End-to-end | Opt-in smoke | `scripts/smoke_stream_worker.py` plays back a recorded session against a fake LSL inlet; assert CSV row count matches expected after N seconds. |
+| Error handling | Unit/Qt integration | Fake receiver/preprocessor/inference exceptions and malformed receiver payloads; assert `error_occurred` emits and worker stops cleanly. Implemented in working tree; commit pending. |
+| Latency diagnostics | Unit/Qt integration | Deterministic timers/fakes; assert latency payload fields exist and values are non-negative. |
+| Phase 1 artifact compatibility | Smoke/integration | Use a real `decoder_pipeline.joblib` exported by `OfflineOrchestrator`; assert finite predictions for every task. |
 
 Tests live alongside existing tests; smoke script follows the `scripts/smoke_test_lsl_receiver.py` convention.
 
@@ -324,7 +369,8 @@ Tests live alongside existing tests; smoke script follows the `scripts/smoke_tes
    - Row count ≈ duration × target_sfreq.
    - Timestamps are monotonic.
    - At least one `marker_code` is populated when the replayed stream contains triggers.
-3. Read-only check: `backend_architecture.md` "Backend → Frontend contract" section is present, accurate, and the partner can implement against it without reading any backend source.
+3. Synthetic-artifact replay smoke is acceptable for plumbing validation only; real Phase 1 artifact smoke is still required before experiment use.
+4. Read-only check: `backend_architecture.md` "Backend → Frontend contract" section is present, accurate, and the partner can implement against it without reading any backend source.
 
 ## Implementation: per-commit execution checklist
 
@@ -527,7 +573,80 @@ Future decisions discovered mid-implementation that aren't worth blocking on go 
 
 ---
 
-### After commit 6
+### Commit 7 — `feat(online_phase): surface StreamWorker runtime errors`
+
+**Files:**
+- `online_decoder/src/backend/online_phase/stream_worker.py`
+- `online_decoder/src/backend/session.py`
+- `online_decoder/tests/online_phase/test_stream_worker.py`
+- `online_decoder/tests/test_session_live_stream.py`
+- `online_decoder/docs/backend_architecture.md` (contract/status update)
+
+**Implementation:**
+- [x] Add `error_occurred = pyqtSignal(str)` to `StreamWorker`.
+- [x] Forward `error_occurred` through `LiveStreamSession`.
+- [x] Wrap receiver pull, preprocessing, batch accumulation, and inference in runtime error handling.
+- [x] Emit a concise error message that identifies the failing stage.
+- [x] Stop the loop cleanly after emitting the error.
+- [x] Preserve current `prediction_ready` payload/API.
+
+**Tests:**
+- [x] Fake receiver raises; assert `error_occurred` emits and worker exits.
+- [x] Malformed receiver payload raises during batch accumulation; assert `error_occurred` emits and worker exits.
+- [x] Fake preprocessor raises; assert `error_occurred` emits and worker exits.
+- [x] Fake inference engine raises; assert `error_occurred` emits and worker exits.
+- [x] Session tests assert `LiveStreamSession.error_occurred` forwards the worker signal.
+
+**Commit:**
+- [ ] `git commit -m "feat: surface StreamWorker runtime errors"`
+
+---
+
+### Commit 8 — `feat: add StreamWorker latency diagnostics`
+
+**Files:**
+- `online_decoder/src/backend/online_phase/stream_worker.py`
+- `online_decoder/tests/online_phase/test_stream_worker.py`
+- `online_decoder/docs/backend_architecture.md` (contract/status update)
+
+**Implementation:**
+- [ ] Add diagnostics signal or logging hook, e.g. `latency_ready = pyqtSignal(dict)`.
+- [ ] Track per-batch timing for preprocessing, inference, and total batch handling.
+- [ ] Include batch size and emitted row count in the diagnostics payload.
+- [ ] Keep diagnostics optional for consumers; do not alter `prediction_ready`.
+
+**Tests:**
+- [ ] Assert diagnostics emit for processed batches.
+- [ ] Assert payload includes stable keys and non-negative timing values.
+
+**Commit:**
+- [ ] `git commit -m "feat: add StreamWorker latency diagnostics"`
+
+---
+
+### Commit 9 — `test(phase2): validate real Phase 1 artifact compatibility`
+
+**Files:**
+- `online_decoder/tests/` (exact location TBD)
+- Optional fixture/helper under `online_decoder/tests/data/` if a small committed artifact is acceptable
+- `online_decoder/docs/Phase2_Implementation_Plan.md` / this plan (status update)
+
+**Implementation:**
+- [ ] Produce or locate a real `decoder_pipeline.joblib` exported by `OfflineOrchestrator.run_training(...)`.
+- [ ] Run it through `AppSession.build_live_stream_session(...)` with replayed LSL data or a deterministic fake receiver.
+- [ ] Assert finite predictions for every model task.
+- [ ] Assert feature width compatibility between online preprocessor output and loaded decoder models.
+
+**Tests/Verify:**
+- [ ] Automated compatibility test if a small artifact can be generated cheaply.
+- [ ] Otherwise, documented smoke command with artifact path and expected CSV checks.
+
+**Commit:**
+- [ ] `git commit -m "test(phase2): validate Phase 1 artifact compatibility"`
+
+---
+
+### After commit 9
 
 - [ ] Push branch, open PR for review.
 - [ ] Notify partner that `AppSession.build_live_stream_session(...)` is ready and `docs/backend_architecture.md` describes the contract.

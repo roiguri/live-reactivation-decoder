@@ -42,11 +42,6 @@ def load_raw_from_xdf(xdf_path: Path) -> tuple[mne.io.RawArray, str]:
     srate = float(info["nominal_srate"][0])
     source_stream_name = info["name"][0]
 
-    stim_idx = n_channels - 1
-    raw_stim = data[stim_idx, :].astype(np.int32)
-    decoded_stim = (raw_stim >> 8) & 0xFF
-    data[stim_idx, :] = decoded_stim
-
     ch_names = [f"EEG {index + 1}" for index in range(n_channels - 1)] + ["STI 014"]
     ch_types = ["eeg"] * (n_channels - 1) + ["stim"]
 

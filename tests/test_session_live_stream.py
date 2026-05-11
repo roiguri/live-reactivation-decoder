@@ -47,12 +47,12 @@ class FakeSignal:
     def __init__(self) -> None:
         self.slots = []
 
-    def connect(self, slot) -> None:
+    def connect(self, slot, *args) -> None:
         self.slots.append(slot)
 
-    def emit(self, predictions, timestamps, markers) -> None:
+    def emit(self, *args) -> None:
         for slot in self.slots:
-            slot(predictions, timestamps, markers)
+            slot(*args)
 
 
 class FakeWorker:
@@ -70,6 +70,7 @@ class FakeWorker:
         self.inference_engine = inference_engine
         self.batch_size_samples = batch_size_samples
         self.prediction_ready = FakeSignal()
+        self.error_occurred = FakeSignal()
         self.start_calls = 0
         self.stop_calls = 0
         self.wait_calls = 0
@@ -105,6 +106,7 @@ class OrderedWorker:
     def __init__(self, order: list[str]) -> None:
         self.order = order
         self.prediction_ready = FakeSignal()
+        self.error_occurred = FakeSignal()
         self.start_calls = 0
         self.stop_calls = 0
         self.wait_calls = 0
@@ -168,6 +170,7 @@ def test_live_stream_session_exposes_prediction_signal_and_lifecycle_order():
     )
 
     assert live.prediction_ready is worker.prediction_ready
+    assert live.error_occurred is worker.error_occurred
 
     live.start()
     live.start()
@@ -215,6 +218,7 @@ def test_build_live_stream_session_returns_live_session(sample_config_path, monk
 
     assert isinstance(live, LiveStreamSession)
     assert live.prediction_ready is worker.prediction_ready
+    assert live.error_occurred is worker.error_occurred
     assert not hasattr(session, "online")
     assert not hasattr(live, "worker")
     assert not hasattr(live, "receiver")

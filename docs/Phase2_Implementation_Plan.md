@@ -175,6 +175,7 @@ engine = LiveInferenceEngine(
 - Call `OnlinePreprocessor.process_batch()`.
 - Call `LiveInferenceEngine.predict()`.
 - Emit all predictions, aligned timestamps, and markers via `prediction_ready`.
+- Emit unrecoverable receiver, batch accumulation, preprocessing, and inference failures via `error_occurred`.
 - Stop the run loop when `stop()` is requested.
 
 **Non-responsibilities:**
@@ -193,7 +194,7 @@ engine = LiveInferenceEngine(
 - `[x]` Leftover samples are preserved across pulls.
 - `[x]` Marker timestamps are included/deferred according to batch boundaries.
 - `[x]` Prediction timestamps remain aligned to the emitted probability rows.
-- `[ ]` Receiver, preprocessing, and inference errors are surfaced instead of silently swallowed.
+- `[x]` Receiver, batch accumulation, preprocessing, and inference errors are surfaced instead of silently swallowed.
 
 ### `PredictionLogger` - CSV Sink
 
@@ -216,8 +217,10 @@ engine = LiveInferenceEngine(
 **Responsibilities:**
 - Represent one composed live decoding run.
 - Expose `prediction_ready` by forwarding the underlying worker signal.
+- Expose `error_occurred` by forwarding the underlying worker signal.
 - Start in order: `receiver.start()` then `worker.start()`.
 - Stop in order: `worker.stop()`, `worker.wait()`, `logger.close()` if present, then `receiver.stop()`.
+- After a worker error, caller code should still call `stop()` so `LiveStreamSession` closes the logger and receiver.
 - Make `start()` and `stop()` idempotent.
 
 **Boundary rule:**
@@ -239,6 +242,7 @@ engine = LiveInferenceEngine(
 ```python
 live = session.build_live_stream_session(decoder_pipeline_path, log_path)
 live.prediction_ready.connect(probability_buffer.on_predictions)
+live.error_occurred.connect(show_error)
 live.start()
 live.stop()
 ```
@@ -281,9 +285,10 @@ The artifact loader treats `online_state` as opaque. `LiveInferenceEngine` never
 6. `[x]` Implement `PredictionLogger`.
 7. `[x]` Refactor session composition to `LiveStreamSession` and `AppSession.build_live_stream_session(...)`.
 8. `[x]` Add headless `scripts/smoke_stream_worker.py`.
-9. `[ ]` Add latency logging to `StreamWorker`.
-10. `[ ]` Run replay-based dry run.
-11. `[ ]` Validate with the real lab LSL stream.
+9. `[x]` Surface `StreamWorker` runtime errors through `LiveStreamSession`.
+10. `[ ]` Add latency logging to `StreamWorker`.
+11. `[ ]` Run replay-based dry run.
+12. `[ ]` Validate with the real lab LSL stream.
 
 ## Test Plan
 

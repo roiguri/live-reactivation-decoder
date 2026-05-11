@@ -47,6 +47,26 @@ class FakeInferenceEngine:
         }
 
 
+class RaisingReceiver:
+    def pull_new_data(self):
+        raise RuntimeError("receiver unavailable")
+
+
+class PassThroughPreprocessor:
+    def process_batch(self, eeg_batch, timestamps):
+        return np.asarray(eeg_batch), np.asarray(timestamps)
+
+
+class RaisingPreprocessor:
+    def process_batch(self, eeg_batch, timestamps):
+        raise RuntimeError("preprocessor failed")
+
+
+class RaisingInferenceEngine:
+    def predict(self, features):
+        raise RuntimeError("inference failed")
+
+
 def _make_data(n_samples: int, *, start_sample: int = 0) -> tuple[np.ndarray, np.ndarray]:
     sample_indices = np.arange(start_sample, start_sample + n_samples)
     timestamps = sample_indices.astype(float) / INPUT_SFREQ
@@ -106,6 +126,20 @@ def _make_worker(receiver: FakeReceiver, poll_interval_sec: float = 0.001) -> St
 def _stop_worker(worker: StreamWorker) -> None:
     worker.stop()
     assert worker.wait(2000)
+
+
+def _make_simple_worker(
+    receiver,
+    preprocessor,
+    inference_engine,
+) -> StreamWorker:
+    return StreamWorker(
+        receiver=receiver,
+        preprocessor=preprocessor,
+        inference_engine=inference_engine,
+        batch_size_samples=40,
+        poll_interval_sec=0.001,
+    )
 
 
 def test_emits_prediction_payload_for_ready_batch(qtbot):
@@ -172,6 +206,76 @@ def test_stop_wait_joins_worker_thread(qtbot):
     qtbot.waitUntil(worker.isRunning, timeout=1000)
     worker.stop()
 
+    assert worker.wait(2000)
+    assert not worker.isRunning()
+
+
+def test_receiver_error_emits_and_stops_worker(qtbot):
+    worker = _make_simple_worker(
+        receiver=RaisingReceiver(),
+        preprocessor=PassThroughPreprocessor(),
+        inference_engine=FakeInferenceEngine(),
+    )
+
+    with qtbot.waitSignal(worker.error_occurred, timeout=3000) as blocker:
+        worker.start()
+
+    assert blocker.args == [
+        "receiver pull failed: RuntimeError: receiver unavailable"
+    ]
+    assert worker.wait(2000)
+    assert not worker.isRunning()
+
+
+def test_batch_accumulation_error_emits_and_stops_worker(qtbot):
+    worker = _make_simple_worker(
+        receiver=FakeReceiver([(np.array([0.0, 0.001]), np.zeros((1, 4)), [])]),
+        preprocessor=PassThroughPreprocessor(),
+        inference_engine=FakeInferenceEngine(),
+    )
+
+    with qtbot.waitSignal(worker.error_occurred, timeout=3000) as blocker:
+        worker.start()
+
+    assert blocker.args[0].startswith(
+        "batch accumulation failed: ValueError: timestamps length 2"
+    )
+    assert worker.wait(2000)
+    assert not worker.isRunning()
+
+
+def test_preprocessor_error_emits_and_stops_worker(qtbot):
+    timestamps, eeg = _make_data(40)
+    worker = _make_simple_worker(
+        receiver=FakeReceiver([(timestamps, eeg, [])]),
+        preprocessor=RaisingPreprocessor(),
+        inference_engine=FakeInferenceEngine(),
+    )
+
+    with qtbot.waitSignal(worker.error_occurred, timeout=3000) as blocker:
+        worker.start()
+
+    assert blocker.args == [
+        "preprocessing failed: RuntimeError: preprocessor failed"
+    ]
+    assert worker.wait(2000)
+    assert not worker.isRunning()
+
+
+def test_inference_error_emits_and_stops_worker(qtbot):
+    timestamps, eeg = _make_data(40)
+    worker = _make_simple_worker(
+        receiver=FakeReceiver([(timestamps, eeg, [])]),
+        preprocessor=PassThroughPreprocessor(),
+        inference_engine=RaisingInferenceEngine(),
+    )
+
+    with qtbot.waitSignal(worker.error_occurred, timeout=3000) as blocker:
+        worker.start()
+
+    assert blocker.args == [
+        "inference failed: RuntimeError: inference failed"
+    ]
     assert worker.wait(2000)
     assert not worker.isRunning()
 

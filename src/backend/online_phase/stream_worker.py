@@ -11,6 +11,7 @@ class StreamWorker(QThread):
     """Background orchestrator for the online decoder micro-batch loop."""
 
     prediction_ready = pyqtSignal(dict, np.ndarray, list)
+    error_occurred = pyqtSignal(str)
 
     def __init__(
         self,
@@ -41,16 +42,35 @@ class StreamWorker(QThread):
     def run(self) -> None:
         while not self._stop_requested:
             batch_processed = False
-            timestamps, eeg_chunk, markers = self.receiver.pull_new_data()
-            self._append_to_batch(timestamps, eeg_chunk)
-            self._pending_markers.extend(markers)
+            try:
+                timestamps, eeg_chunk, markers = self.receiver.pull_new_data()
+            except Exception as exc:
+                self._fail("receiver pull", exc)
+                return
+
+            try:
+                self._append_to_batch(timestamps, eeg_chunk)
+                self._pending_markers.extend(markers)
+            except Exception as exc:
+                self._fail("batch accumulation", exc)
+                return
 
             while self._accumulated_samples >= self.batch_size_samples:
                 batch_ts, batch_eeg = self._pop_batch(self.batch_size_samples)
                 batch_end_ts = float(batch_ts[-1])
 
-                out_eeg, out_ts = self.preprocessor.process_batch(batch_eeg, batch_ts)
-                predictions = self.inference_engine.predict(out_eeg)
+                try:
+                    out_eeg, out_ts = self.preprocessor.process_batch(batch_eeg, batch_ts)
+                except Exception as exc:
+                    self._fail("preprocessing", exc)
+                    return
+
+                try:
+                    predictions = self.inference_engine.predict(out_eeg)
+                except Exception as exc:
+                    self._fail("inference", exc)
+                    return
+
                 batch_markers = self._pop_markers_through(batch_end_ts)
 
                 self.prediction_ready.emit(predictions, out_ts, batch_markers)
@@ -64,6 +84,10 @@ class StreamWorker(QThread):
 
     def stop(self) -> None:
         self._stop_requested = True
+
+    def _fail(self, stage: str, exc: Exception) -> None:
+        self._stop_requested = True
+        self.error_occurred.emit(f"{stage} failed: {type(exc).__name__}: {exc}")
 
     @property
     def _accumulated_samples(self) -> int:
