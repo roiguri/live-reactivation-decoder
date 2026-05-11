@@ -49,6 +49,7 @@ pytest tests/ -v --cov=src
 RUN_LSL_INTEGRATION=1 pytest tests/online_phase/test_lsl_receiver_integration.py -q
 python scripts/characterize_lsl.py --duration 10
 python scripts/smoke_test_lsl_receiver.py --duration 5
+python scripts/smoke_stream_worker.py --pipeline /path/to/decoder_pipeline.joblib --duration 5 --log /tmp/smoke.csv
 ```
 
 ## Config Schema

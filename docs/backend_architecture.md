@@ -1339,6 +1339,7 @@ online_decoder/
 │   ├── characterize_lsl.py        # LSL stream characterization
 │   ├── replay_xdf_to_lsl.py       # Replay recorded XDF into LSL
 │   ├── smoke_test_lsl_receiver.py # Manual Phase 2 smoke test
+│   ├── smoke_stream_worker.py     # Headless StreamWorker + logger smoke test
 │   ├── benchmark_preprocessor.py  # OnlinePreprocessor latency benchmark
 │   └── inspect_xdf.py             # XDF inspection helper
 │

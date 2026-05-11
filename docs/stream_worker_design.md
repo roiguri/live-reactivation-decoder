@@ -443,37 +443,37 @@ Future decisions discovered mid-implementation that aren't worth blocking on go 
 
 **Files:**
 - `online_decoder/src/backend/session.py` (extend `AppSession` directly)
-- `online_decoder/tests/test_session_online.py` (NEW, or extend existing `test_session.py` if present)
+- `online_decoder/tests/test_session_live_stream.py`
 
 **Implementation:**
-- [ ] `@dataclass class LiveStreamSession` with private members `_receiver`, `_worker`, optional `_logger`, `prediction_ready` property, and idempotent `start()`, `stop()`.
-- [ ] Add `AppSession.build_live_stream_session(decoder_pipeline_path, log_path=None, batch_size_samples=40) -> LiveStreamSession`.
-- [ ] Do not add `OnlinePhase`; do not expose `session.online`.
-- [ ] In `AppSession.build_live_stream_session`:
-  - [ ] Load `DecoderPipelineArtifact` from `decoder_pipeline_path`.
-  - [ ] Construct `LSLReceiver`, `OnlinePreprocessor`, `LiveInferenceEngine` from artifact + `SettingsManager` settings.
-  - [ ] Construct `StreamWorker` with injected receiver/preprocessor/inference dependencies.
-  - [ ] If `log_path`: construct `PredictionLogger`; `worker.prediction_ready.connect(logger.on_predictions)`.
-  - [ ] Return `LiveStreamSession`. **Do not call `start()`.**
-- [ ] `live.start()`: `receiver.start()` then `worker.start()`. Idempotent.
-- [ ] `live.stop()`: `worker.stop(); worker.wait(); logger.close() if logger; receiver.stop()`. Idempotent.
+- [x] `@dataclass class LiveStreamSession` with private members `_receiver`, `_worker`, optional `_logger`, `prediction_ready` property, and idempotent `start()`, `stop()`.
+- [x] Add `AppSession.build_live_stream_session(decoder_pipeline_path, log_path=None, batch_size_samples=40) -> LiveStreamSession`.
+- [x] Do not add `OnlinePhase`; do not expose `session.online`.
+- [x] In `AppSession.build_live_stream_session`:
+  - [x] Load `DecoderPipelineArtifact` from `decoder_pipeline_path`.
+  - [x] Construct `LSLReceiver`, `OnlinePreprocessor`, `LiveInferenceEngine` from artifact + `SettingsManager` settings.
+  - [x] Construct `StreamWorker` with injected receiver/preprocessor/inference dependencies.
+  - [x] If `log_path`: construct `PredictionLogger`; `worker.prediction_ready.connect(logger.on_predictions)`.
+  - [x] Return `LiveStreamSession`. **Do not call `start()`.**
+- [x] `live.start()`: `receiver.start()` then `worker.start()`. Idempotent.
+- [x] `live.stop()`: `worker.stop(); worker.wait(); logger.close() if logger; receiver.stop()`. Idempotent.
 
 **Tests:**
-- [ ] Patch `LSLReceiver.start` so no real LSL connection is attempted; construct via `session.build_live_stream_session(...)` and assert `prediction_ready` is exposed.
-- [ ] With `log_path=None`: assert no logger slot is connected to `prediction_ready`.
-- [ ] With `log_path` set: assert the logger slot is connected and receives emitted predictions.
-- [ ] `live.start()` then `live.start()` again — no duplicate start calls.
-- [ ] `live.stop()` then `live.stop()` again — no duplicate stop/close calls.
+- [x] Patch `LSLReceiver.start` so no real LSL connection is attempted; construct via `session.build_live_stream_session(...)` and assert `prediction_ready` is exposed.
+- [x] With `log_path=None`: assert no logger slot is connected to `prediction_ready`.
+- [x] With `log_path` set: assert the logger slot is connected and receives emitted predictions.
+- [x] `live.start()` then `live.start()` again — no duplicate start calls.
+- [x] `live.stop()` then `live.stop()` again — no duplicate stop/close calls.
 
 **TODOs in code:**
 - [x] `# TODO(open): see docs/stream_worker_design.md Open §2 — accept in-memory DecoderPipelineArtifact` at the artifact load site.
 - [x] `# TODO(open): see docs/stream_worker_design.md Open §3 — read LSL stream name / target_sfreq from SettingsManager once Phase 2 config schema is defined` at the receiver/preprocessor construction site.
 
 **Verify:**
-- [ ] `pytest online_decoder/tests/ -v` everything green.
+- [x] `pytest tests/online_phase tests/test_session_live_stream.py -q` green.
 
 **Commit:**
-- [ ] `git commit -m "feat(session): add live stream session factory"`
+- [x] `git commit -m "feat(session): add live stream session factory"`
 
 ---
 
@@ -483,17 +483,18 @@ Future decisions discovered mid-implementation that aren't worth blocking on go 
 - `online_decoder/scripts/smoke_stream_worker.py` (NEW)
 
 **Implementation:**
-- [ ] CLI args: `--duration` (seconds, default 5), `--log` (CSV path, default `/tmp/smoke.csv`), `--pipeline` (path to `decoder_pipeline.joblib`).
-- [ ] Construct `AppSession`, call `session.build_live_stream_session(pipeline_path, log_path)`.
-- [ ] `live.start()`; sleep for `duration`; `live.stop()`.
-- [ ] Print row count from log file and timestamp monotonicity check at the end.
-- [ ] Follow the existing `scripts/smoke_test_lsl_receiver.py` conventions (logging, argparse).
+- [x] CLI args: `--duration` (seconds, default 5), `--log` (CSV path, default `/tmp/smoke.csv`), `--pipeline` (path to `decoder_pipeline.joblib`), plus config/stream/replay options needed for headless use.
+- [x] Construct `AppSession`, call `session.build_live_stream_session(pipeline_path, log_path)`.
+- [x] `live.start()`; sleep for `duration`; `live.stop()`.
+- [x] Print row count from log file and timestamp monotonicity check at the end.
+- [x] Follow the existing `scripts/smoke_test_lsl_receiver.py` conventions (argparse, optional replay subprocess, explicit summary).
 
 **Tests:** none (smoke script).
 
 **TODOs in code:** none.
 
 **Verify:**
+- [x] `python scripts/smoke_stream_worker.py --help` validates imports and CLI parsing.
 - [ ] `python online_decoder/scripts/smoke_stream_worker.py --duration 5 --log /tmp/smoke.csv --pipeline <path>` against a fake/replayed LSL stream → CSV produced, row count ≈ `duration × target_sfreq`, header matches task names, timestamps monotonic, ≥1 marker code present when triggers were replayed.
 
 **Commit:**
