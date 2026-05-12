@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
 )
 
 from frontend.styles.theme import (
-    BORDER_GRAY, CARD_WHITE, PRIMARY_BLUE, TEXT_MUTED, TEXT_PRIMARY,
+    BORDER_GRAY, CARD_WHITE, PRIMARY_BLUE, SUCCESS_GREEN, TEXT_MUTED, TEXT_PRIMARY,
 )
 from frontend.widgets.ica_component_card import ICAComponentCard
 from frontend.workers.preprocessing_worker import (
@@ -17,12 +17,16 @@ from frontend.workers.preprocessing_worker import (
 
 
 class PreprocessingView(QWidget):
-    """Node 3 workspace: 2-page stack (ICA review + complete stub).
+    """Node 3 workspace: 3-page stack (Ready → ICA review → Preprocessing Complete).
 
-    Step 1 (``run_step1_prepare_ica``) is triggered by the journey-panel Node 3
-    action button and uses the shared ``LoadingOverlay`` while running. On
-    success the ICA grid renders on Page 0. The in-view "Confirm" button then
-    fires Step 2 (placeholder here — Step 7 will wire the real worker).
+    All advance actions live on the journey-panel Node 3 button (no in-view
+    primary buttons). ``Phase1Screen`` rebinds that button as the user moves
+    through the pages:
+      Page 0 → ``trigger_start``    (run_step1_prepare_ica)
+      Page 1 → ``trigger_confirm``  (run_step2_finish_pipeline)
+      Page 2 → ``trigger_continue`` (advance trail to Node 4)
+    Both Step 1 and Step 2 use the shared ``LoadingOverlay`` while running.
+    The in-view play button on Page 0 mirrors ``trigger_start`` for affordance.
     """
 
     # Loading-overlay protocol — handled by Phase1Screen
@@ -30,6 +34,17 @@ class PreprocessingView(QWidget):
     loading_done = Signal()
     # Ready protocol — gates the journey-panel Node 3 action button
     ready_changed = Signal(bool)
+    # Emitted once Step 1 finished and the ICA review page is displayed.
+    # Phase1Screen handles this by re-binding the Node 3 panel button to
+    # trigger_confirm (label stays "Confirm && Continue").
+    step1_complete = Signal()
+    # Emitted once Step 2 finished and the complete page is displayed.
+    # Phase1Screen handles this by re-binding the Node 3 panel button to
+    # trigger_continue and updating its label to "Continue to Evaluation".
+    step2_complete = Signal()
+    # Emitted when the user clicks the rebound panel button. Phase1Screen
+    # handles this by calling journey_panel.advance(3).
+    preprocessing_complete = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -37,6 +52,9 @@ class PreprocessingView(QWidget):
         self._data_loaded: bool = False
         self._step1_running: bool = False
         self._step1_done: bool = False
+        self._step2_running: bool = False
+        self._step2_done: bool = False
+        self._excluded_count: int = 0
         self._was_ready: bool = False
         self._step1_thread: QThread | None = None
         self._step1_worker: PreprocessingStep1Worker | None = None
@@ -51,7 +69,7 @@ class PreprocessingView(QWidget):
         self._pages = QStackedWidget()
         self._pages.addWidget(self._build_ready_page())
         self._pages.addWidget(self._build_review_page())
-        self._pages.addWidget(self._build_complete_stub_page())
+        self._pages.addWidget(self._build_complete_page())
         outer.addWidget(self._pages)
 
     # ── public ───────────────────────────────────────────────────────────────
@@ -94,6 +112,15 @@ class PreprocessingView(QWidget):
         self._step1_thread.finished.connect(self._on_step1_thread_finished)
 
         self._step1_thread.start()
+
+    def trigger_continue(self) -> None:
+        """Wired by Phase1Screen as the Node 3 action handler once Step 2 finishes.
+
+        Emits ``preprocessing_complete`` so the journey trail advances to Node 4.
+        """
+        if not self._step2_done:
+            return
+        self.preprocessing_complete.emit()
 
     # ── page builders ────────────────────────────────────────────────────────
 
@@ -182,29 +209,105 @@ class PreprocessingView(QWidget):
         self._grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self._scroll.setWidget(self._grid_host)
         layout.addWidget(self._scroll, 1)
-
-        # Confirm row
-        action_row = QHBoxLayout()
-        action_row.addStretch()
-        self._confirm_btn = QPushButton("Confirm")
-        self._confirm_btn.setProperty("class", "primary")
-        self._confirm_btn.setEnabled(False)
-        self._confirm_btn.clicked.connect(self._on_confirm_clicked)
-        action_row.addWidget(self._confirm_btn)
-        action_row.addStretch()
-        layout.addLayout(action_row)
-
         return page
 
-    def _build_complete_stub_page(self) -> QWidget:
+    def _build_complete_page(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label = QLabel("Step 2 complete — stats coming next.")
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px;")
-        layout.addWidget(label)
+        layout.setContentsMargins(48, 32, 48, 32)
+        layout.setSpacing(0)
+        layout.addStretch()
+
+        center = QVBoxLayout()
+        center.setSpacing(0)
+        center.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        badge = QLabel("✓")
+        badge.setFixedSize(72, 72)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge.setStyleSheet(
+            f"QLabel {{ background: #F0FDF4; color: {SUCCESS_GREEN}; "
+            f"border: 1px solid #DCFCE7; border-radius: 36px; font-size: 32px; }}"
+        )
+        center.addWidget(badge, 0, Qt.AlignmentFlag.AlignHCenter)
+        center.addSpacing(24)
+
+        title = QLabel("Preprocessing Complete")
+        f = title.font()
+        f.setPointSize(18)
+        f.setWeight(QFont.Weight.Medium)
+        title.setFont(f)
+        title.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        center.addWidget(title)
+        center.addSpacing(10)
+
+        desc = QLabel("Cleaned epochs are ready for model evaluation.")
+        desc.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 13px;")
+        desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        desc.setWordWrap(True)
+        desc.setFixedWidth(440)
+        center.addWidget(desc, 0, Qt.AlignmentFlag.AlignHCenter)
+        center.addSpacing(28)
+
+        stats_card = QFrame()
+        stats_card.setFixedWidth(460)
+        stats_card.setStyleSheet(
+            f"QFrame {{ background: {CARD_WHITE}; border: 1px solid {BORDER_GRAY}; "
+            f"border-radius: 6px; }}"
+        )
+        stats_layout = QVBoxLayout(stats_card)
+        stats_layout.setContentsMargins(24, 8, 24, 8)
+        stats_layout.setSpacing(0)
+
+        self._epochs_value = QLabel("—")
+        self._components_value = QLabel("—")
+        # AutoReject drop count is intentionally omitted until the backend TODO
+        # in OfflineOrchestrator.run_step2_finish_pipeline surfaces the value
+        # (it's computed but discarded today). Restore the row here once the
+        # data is available.
+
+        self._append_stat_row(stats_layout, "Epochs retained", self._epochs_value)
+        self._append_separator(stats_layout)
+        self._append_stat_row(
+            stats_layout, "ICA components removed", self._components_value
+        )
+
+        center.addWidget(stats_card, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        layout.addLayout(center)
+        layout.addStretch()
         return page
+
+    def _append_stat_row(
+        self, layout: QVBoxLayout, caption: str, value_label: QLabel
+    ) -> None:
+        row = QWidget()
+        row.setStyleSheet("background: transparent; border: none;")
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 14, 0, 14)
+        row_layout.setSpacing(12)
+
+        cap = QLabel(caption)
+        cap.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-size: 13px; background: transparent; border: none;"
+        )
+        value_label.setStyleSheet(
+            f"color: {TEXT_PRIMARY}; font-size: 14px; font-weight: 600; "
+            f"background: transparent; border: none;"
+        )
+        value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        row_layout.addWidget(cap, 1)
+        row_layout.addWidget(value_label, 0)
+        layout.addWidget(row)
+
+    def _append_separator(self, layout: QVBoxLayout) -> None:
+        sep = QFrame()
+        sep.setFixedHeight(1)
+        sep.setStyleSheet(
+            f"background: {BORDER_GRAY}; border: none;"
+        )
+        layout.addWidget(sep)
 
     # ── private slots ────────────────────────────────────────────────────────
 
@@ -228,9 +331,9 @@ class PreprocessingView(QWidget):
         self._step1_done = True
         self.loading_done.emit()
         self._populate_grid(ica, suggested)
-        self._confirm_btn.setEnabled(True)
         self._pages.setCurrentIndex(1)  # Ready → ICA review
         self._update_ready_state()
+        self.step1_complete.emit()
 
     def _on_step1_error(self, message: str) -> None:
         self._step1_running = False
@@ -242,11 +345,18 @@ class PreprocessingView(QWidget):
         self._step1_thread = None
         self._step1_worker = None
 
-    def _on_confirm_clicked(self) -> None:
+    def trigger_confirm(self) -> None:
+        """Confirm ICA rejections and run Step 2. Wired to the journey-panel
+        Node 3 button once Step 1 has finished and the review page is shown.
+        """
         if self._session is None or self._session.offline is None:
             return
+        if not self._step1_done or self._step2_running or self._step2_done:
+            return
         rejected = [c._index for c in self._cards if c.is_rejected]
-        self._confirm_btn.setEnabled(False)
+        self._excluded_count = len(rejected)
+        self._step2_running = True
+        self._update_ready_state()
         self.loading_requested.emit("Finishing preprocessing pipeline…")
 
         self._step2_thread = QThread()
@@ -263,26 +373,45 @@ class PreprocessingView(QWidget):
 
         self._step2_thread.start()
 
-    def _on_step2_done(self, _payload) -> None:
+    def _on_step2_done(self, payload) -> None:
         self.loading_done.emit()
-        self._pages.setCurrentIndex(2)  # ICA review → complete stub
+        n_epochs = int(payload.get("n_epochs", 0)) if isinstance(payload, dict) else 0
+        self._epochs_value.setText(str(n_epochs))
+        self._components_value.setText(str(self._excluded_count))
+        self._pages.setCurrentIndex(2)  # ICA review → complete
+        self._step2_running = False
+        self._step2_done = True
+        self._update_ready_state()
+        self.step2_complete.emit()
 
     def _on_step2_error(self, message: str) -> None:
+        self._step2_running = False
         self.loading_done.emit()
         QMessageBox.critical(self, "Preprocessing Error", message)
-        self._confirm_btn.setEnabled(True)
+        self._update_ready_state()
 
     def _on_step2_thread_finished(self) -> None:
         self._step2_thread = None
         self._step2_worker = None
 
     def _update_ready_state(self) -> None:
-        ready = (
+        # Three pages, three actions on the panel button:
+        #   Page 0 → trigger_start    (ready when data is loaded)
+        #   Page 1 → trigger_confirm  (ready once Step 1 finished, before Step 2)
+        #   Page 2 → trigger_continue (ready once Step 2 finished)
+        page0_ready = (
             self._session is not None
             and self._data_loaded
             and not self._step1_running
             and not self._step1_done
         )
+        page1_ready = (
+            self._step1_done
+            and not self._step2_running
+            and not self._step2_done
+        )
+        page2_ready = self._step2_done
+        ready = page0_ready or page1_ready or page2_ready
         if ready != self._was_ready:
             self._was_ready = ready
             self.ready_changed.emit(ready)

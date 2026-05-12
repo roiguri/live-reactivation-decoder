@@ -107,6 +107,10 @@ class JourneyNode(QWidget):
         """Enable/disable the node's action button independently of node state."""
         self._btn.setEnabled(enabled)
 
+    def set_action_label(self, label: str) -> None:
+        """Update the action button label (e.g. when the node's pending action changes)."""
+        self._btn.setText(label)
+
     def start_fill_animation(self) -> None:
         """Play a top-to-bottom circle fill, then transition to active."""
         self._filling = True
@@ -304,6 +308,11 @@ class JourneyPanel(QWidget):
         except TypeError:
             pass
         node.action_clicked.connect(handler)
+
+    def set_node_action_label(self, node_index: int, label: str) -> None:
+        """Update the action button label for the node at node_index (0-based)."""
+        if 0 <= node_index < len(self._nodes):
+            self._nodes[node_index].set_action_label(label)
 
     def set_node_ready(self, node_index: int, ready: bool) -> None:
         """Gate the action button on node_index (0-based).

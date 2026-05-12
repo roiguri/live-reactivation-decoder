@@ -26,9 +26,10 @@ class PreprocessingStep1Worker(BaseWorker):
 
 
 class PreprocessingStep2Worker(BaseWorker):
-    """Placeholder for Step 7 — emits an empty payload immediately so the
-    Page 0 → Page 1 transition can be exercised end-to-end. The next UI step
-    will replace ``run()`` with the real ``run_step2_finish_pipeline`` call.
+    """Runs orchestrator.run_step2_finish_pipeline(excluded) off the GUI thread.
+
+    Emits ``result_ready({"n_epochs": int})`` on success, ``error_occurred(str)``
+    on failure, and always emits ``finished`` so the owning thread can quit.
     """
 
     def __init__(self, orchestrator, excluded: list[int], parent=None):
@@ -38,7 +39,8 @@ class PreprocessingStep2Worker(BaseWorker):
 
     def run(self) -> None:
         try:
-            self.result_ready.emit({})
+            result = self._orchestrator.run_step2_finish_pipeline(self._excluded)
+            self.result_ready.emit(result)
         except Exception as exc:
             self.error_occurred.emit(str(exc))
         finally:
