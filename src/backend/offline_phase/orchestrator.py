@@ -11,6 +11,7 @@ from backend.core.settings_manager import SettingsManager
 from backend.offline_phase.evaluator import ModelEvaluator
 from backend.offline_phase.preprocessor import OfflinePreprocessor
 from backend.offline_phase.trainer import ModelTrainer
+from backend.offline_phase.trigger_decoder import decode_parallel_port_channel
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +126,12 @@ class OfflineOrchestrator:
         )
         self._epochs = self._preprocessor.epochs
         logger.info("Preprocessing complete. %d epochs retained.", len(self._epochs))
+        # TODO: surface AutoReject drop count + bad-channel count for the UI
+        # complete page. `n_dropped` is computed in preprocessor._autoreject
+        # (reject_log.bad_epochs.sum()) but currently discarded; store it on the
+        # preprocessor (e.g. self._autoreject_dropped: int | None where None =
+        # AR was skipped) and forward here as
+        # `{"n_epochs": ..., "autoreject_dropped": ..., "bad_channels": [...]}`.
         return {"n_epochs": len(self._epochs)}
 
     def run_evaluation(self) -> dict[str, Any]:
@@ -232,10 +239,17 @@ class OfflineOrchestrator:
         montage = mne.channels.make_standard_montage("standard_1020")
         raw.set_montage(montage, match_case=False, on_missing="warn")
 
+        # Parallel-port triggers are recorded as analog pulses on a dedicated
+        # channel (not the .vmrk file). Decode them into Annotations now,
+        # before the channel is dropped along with other non-EEG channels.
+        annotations = decode_parallel_port_channel(raw)
+        # TODO: this overrides any existing anotations on the raw; consider merging with existing ones instead of replacing.
+        raw.set_annotations(annotations)
+
         # TODO: consider this code part - added due to issues with emg channel in test data
         # Keep only EEG channels with a known montage position plus physiological
         # reference channels (EOG/ECG) needed for ICA artifact detection.
-        # Everything else (e.g. EMG recorded as EEG type, stim, misc) is dropped.
+        # Everything else (e.g. the EMG trigger channel, stim, misc) is dropped.
         montage_names = {ch.lower() for ch in montage.ch_names}
         eeg_picks = [
             i for i in mne.pick_types(raw.info, eeg=True)

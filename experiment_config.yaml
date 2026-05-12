@@ -41,11 +41,19 @@ decoders:
       neg_labels: [green, red]
 
 markers_mapping:
-  # Unmapped events will be ignored by the decoder.
+  # Parallel-port codes recorded as analog plateaus on the trigger channel.
+  # Other codes seen in the data (e.g. start_*, stop_*, codes 7-10/14-15/19-20)
+  # remain on raw.annotations for diagnostics but are not epoched.
   events:
-    - id: 1
+    - id: 11
       name: red
-    - id: 2
+    - id: 12
       name: green
-    - id: 3
+    - id: 13
       name: yellow
+    # - id: 16
+    #   name: living_room
+    # - id: 17
+    #   name: bathroom
+    # - id: 18
+    #   name: kitchen
