@@ -411,7 +411,12 @@ class OfflinePreprocessor:
 
     def _epoch(self, event_mapping: Dict[int, str]) -> mne.Epochs:
         """
-        Extracts events from the MNE annotations (BrainVision markers).
+        Extracts events from ``raw.annotations`` (BrainVision-style
+        ``Stimulus/S<code>`` descriptions). For BindingDecoding recordings,
+        those annotations are injected by ``trigger_decoder.decode_parallel_port_channel``
+        during ``OfflineOrchestrator._load_eeg_raw`` rather than parsed from
+        ``.vmrk`` — see ``knowledge_base/02_reference/parallel_port_trigger_decoding.md``.
+
         Inverts the shared ID→name mapping into the form required by MNE if needed.
         Slices the data around the triggers defined in the shared settings,
         applying tmin, tmax, baseline, and hard amplitude rejection.
@@ -564,7 +569,11 @@ class OfflineOrchestrator:
 
     def load_raw_data(self) -> None:
         """
-        Load the raw EEG file from disk.
+        Load the raw EEG file from disk. Also decodes parallel-port triggers
+        from the analog "EMG" channel into ``raw.annotations`` and drops the
+        trigger channel (and other non-EEG/EOG/ECG channels) before returning.
+        See ``knowledge_base/02_reference/parallel_port_trigger_decoding.md``
+        for the rationale and the decoder algorithm.
 
         Raises:
             ValueError: if set_file_path() has not been called.
