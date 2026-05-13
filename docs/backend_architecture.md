@@ -665,6 +665,46 @@ LSL connection is attempted. Use
 `python online_decoder/scripts/smoke_stream_worker.py --preflight-only --pipeline <path>`
 to validate this handoff before replay or lab runs.
 
+#### Current Phase 1 Artifact Handoff Issue
+
+Phase 2 intentionally treats the saved decoder artifact as a boundary between
+three responsibilities:
+
+- `models`: fitted decoder models for `LiveInferenceEngine`
+- `online_state`: preprocessing state for `OnlinePreprocessor`
+- `metadata`: model-facing runtime metadata such as `feature_width` and
+  `decoding_timepoint`
+
+The current Phase 1 export path appears to save a flatter mixed dictionary from
+`OfflineOrchestrator.run_training()`: preprocessing state keys are stored beside
+model/training keys such as `models`, `spatial_patterns`, `mne_info`, and
+`decoding_timepoint`. That shape is not the Phase 2 envelope because it lacks
+top-level `online_state` and `metadata` keys. `load_decoder_pipeline_artifact()`
+therefore rejects it before `AppSession.build_live_stream_session(...)` can
+construct the live runtime.
+
+When Phase 1 is updated, the saved artifact should preserve the separation:
+
+```python
+online_state = preprocessor.export_online_state()
+
+{
+    "models": training_results["models"],
+    "online_state": online_state,
+    "metadata": {
+        # TODO(open): Revisit which fields belong in runtime metadata.
+        # Keep this minimal unless the live runtime, UI, or reporting has a
+        # concrete consumer for an additional field.
+        "feature_width": len(online_state["ch_names"]),
+        "decoding_timepoint": timepoint,
+    },
+}
+```
+
+If `get_online_state_for_live_phase()` keeps its current name, it should keep
+returning only the preprocessing `online_state`; a separate accessor can expose
+the full artifact if the frontend needs an in-memory Phase 1 to Phase 2 handoff.
+
 1. `StreamWorker` asks `LSLReceiver` for all newly available data.
 2. If data exists, `StreamWorker` appends it to an internal batch accumulator.
 3. When about `40 ms` of samples are available, `StreamWorker` hands one batch to `OnlinePreprocessor.process_batch()`.
@@ -1169,9 +1209,10 @@ class LiveInferenceEngine:
         """
         Args:
             models: Dict mapping decoder task names to fitted sklearn-compatible models.
-            metadata: Model-facing metadata such as feature_width and optional
-                      positive_class. Phase 1 should train each one-vs-other
-                      decoder with 0 = other and 1 = target.
+            metadata: Model-facing metadata such as feature_width. Phase 1
+                      should train each one-vs-other decoder with 0 = other
+                      and 1 = target; positive_class is only needed as an
+                      override if that convention changes.
         """
         pass
 

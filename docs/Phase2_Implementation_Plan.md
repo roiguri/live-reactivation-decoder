@@ -143,8 +143,9 @@ engine = LiveInferenceEngine(
 
 **Inputs:**
 - Unwrapped trained sklearn-compatible decoder models.
-- Model-facing metadata such as `feature_width` and optional global
-  `positive_class`.
+- Model-facing metadata such as `feature_width`. The positive class defaults to
+  label `1`; a `positive_class` metadata override is only needed if that label
+  convention changes.
 - `model_features` from `OnlinePreprocessor`.
 
 **Responsibilities:**
