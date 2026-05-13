@@ -319,6 +319,9 @@ class OfflinePreprocessor:
         ar = AutoReject(random_state=self.settings["random_state"], verbose=False)
         self.epochs, reject_log = ar.fit_transform(self.epochs, return_log=True)
         n_dropped = reject_log.bad_epochs.sum()
+        # TODO(open): Surface AutoReject outcomes to the UI/report, not only the
+        # log. At minimum expose dropped-epoch count; ideally also repaired
+        # sensor counts/percentages so users can spot overly aggressive cleaning.
         logger.info("AutoReject dropped %d epochs", n_dropped)
 
     def _save(self, output_dir: Path) -> None:
