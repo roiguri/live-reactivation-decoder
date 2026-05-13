@@ -658,6 +658,13 @@ Startup/composition code loads the Phase 1 artifact once before the run:
 and `metadata`. `OnlinePreprocessor` receives only `online_state`;
 `LiveInferenceEngine` receives only `models` and model-facing `metadata`.
 
+The required on-disk `decoder_pipeline.joblib` contract is:
+`{"models": {...}, "online_state": {...}, "metadata": {...}}`. If Phase 1
+exports a flat online-state joblib instead, Phase 2 startup fails before any
+LSL connection is attempted. Use
+`python online_decoder/scripts/smoke_stream_worker.py --preflight-only --pipeline <path>`
+to validate this handoff before replay or lab runs.
+
 1. `StreamWorker` asks `LSLReceiver` for all newly available data.
 2. If data exists, `StreamWorker` appends it to an internal batch accumulator.
 3. When about `40 ms` of samples are available, `StreamWorker` hands one batch to `OnlinePreprocessor.process_batch()`.
@@ -753,7 +760,7 @@ and `metadata`. `OnlinePreprocessor` receives only `online_state`;
 
 **Lifecycle:**
 1. Frontend calls `build_live_stream_session(...)` to get a `LiveStreamSession`.
-2. Frontend connects UI-side slots to `live.prediction_ready` and `live.error_occurred`.
+2. Frontend connects UI-side slots to `live.prediction_ready`, `live.error_occurred`, and optionally `live.latency_ready`.
 3. Frontend calls `live.start()`.
 4. On shutdown, frontend calls `live.stop()`.
 
@@ -770,6 +777,11 @@ If `live.error_occurred` fires, the worker loop has exited but external resource
 - `markers: list[tuple[float, int]]` — `(timestamp, trigger_code)` marker events.
 - `error_occurred` payload: concise string identifying the failing runtime stage (receiver pull, batch accumulation, preprocessing, or inference) and exception type.
 - `latency_ready` payload: diagnostic dictionary with millisecond timing keys `pull_ms`, `accumulation_ms`, `preprocessing_ms`, `inference_ms`, `emit_ms`, `total_ms`, plus `input_samples`, `emitted_rows`, `marker_count`, and `pending_samples`.
+
+`latency_ready` emits once per processed micro-batch. At the default 40-sample
+batch size on a 1000 Hz stream, this is about 25 Hz. UI consumers should
+throttle or aggregate it, for example by showing a rolling mean/p95 latency and
+pending backlog once per second.
 
 **Frontend rule:** use only `live.prediction_ready`, `live.error_occurred`, `live.latency_ready`, `live.start()`, and `live.stop()` during normal operation. Do not reach into the underlying worker or private live-session members.
 

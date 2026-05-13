@@ -52,6 +52,7 @@ StreamWorker.run()
 - `[x]` Session-level composition is implemented as `AppSession.build_live_stream_session(...) -> LiveStreamSession`.
 - `[x]` `scripts/smoke_stream_worker.py` exists for headless worker/logger smoke checks.
 - `[x]` `StreamWorker` emits optional per-batch latency diagnostics.
+- `[~]` Replay smoke tooling has preflight checks and visible replay-subprocess errors; end-to-end replay is blocked until a Phase 1 artifact matching the Phase 2 envelope is available.
 - `[x]` Phase 1 sample rate locked: configurable via `resample.target_rate` in YAML (default 256 Hz). `online_state` schema locked.
 
 ## Component Plan
@@ -128,6 +129,11 @@ engine = LiveInferenceEngine(
     metadata=artifact.metadata,
 )
 ```
+
+**Known handoff blocker:**
+- Phase 2 expects the saved artifact envelope to be `{"models": ..., "online_state": ..., "metadata": ...}`.
+- Current replay smoke validation cannot complete if Phase 1 still exports a flat `online_state`-style joblib without top-level `models`, `online_state`, and `metadata`.
+- `scripts/smoke_stream_worker.py --preflight-only` now reports this contract mismatch before starting replay or LSL.
 
 ### `LiveInferenceEngine` - Decoder Runtime
 
@@ -289,7 +295,7 @@ The artifact loader treats `online_state` as opaque. `LiveInferenceEngine` never
 8. `[x]` Add headless `scripts/smoke_stream_worker.py`.
 9. `[x]` Surface `StreamWorker` runtime errors through `LiveStreamSession`.
 10. `[x]` Add latency logging to `StreamWorker`.
-11. `[ ]` Run replay-based dry run.
+11. `[~]` Run replay-based dry run — smoke tooling is ready, but end-to-end execution is blocked until a compatible Phase 1 artifact envelope is available.
 12. `[ ]` Validate with the real lab LSL stream.
 
 ## Test Plan

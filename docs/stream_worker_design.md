@@ -537,17 +537,21 @@ Future decisions discovered mid-implementation that aren't worth blocking on go 
 
 **Implementation:**
 - [x] CLI args: `--duration` (seconds, default 5), `--log` (CSV path, default `/tmp/smoke.csv`), `--pipeline` (path to `decoder_pipeline.joblib`), plus config/stream/replay options needed for headless use.
+- [x] CLI arg: `--preflight-only` validates config, artifact envelope, replay XDF path, and replay Python dependencies without starting LSL.
 - [x] Construct `AppSession`, call `session.build_live_stream_session(pipeline_path, log_path)`.
 - [x] `live.start()`; sleep for `duration`; `live.stop()`.
 - [x] Print row count from log file and timestamp monotonicity check at the end.
 - [x] Follow the existing `scripts/smoke_test_lsl_receiver.py` conventions (argparse, optional replay subprocess, explicit summary).
+- [x] Replay subprocess stdout/stderr is captured and reported if replay exits before the smoke run can connect.
 
-**Tests:** none (smoke script).
+**Tests:**
+- [x] Unit tests cover preflight flag parsing, artifact-contract mismatch messages, missing replay dependencies, and replay subprocess failure reporting.
 
 **TODOs in code:** none.
 
 **Verify:**
 - [x] `python scripts/smoke_stream_worker.py --help` validates imports and CLI parsing.
+- [x] `pytest tests/online_phase/test_smoke_stream_worker_script.py -q` covers smoke-tooling failure paths.
 - [ ] `python online_decoder/scripts/smoke_stream_worker.py --duration 5 --log /tmp/smoke.csv --pipeline <path>` against a fake/replayed LSL stream → CSV produced, row count ≈ `duration × target_sfreq`, header matches task names, timestamps monotonic, ≥1 marker code present when triggers were replayed.
 
 **Commit:**
@@ -605,7 +609,7 @@ Future decisions discovered mid-implementation that aren't worth blocking on go 
 - [x] Session tests assert `LiveStreamSession.error_occurred` forwards the worker signal.
 
 **Commit:**
-- [ ] `git commit -m "feat: surface StreamWorker runtime errors"`
+- [x] `git commit -m "feat: surface StreamWorker runtime errors"`
 
 ---
 
@@ -627,7 +631,7 @@ Future decisions discovered mid-implementation that aren't worth blocking on go 
 - [x] Assert payload includes stable keys and non-negative timing values.
 
 **Commit:**
-- [ ] `git commit -m "feat: add StreamWorker latency diagnostics"`
+- [x] `git commit -m "feat: add StreamWorker latency diagnostics"`
 
 ---
 
@@ -644,9 +648,16 @@ Future decisions discovered mid-implementation that aren't worth blocking on go 
 - [ ] Assert finite predictions for every model task.
 - [ ] Assert feature width compatibility between online preprocessor output and loaded decoder models.
 
+**Known blocker:**
+- Phase 2 currently requires a `decoder_pipeline.joblib` envelope with top-level keys `models`, `online_state`, and `metadata`.
+- If Phase 1 exports a flat online-state joblib instead, `load_decoder_pipeline_artifact()` rejects it and `AppSession.build_live_stream_session(...)` cannot construct the Phase 2 runtime.
+- Do not change Phase 1 from this backend branch without an explicit decision. Until then, use `scripts/smoke_stream_worker.py --preflight-only` to detect the mismatch before starting replay/LSL.
+
 **Tests/Verify:**
-- [ ] Automated compatibility test if a small artifact can be generated cheaply.
-- [ ] Otherwise, documented smoke command with artifact path and expected CSV checks.
+- [x] Smoke script preflight reports artifact-contract mismatches before starting replay/LSL.
+- [x] Replay subprocess failures surface captured stdout/stderr instead of timing out silently.
+- [ ] Automated compatibility test if a small compatible artifact can be generated or provided.
+- [ ] Otherwise, documented smoke command with compatible artifact path and expected CSV checks.
 
 **Commit:**
 - [ ] `git commit -m "test(phase2): validate Phase 1 artifact compatibility"`

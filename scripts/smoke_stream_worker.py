@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import importlib.util
 import subprocess
 import sys
 import time
@@ -17,6 +18,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from backend.session import AppSession, LiveStreamSession
+from backend.online_phase.artifact_loader import load_decoder_pipeline_artifact
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -84,7 +86,54 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=1.5,
         help="How long to wait after starting the replay subprocess before connecting.",
     )
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="Validate config, artifact contract, and replay inputs without starting LSL.",
+    )
     return parser
+
+
+def _validate_replay_dependencies() -> None:
+    missing = [
+        module_name
+        for module_name in ("pyxdf", "mne_lsl.player")
+        if importlib.util.find_spec(module_name) is None
+    ]
+    if missing:
+        raise RuntimeError(
+            "Replay mode requires missing Python package(s): "
+            + ", ".join(missing)
+            + ". Install online_decoder/requirements-dev.txt before replay smoke tests."
+        )
+
+
+def _validate_decoder_pipeline_contract(pipeline_path: Path) -> None:
+    try:
+        load_decoder_pipeline_artifact(pipeline_path)
+    except ValueError as exc:
+        raise RuntimeError(
+            "Decoder pipeline artifact does not match the Phase 2 contract. "
+            "Expected a joblib dictionary with top-level keys 'models', "
+            "'online_state', and 'metadata'. Current Phase 2 cannot run from "
+            "flat Phase 1 online_state exports until that artifact handoff is "
+            f"fixed or converted. Loader error: {exc}"
+        ) from exc
+
+
+def _run_preflight(args: argparse.Namespace) -> None:
+    if not args.config.exists():
+        raise FileNotFoundError(f"Config file not found: {args.config}")
+
+    # Instantiating AppSession validates the experiment YAML without starting
+    # receivers, workers, loggers, or replay processes.
+    AppSession(args.config)
+    _validate_decoder_pipeline_contract(args.pipeline)
+
+    if args.replay_xdf is not None:
+        if not args.replay_xdf.exists():
+            raise FileNotFoundError(f"Replay XDF file not found: {args.replay_xdf}")
+        _validate_replay_dependencies()
 
 
 def _spawn_replay_process(xdf_path: Path, stream_name: str) -> subprocess.Popen:
@@ -99,8 +148,31 @@ def _spawn_replay_process(xdf_path: Path, stream_name: str) -> subprocess.Popen:
             "--repeat",
         ],
         cwd=PROJECT_ROOT,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def _format_process_output(stdout: str, stderr: str) -> str:
+    sections = []
+    if stdout:
+        sections.append(f"stdout:\n{stdout.strip()}")
+    if stderr:
+        sections.append(f"stderr:\n{stderr.strip()}")
+    return "\n\n".join(sections) if sections else "No subprocess output captured."
+
+
+def _ensure_replay_process_running(process: subprocess.Popen) -> None:
+    return_code = process.poll()
+    if return_code is None:
+        return
+
+    stdout, stderr = process.communicate(timeout=1.0)
+    details = _format_process_output(stdout or "", stderr or "")
+    raise RuntimeError(
+        f"Replay subprocess exited before the smoke run could connect "
+        f"(return code {return_code}).\n{details}"
     )
 
 
@@ -110,10 +182,10 @@ def _stop_process(process: subprocess.Popen | None) -> None:
 
     process.terminate()
     try:
-        process.wait(timeout=3.0)
+        process.communicate(timeout=3.0)
     except subprocess.TimeoutExpired:
         process.kill()
-        process.wait(timeout=3.0)
+        process.communicate(timeout=3.0)
 
 
 def _configure_receiver_for_smoke(
@@ -157,13 +229,17 @@ def main() -> int:
     live: LiveStreamSession | None = None
 
     try:
+        _run_preflight(args)
+        if args.preflight_only:
+            print("Preflight OK.")
+            return 0
+
         if args.replay_xdf is not None:
             xdf_path = args.replay_xdf.resolve()
-            if not xdf_path.exists():
-                raise FileNotFoundError(f"Replay XDF file not found: {xdf_path}")
             print(f"Starting replay subprocess from {xdf_path}")
             replay_process = _spawn_replay_process(xdf_path, args.stream_name)
             time.sleep(args.replay_startup_wait)
+            _ensure_replay_process_running(replay_process)
 
         log_path = args.log.resolve()
         log_path.parent.mkdir(parents=True, exist_ok=True)

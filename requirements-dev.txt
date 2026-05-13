@@ -4,3 +4,6 @@ pytest-cov>=5.0
 pytest-qt>=4.4
 # pybv: BrainVision file writer used by scripts/create_test_eeg.py
 pybv>=0.7
+# Replay/integration tooling used by scripts/replay_xdf_to_lsl.py and gated LSL tests
+pyxdf>=1.17
+mne-lsl>=1.13
