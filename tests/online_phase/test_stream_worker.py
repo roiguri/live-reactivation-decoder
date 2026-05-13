@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 
 import numpy as np
+from PyQt6.QtCore import QObject, pyqtSlot
 
 from backend.online_phase.online_preprocessor import OnlinePreprocessor
 from backend.online_phase.stream_worker import StreamWorker
@@ -65,6 +66,28 @@ class RaisingPreprocessor:
 class RaisingInferenceEngine:
     def predict(self, features):
         raise RuntimeError("inference failed")
+
+
+class FakeLatencyPanel(QObject):
+    def __init__(self) -> None:
+        super().__init__()
+        self.payloads = []
+
+    @pyqtSlot(dict)
+    def display_latency(self, payload: dict) -> None:
+        self.payloads.append(dict(payload))
+        # TODO(open): A real UI should throttle or aggregate this batch-cadence
+        # signal before rendering, for example once per second with rolling
+        # mean/p95 latency. This fake panel prints every payload only to prove
+        # the consumer contract in a small test.
+        print(
+            f"latency total={payload['total_ms']:.3f}ms "
+            f"preprocessing={payload['preprocessing_ms']:.3f}ms "
+            f"inference={payload['inference_ms']:.3f}ms "
+            f"rows={payload['emitted_rows']} "
+            f"pending={payload['pending_samples']}",
+            flush=True,
+        )
 
 
 def _make_data(n_samples: int, *, start_sample: int = 0) -> tuple[np.ndarray, np.ndarray]:
@@ -278,6 +301,67 @@ def test_inference_error_emits_and_stops_worker(qtbot):
     ]
     assert worker.wait(2000)
     assert not worker.isRunning()
+
+
+def test_latency_diagnostics_emit_for_processed_batch(qtbot):
+    timestamps, eeg = _make_data(40)
+    receiver = FakeReceiver([(timestamps, eeg, [(float(timestamps[10]), 5)])])
+    worker = _make_simple_worker(
+        receiver=receiver,
+        preprocessor=PassThroughPreprocessor(),
+        inference_engine=FakeInferenceEngine(),
+    )
+
+    with qtbot.waitSignal(worker.latency_ready, timeout=3000) as blocker:
+        worker.start()
+
+    _stop_worker(worker)
+    (payload,) = blocker.args
+    assert payload["input_samples"] == 40
+    assert payload["emitted_rows"] == 40
+    assert payload["marker_count"] == 1
+    assert payload["pending_samples"] == 0
+
+    timing_keys = {
+        "pull_ms",
+        "accumulation_ms",
+        "preprocessing_ms",
+        "inference_ms",
+        "emit_ms",
+        "total_ms",
+    }
+    assert timing_keys.issubset(payload)
+    for key in timing_keys:
+        assert isinstance(payload[key], float)
+        assert payload[key] >= 0.0
+
+
+def test_latency_diagnostics_can_drive_fake_ui_panel(qtbot, capsys):
+    timestamps, eeg = _make_data(40)
+    receiver = FakeReceiver([(timestamps, eeg, [])])
+    worker = _make_simple_worker(
+        receiver=receiver,
+        preprocessor=PassThroughPreprocessor(),
+        inference_engine=FakeInferenceEngine(),
+    )
+    panel = FakeLatencyPanel()
+    worker.latency_ready.connect(panel.display_latency)
+
+    worker.start()
+    qtbot.waitUntil(lambda: len(panel.payloads) == 1, timeout=3000)
+    _stop_worker(worker)
+
+    payload = panel.payloads[0]
+    assert payload["emitted_rows"] == 40
+    assert payload["pending_samples"] == 0
+
+    printed = capsys.readouterr().out.strip()
+    assert "latency total=" in printed
+    assert "preprocessing=" in printed
+    assert "inference=" in printed
+    assert "ms" in printed
+    assert "rows=40" in printed
+    assert "pending=0" in printed
 
 
 def test_importable_from_online_phase_package():

@@ -71,6 +71,7 @@ class FakeWorker:
         self.batch_size_samples = batch_size_samples
         self.prediction_ready = FakeSignal()
         self.error_occurred = FakeSignal()
+        self.latency_ready = FakeSignal()
         self.start_calls = 0
         self.stop_calls = 0
         self.wait_calls = 0
@@ -107,6 +108,7 @@ class OrderedWorker:
         self.order = order
         self.prediction_ready = FakeSignal()
         self.error_occurred = FakeSignal()
+        self.latency_ready = FakeSignal()
         self.start_calls = 0
         self.stop_calls = 0
         self.wait_calls = 0
@@ -171,6 +173,7 @@ def test_live_stream_session_exposes_prediction_signal_and_lifecycle_order():
 
     assert live.prediction_ready is worker.prediction_ready
     assert live.error_occurred is worker.error_occurred
+    assert live.latency_ready is worker.latency_ready
 
     live.start()
     live.start()
@@ -219,6 +222,7 @@ def test_build_live_stream_session_returns_live_session(sample_config_path, monk
     assert isinstance(live, LiveStreamSession)
     assert live.prediction_ready is worker.prediction_ready
     assert live.error_occurred is worker.error_occurred
+    assert live.latency_ready is worker.latency_ready
     assert not hasattr(session, "online")
     assert not hasattr(live, "worker")
     assert not hasattr(live, "receiver")

@@ -12,6 +12,7 @@ class StreamWorker(QThread):
 
     prediction_ready = pyqtSignal(dict, np.ndarray, list)
     error_occurred = pyqtSignal(str)
+    latency_ready = pyqtSignal(dict)
 
     def __init__(
         self,
@@ -42,39 +43,69 @@ class StreamWorker(QThread):
     def run(self) -> None:
         while not self._stop_requested:
             batch_processed = False
+            pull_started = time.perf_counter()
             try:
                 timestamps, eeg_chunk, markers = self.receiver.pull_new_data()
             except Exception as exc:
                 self._fail("receiver pull", exc)
                 return
+            pull_ms = (time.perf_counter() - pull_started) * 1000.0
 
+            accumulation_started = time.perf_counter()
             try:
                 self._append_to_batch(timestamps, eeg_chunk)
                 self._pending_markers.extend(markers)
             except Exception as exc:
                 self._fail("batch accumulation", exc)
                 return
+            accumulation_ms = (time.perf_counter() - accumulation_started) * 1000.0
 
             while self._accumulated_samples >= self.batch_size_samples:
+                batch_started = time.perf_counter()
                 batch_ts, batch_eeg = self._pop_batch(self.batch_size_samples)
                 batch_end_ts = float(batch_ts[-1])
 
+                preprocessing_started = time.perf_counter()
                 try:
                     out_eeg, out_ts = self.preprocessor.process_batch(batch_eeg, batch_ts)
                 except Exception as exc:
                     self._fail("preprocessing", exc)
                     return
+                preprocessing_ms = (time.perf_counter() - preprocessing_started) * 1000.0
 
+                inference_started = time.perf_counter()
                 try:
                     predictions = self.inference_engine.predict(out_eeg)
                 except Exception as exc:
                     self._fail("inference", exc)
                     return
+                inference_ms = (time.perf_counter() - inference_started) * 1000.0
 
                 batch_markers = self._pop_markers_through(batch_end_ts)
 
+                emit_started = time.perf_counter()
                 self.prediction_ready.emit(predictions, out_ts, batch_markers)
+                emit_ms = (time.perf_counter() - emit_started) * 1000.0
                 batch_processed = True
+                total_ms = (time.perf_counter() - batch_started) * 1000.0
+
+                # TODO(open): Consider moving diagnostics throttling/aggregation
+                # to a dedicated consumer. At the default 40-sample batch size
+                # on a 1000 Hz stream, this signal emits about 25 times/second.
+                # UI/log consumers should usually display rolling summaries
+                # such as mean/p95 latency and backlog instead of every batch.
+                self.latency_ready.emit({
+                    "pull_ms": pull_ms,
+                    "accumulation_ms": accumulation_ms,
+                    "preprocessing_ms": preprocessing_ms,
+                    "inference_ms": inference_ms,
+                    "emit_ms": emit_ms,
+                    "total_ms": total_ms,
+                    "input_samples": int(batch_eeg.shape[0]),
+                    "emitted_rows": int(np.asarray(out_ts).shape[0]),
+                    "marker_count": len(batch_markers),
+                    "pending_samples": self._accumulated_samples,
+                })
 
                 if self._stop_requested:
                     break

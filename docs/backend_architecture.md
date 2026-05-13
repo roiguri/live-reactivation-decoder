@@ -723,7 +723,7 @@ and `metadata`. `OnlinePreprocessor` receives only `online_state`;
 
 * **Role:** The background `QThread` that owns the batch accumulator and runs the micro-batch loop using injected dependencies.
 * **Inputs:** injected `LSLReceiver`, `OnlinePreprocessor`, and `LiveInferenceEngine`.
-* **Outputs:** Qt signals carrying probabilities, timestamps, markers, and unrecoverable runtime errors.
+* **Outputs:** Qt signals carrying probabilities, timestamps, markers, optional latency diagnostics, and unrecoverable runtime errors.
 * **Status:** Implemented.
 * **Does not own:** artifact loading, logger files, receiver start/stop, or frontend lifecycle. Those belong to `AppSession`/`LiveStreamSession`.
 
@@ -736,7 +736,7 @@ and `metadata`. `OnlinePreprocessor` receives only `online_state`;
 
 #### **6. LiveStreamSession (Online Lifecycle Wrapper)**
 
-* **Role:** Represents one composed live decoding run. It exposes `prediction_ready`, `error_occurred`, `start()`, and `stop()` so the frontend does not manage backend internals.
+* **Role:** Represents one composed live decoding run. It exposes `prediction_ready`, `error_occurred`, optional `latency_ready` diagnostics, `start()`, and `stop()` so the frontend does not manage backend internals.
 * **Inputs:** constructed receiver, worker, and optional logger.
 * **Lifecycle:** `start()` calls `receiver.start()` then `worker.start()`. `stop()` calls `worker.stop()`, `worker.wait()`, `logger.close()` if present, then `receiver.stop()`. Both methods are idempotent.
 * **Status:** Implemented in `src/backend/session.py`.
@@ -760,6 +760,7 @@ and `metadata`. `OnlinePreprocessor` receives only `online_state`;
 **Signals:**
 - `StreamWorker.prediction_ready = pyqtSignal(dict, np.ndarray, list)`, exposed as `live.prediction_ready`.
 - `StreamWorker.error_occurred = pyqtSignal(str)`, exposed as `live.error_occurred`.
+- `StreamWorker.latency_ready = pyqtSignal(dict)`, exposed as `live.latency_ready`.
 
 If `live.error_occurred` fires, the worker loop has exited but external resources are still owned by `LiveStreamSession`; caller code should still call `live.stop()` to close the logger and stop the receiver.
 
@@ -768,8 +769,9 @@ If `live.error_occurred` fires, the worker loop has exited but external resource
 - `timestamps: np.ndarray` — LSL clock seconds, shape `(n_rows,)`, aligned to prediction rows.
 - `markers: list[tuple[float, int]]` — `(timestamp, trigger_code)` marker events.
 - `error_occurred` payload: concise string identifying the failing runtime stage (receiver pull, batch accumulation, preprocessing, or inference) and exception type.
+- `latency_ready` payload: diagnostic dictionary with millisecond timing keys `pull_ms`, `accumulation_ms`, `preprocessing_ms`, `inference_ms`, `emit_ms`, `total_ms`, plus `input_samples`, `emitted_rows`, `marker_count`, and `pending_samples`.
 
-**Frontend rule:** use only `live.prediction_ready`, `live.error_occurred`, `live.start()`, and `live.stop()` during normal operation. Do not reach into the underlying worker or private live-session members.
+**Frontend rule:** use only `live.prediction_ready`, `live.error_occurred`, `live.latency_ready`, `live.start()`, and `live.stop()` during normal operation. Do not reach into the underlying worker or private live-session members.
 
 ### Components Interface
 
@@ -1199,6 +1201,7 @@ class StreamWorker(QThread):
     # Emits: (probabilities_dict, output_timestamps, list_of_markers_found)
     prediction_ready = pyqtSignal(dict, np.ndarray, list)
     error_occurred = pyqtSignal(str)
+    latency_ready = pyqtSignal(dict)
 
     def __init__(
         self,
@@ -1275,6 +1278,13 @@ class LiveStreamSession:
     def error_occurred(self):
         """
         Forward StreamWorker.error_occurred without exposing worker internals.
+        """
+        pass
+
+    @property
+    def latency_ready(self):
+        """
+        Forward StreamWorker.latency_ready without exposing worker internals.
         """
         pass
 

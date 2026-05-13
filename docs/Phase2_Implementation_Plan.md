@@ -51,6 +51,7 @@ StreamWorker.run()
 - `[x]` `StreamWorker` is implemented as the injected-dependency micro-batch loop.
 - `[x]` Session-level composition is implemented as `AppSession.build_live_stream_session(...) -> LiveStreamSession`.
 - `[x]` `scripts/smoke_stream_worker.py` exists for headless worker/logger smoke checks.
+- `[x]` `StreamWorker` emits optional per-batch latency diagnostics.
 - `[x]` Phase 1 sample rate locked: configurable via `resample.target_rate` in YAML (default 256 Hz). `online_state` schema locked.
 
 ## Component Plan
@@ -176,6 +177,7 @@ engine = LiveInferenceEngine(
 - Call `LiveInferenceEngine.predict()`.
 - Emit all predictions, aligned timestamps, and markers via `prediction_ready`.
 - Emit unrecoverable receiver, batch accumulation, preprocessing, and inference failures via `error_occurred`.
+- Emit optional per-batch runtime diagnostics via `latency_ready`.
 - Stop the run loop when `stop()` is requested.
 
 **Non-responsibilities:**
@@ -286,7 +288,7 @@ The artifact loader treats `online_state` as opaque. `LiveInferenceEngine` never
 7. `[x]` Refactor session composition to `LiveStreamSession` and `AppSession.build_live_stream_session(...)`.
 8. `[x]` Add headless `scripts/smoke_stream_worker.py`.
 9. `[x]` Surface `StreamWorker` runtime errors through `LiveStreamSession`.
-10. `[ ]` Add latency logging to `StreamWorker`.
+10. `[x]` Add latency logging to `StreamWorker`.
 11. `[ ]` Run replay-based dry run.
 12. `[ ]` Validate with the real lab LSL stream.
 

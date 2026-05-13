@@ -217,6 +217,11 @@ class LiveStreamSession:
         """Forward worker runtime errors without exposing worker internals."""
         return self._worker.error_occurred
 
+    @property
+    def latency_ready(self):
+        """Forward worker runtime diagnostics without exposing worker internals."""
+        return self._worker.latency_ready
+
     def start(self) -> None:
         """Start receiver and worker. Idempotent."""
 
@@ -264,13 +269,14 @@ This section is the exact thing the frontend partner builds against. Copy this v
 >
 > **Lifecycle:**
 > 1. Frontend calls `build_live_stream_session(...)` to get a `LiveStreamSession`.
-> 2. Frontend connects its UI-side slots to `live.prediction_ready` and `live.error_occurred`.
+> 2. Frontend connects its UI-side slots to `live.prediction_ready`, `live.error_occurred`, and optionally `live.latency_ready`.
 > 3. Frontend calls `live.start()`.
 > 4. On shutdown (e.g., window close), frontend calls `live.stop()`.
 >
 > **Signals:**
 > - `StreamWorker.prediction_ready = pyqtSignal(dict, np.ndarray, list)`, exposed as `live.prediction_ready`.
 > - `StreamWorker.error_occurred = pyqtSignal(str)`, exposed as `live.error_occurred`.
+> - `StreamWorker.latency_ready = pyqtSignal(dict)`, exposed as `live.latency_ready`.
 >
 > If `live.error_occurred` fires, the worker loop has exited but external resources are still owned by `LiveStreamSession`; caller code should still call `live.stop()` to close the logger and stop the receiver.
 >
@@ -278,6 +284,7 @@ This section is the exact thing the frontend partner builds against. Copy this v
 > - `predictions: dict[str, np.ndarray]` — keys are task names (model identifiers from the loaded `DecoderPipelineArtifact`); values are `float32` arrays of shape `(n_rows,)`. Each value is `P(class=1)` for that task at that timestamp.
 > - `timestamps: np.ndarray` — `float64`, shape `(n_rows,)`, LSL clock seconds. Monotonic non-decreasing across emissions.
 > - `markers: list[tuple[float, int]]` — `(timestamp, trigger_code)`. Timestamps are per-sample-accurate on the LSL clock. Codes match the trigger codes documented in `experiment_config.yaml`.
+> - `latency_ready` payload: dictionary with millisecond timing keys `pull_ms`, `accumulation_ms`, `preprocessing_ms`, `inference_ms`, `emit_ms`, `total_ms`, plus `input_samples`, `emitted_rows`, `marker_count`, and `pending_samples`.
 >
 > **Threading:**
 > - The signal is emitted from the `StreamWorker` background thread.
@@ -294,7 +301,7 @@ This section is the exact thing the frontend partner builds against. Copy this v
 > - Wiring code that calls `build_live_stream_session(...)`, connects slots, and manages `start()/stop()`.
 >
 > **What the frontend should NOT do:**
-> - Reach into `LiveStreamSession` private members or the underlying `StreamWorker`. Use `prediction_ready`, `error_occurred`, and `start()/stop()` only.
+> - Reach into `LiveStreamSession` private members or the underlying `StreamWorker`. Use `prediction_ready`, `error_occurred`, `latency_ready`, and `start()/stop()` only.
 > - Block in slots — slots run on the UI thread.
 
 ---
@@ -610,14 +617,14 @@ Future decisions discovered mid-implementation that aren't worth blocking on go 
 - `online_decoder/docs/backend_architecture.md` (contract/status update)
 
 **Implementation:**
-- [ ] Add diagnostics signal or logging hook, e.g. `latency_ready = pyqtSignal(dict)`.
-- [ ] Track per-batch timing for preprocessing, inference, and total batch handling.
-- [ ] Include batch size and emitted row count in the diagnostics payload.
-- [ ] Keep diagnostics optional for consumers; do not alter `prediction_ready`.
+- [x] Add diagnostics signal or logging hook, e.g. `latency_ready = pyqtSignal(dict)`.
+- [x] Track per-batch timing for preprocessing, inference, and total batch handling.
+- [x] Include batch size and emitted row count in the diagnostics payload.
+- [x] Keep diagnostics optional for consumers; do not alter `prediction_ready`.
 
 **Tests:**
-- [ ] Assert diagnostics emit for processed batches.
-- [ ] Assert payload includes stable keys and non-negative timing values.
+- [x] Assert diagnostics emit for processed batches.
+- [x] Assert payload includes stable keys and non-negative timing values.
 
 **Commit:**
 - [ ] `git commit -m "feat: add StreamWorker latency diagnostics"`

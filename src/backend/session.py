@@ -38,6 +38,11 @@ class LiveStreamSession:
         """Forward worker runtime errors without exposing worker internals."""
         return self._worker.error_occurred
 
+    @property
+    def latency_ready(self) -> Any:
+        """Forward worker runtime diagnostics without exposing worker internals."""
+        return self._worker.latency_ready
+
     def start(self) -> None:
         """Start receiver and worker. Safe to call more than once."""
         if self._started:
