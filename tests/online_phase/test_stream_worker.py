@@ -122,12 +122,11 @@ def _make_online_state() -> dict:
 
 def _make_settings() -> dict:
     return {
-        "bandpass": {
+        "highpass": {
             "l_freq": 1.0,
-            "h_freq": 40.0,
             "method": "iir",
-            "notch": None,
         },
+        "notch": None,
         "resample": {"target_rate": TARGET_SFREQ},
     }
 

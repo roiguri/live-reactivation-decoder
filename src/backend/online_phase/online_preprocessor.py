@@ -20,7 +20,7 @@ class OnlinePreprocessor:
     exported from Phase 1, applied to streaming micro-batches.
 
     Pipeline order (mirrors offline):
-        1. Bandpass + notch filter (causal IIR, persistent zi)
+        1. High-pass + notch filter (causal IIR, persistent zi)
         2. Decimate to target rate (FIR anti-alias + phase tracking)
         3. Interpolate bad channels (fixed weight matrix)
         4. Average reference
@@ -64,20 +64,19 @@ class OnlinePreprocessor:
         ]
 
         # Filter coefficients
-        bp = preprocessing_settings["bandpass"]
-        # mne.filter.create_filter returns a dict with 'sos' for IIR method.
-        # We apply it single-pass (causal sosfilt) rather than forward-backward,
-        # so phase response differs from offline but cutoffs and band are identical.
+        hp = preprocessing_settings["highpass"]
+        notch_cfg = preprocessing_settings.get("notch")
+        
         iir_params = mne.filter.create_filter(
             data=None,
             sfreq=self._input_sfreq,
-            l_freq=bp["l_freq"],
-            h_freq=bp["h_freq"],
-            method=bp.get("method", "iir"),
+            l_freq=hp["l_freq"],
+            h_freq=None,
+            method=hp.get("method", "iir"),
             verbose=False,
         )
-        self._bandpass_sos: np.ndarray = iir_params["sos"]
-        notch_freq = bp.get("notch")
+        self._highpass_sos: np.ndarray = iir_params["sos"]
+        notch_freq = notch_cfg.get("freq") if notch_cfg is not None else None
         if notch_freq is not None:
             b, a = iirnotch(w0=float(notch_freq), Q=30, fs=self._input_sfreq)
             self._notch_sos: Optional[np.ndarray] = tf2sos(b, a)
@@ -93,7 +92,7 @@ class OnlinePreprocessor:
         self._decimate_fir: np.ndarray = firwin(n_taps, cutoff, fs=self._input_sfreq)
 
         # Persistent filter state — reset to None each reset_state()
-        self._bandpass_zi: Optional[np.ndarray] = None
+        self._highpass_zi: Optional[np.ndarray] = None
         self._notch_zi: Optional[np.ndarray] = None
         self._decimate_zi: Optional[np.ndarray] = None
         self._decimate_phase: int = 0
@@ -114,7 +113,7 @@ class OnlinePreprocessor:
 
     def reset_state(self) -> None:
         """Reset all causal filter state to initial values (as if no data has been seen)."""
-        self._bandpass_zi = None
+        self._highpass_zi = None
         self._notch_zi = None
         self._decimate_zi = None
         self._decimate_phase = 0
@@ -158,7 +157,7 @@ class OnlinePreprocessor:
     # ── Private: filtering ────────────────────────────────────────────────────
 
     def _apply_filter(self, data: np.ndarray) -> np.ndarray:
-        """Apply causal bandpass (and optional notch) with persistent zi state.
+        """Apply causal high-pass (and optional notch) with persistent zi state.
 
         Args:
             data: (n_samples, n_channels)
@@ -166,12 +165,12 @@ class OnlinePreprocessor:
         Returns:
             Filtered array, same shape.
         """
-        if self._bandpass_zi is None:
-            zi_template = sosfilt_zi(self._bandpass_sos)  # (n_sections, 2)
-            self._bandpass_zi = zi_template[:, :, np.newaxis] * data[0]  # (n_sections, 2, n_ch)
+        if self._highpass_zi is None:
+            zi_template = sosfilt_zi(self._highpass_sos)  # (n_sections, 2)
+            self._highpass_zi = zi_template[:, :, np.newaxis] * data[0]  # (n_sections, 2, n_ch)
 
-        filtered, self._bandpass_zi = sosfilt(
-            self._bandpass_sos, data, axis=0, zi=self._bandpass_zi
+        filtered, self._highpass_zi = sosfilt(
+            self._highpass_sos, data, axis=0, zi=self._highpass_zi
         )
 
         if self._notch_sos is not None:

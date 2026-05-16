@@ -65,12 +65,11 @@ def _make_online_state(
 def _make_settings(target_rate: int = TARGET_SFREQ) -> dict:
     """Build a minimal valid preprocessing_settings dict."""
     return {
-        "bandpass": {
+        "highpass": {
             "l_freq": 1.0,
-            "h_freq": 40.0,
             "method": "iir",
-            "notch": 50.0,
         },
+        "notch": {"freq": 50.0},
         "resample": {"target_rate": target_rate},
     }
 
@@ -141,10 +140,10 @@ class TestProperties:
 # ── Commit 2: reset_state ────────────────────────────────────────────────────
 
 class TestResetState:
-    def test_reset_clears_bandpass_zi(self, preprocessor):
-        preprocessor._bandpass_zi = np.ones((4, N_CHANNELS))
+    def test_reset_clears_highpass_zi(self, preprocessor):
+        preprocessor._highpass_zi = np.ones((4, N_CHANNELS))
         preprocessor.reset_state()
-        assert preprocessor._bandpass_zi is None
+        assert preprocessor._highpass_zi is None
 
     def test_reset_clears_notch_zi(self, preprocessor):
         preprocessor._notch_zi = np.ones((4, N_CHANNELS))
@@ -162,7 +161,7 @@ class TestResetState:
         assert preprocessor._decimate_phase == 0
 
 
-# ── Commit 3: causal bandpass + notch filter ──────────────────────────────────
+# ── Commit 3: causal high-pass + notch filter ────────────────────────────────
 
 def _make_sinusoid(freq_hz: float, n_samples: int, n_channels: int, sfreq: float) -> np.ndarray:
     t = np.arange(n_samples) / sfreq
@@ -201,18 +200,40 @@ class TestApplyFilter:
 
         np.testing.assert_allclose(result_single, result_chunked, atol=1e-10)
 
-    def test_highfreq_attenuated(self):
-        """Sinusoid well above h_freq=40 Hz must be strongly attenuated."""
+    def test_apply_filter_passes_high_frequencies(self):
+        """HP-only stage must pass frequencies above the HP cutoff that aren't on the notch.
+
+        Confirms the filter is HP-only (no upper rolloff) and that the 0.05 Hz drift
+        below the HP cutoff is suppressed. Together these pin the stage as HP+notch,
+        not bandpass.
+        """
         n = int(INPUT_SFREQ * 5)
-        data = _make_sinusoid(100.0, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
         p = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
-        out = p._apply_filter(data)
-        # Take second half to skip filter transient.
-        # Causal single-pass IIR has half the effective order of offline filtfilt,
-        # so -30 dB (not -40 dB) is the meaningful guarantee at 2.5× the cutoff.
+
+        # 100 Hz tone is above the (former) bandpass upper edge of 40 Hz and not at the
+        # 50 Hz notch — under HP-only it should pass through nearly untouched.
+        high_data = _make_sinusoid(100.0, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
+        high_out = p._apply_filter(high_data.copy())
         half = n // 2
-        ratio_db = 20 * np.log10(out[half:].std() / data[half:].std() + 1e-30)
-        assert ratio_db < -30, f"Expected >30 dB attenuation, got {ratio_db:.1f} dB"
+        high_ratio_db = 20 * np.log10(
+            high_out[half:].std() / (high_data[half:].std() + 1e-30) + 1e-30
+        )
+        assert high_ratio_db > -3, (
+            f"100 Hz should pass through HP-only stage, got {high_ratio_db:.1f} dB"
+        )
+
+        # 0.05 Hz drift is well below the 1 Hz HP cutoff — must be heavily attenuated.
+        p.reset_state()
+        n_long = int(INPUT_SFREQ * 30)  # need a long signal to see sub-1 Hz
+        drift = _make_sinusoid(0.05, n_long, N_CHANNELS, INPUT_SFREQ) * 1e-5
+        drift_out = p._apply_filter(drift.copy())
+        half_long = n_long // 2
+        drift_ratio_db = 20 * np.log10(
+            drift_out[half_long:].std() / (drift[half_long:].std() + 1e-30) + 1e-30
+        )
+        assert drift_ratio_db < -40, (
+            f"0.05 Hz drift should be suppressed, got {drift_ratio_db:.1f} dB"
+        )
 
     def test_lowfreq_attenuated(self):
         """Sinusoid well below l_freq=1 Hz must be strongly attenuated."""
@@ -229,7 +250,7 @@ class TestApplyFilter:
         n = int(INPUT_SFREQ * 5)
         data = _make_sinusoid(50.0, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
         settings = _make_settings()
-        settings["bandpass"]["notch"] = 50.0
+        settings["notch"] = {"freq": 50.0}
         p = OnlinePreprocessor(settings, _make_online_state(), INPUT_SFREQ)
         out = p._apply_filter(data)
         half = n // 2
@@ -237,27 +258,26 @@ class TestApplyFilter:
         assert ratio_db < -20, f"Expected notch attenuation, got {ratio_db:.1f} dB"
 
     def test_no_notch_leaves_50hz_intact(self):
-        """50 Hz sinusoid must NOT be attenuated when notch=None."""
+        """50 Hz sinusoid must NOT be attenuated when notch is disabled."""
         n = int(INPUT_SFREQ * 5)
         data = _make_sinusoid(50.0, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
         settings = _make_settings()
-        settings["bandpass"]["notch"] = None
-        settings["bandpass"]["h_freq"] = 80.0  # widen bandpass so 50 Hz passes
+        settings["notch"] = None
         p = OnlinePreprocessor(settings, _make_online_state(), INPUT_SFREQ)
         out = p._apply_filter(data)
         half = n // 2
         ratio_db = 20 * np.log10(out[half:].std() / (data[half:].std() + 1e-30) + 1e-30)
         assert ratio_db > -6, f"50 Hz should pass through, got {ratio_db:.1f} dB"
 
-    def test_bandpass_zi_set_after_first_call(self, preprocessor):
-        assert preprocessor._bandpass_zi is None
+    def test_highpass_zi_set_after_first_call(self, preprocessor):
+        assert preprocessor._highpass_zi is None
         preprocessor._apply_filter(np.random.standard_normal((100, N_CHANNELS)) * 1e-5)
-        assert preprocessor._bandpass_zi is not None
+        assert preprocessor._highpass_zi is not None
 
     def test_reset_clears_filter_zi(self, preprocessor):
         preprocessor._apply_filter(np.random.standard_normal((100, N_CHANNELS)) * 1e-5)
         preprocessor.reset_state()
-        assert preprocessor._bandpass_zi is None
+        assert preprocessor._highpass_zi is None
         assert preprocessor._notch_zi is None
 
 
@@ -697,11 +717,11 @@ class TestProcessBatch:
 
     def test_empty_batch_returns_empty_without_state_change(self):
         p = self._make_p()
-        assert p._bandpass_zi is None
+        assert p._highpass_zi is None
         out, out_ts = p.process_batch(np.empty((0, N_CHANNELS)), np.empty(0))
         assert out.shape == (0, N_CHANNELS)
         assert out_ts.shape == (0,)
-        assert p._bandpass_zi is None  # state not touched
+        assert p._highpass_zi is None  # state not touched
 
     def test_output_shape(self):
         p = self._make_p()
