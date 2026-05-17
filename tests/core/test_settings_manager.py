@@ -48,14 +48,18 @@ class TestGetPreprocessingParams:
 
     def test_contains_all_sections(self, sample_config_path):
         params = SettingsManager(sample_config_path).get_preprocessing_params()
-        assert {"random_state", "bandpass", "resample", "ica", "epochs"} <= params.keys()
+        assert {
+            "random_state", "resample_filter_stage", "channel_hygiene",
+            "highpass", "notch", "ica", "epochs", "lowpass", "final_resample",
+        } <= params.keys()
 
-    def test_bandpass_values(self, sample_config_path):
-        bandpass = SettingsManager(sample_config_path).get_preprocessing_params()["bandpass"]
-        assert bandpass["l_freq"] == 1.0
-        assert bandpass["h_freq"] == 40.0
-        assert bandpass["method"] == "iir"
-        assert bandpass["notch"] == 50.0
+    def test_filter_values(self, sample_config_path):
+        params = SettingsManager(sample_config_path).get_preprocessing_params()
+        assert params["highpass"]["l_freq"] == 1.0
+        assert params["highpass"]["method"] == "iir"
+        assert params["lowpass"]["h_freq"] == 40.0
+        assert params["notch"]["freq"] == 50.0
+        assert params["resample_filter_stage"] == "early"
 
     def test_epoch_baseline_is_tuple(self, sample_config_path):
         epochs = SettingsManager(sample_config_path).get_preprocessing_params()["epochs"]
@@ -66,7 +70,10 @@ class TestGetPreprocessingParams:
 
     def test_defaults_applied_when_section_omitted(self, tmp_config_file, minimal_valid_data):
         params = SettingsManager(tmp_config_file(minimal_valid_data)).get_preprocessing_params()
-        assert params["resample"]["target_rate"] == 256
+        assert params["final_resample"]["target_rate"] == 100
+        assert params["resample_filter_stage"] == "early"
+        assert params["ica"]["n_components"] is None
+        assert params["epochs"]["baseline"] is None
 
 
 class TestGetDecoderSettings:
@@ -115,8 +122,8 @@ class TestGetEventMapping:
 
 
 class TestAllowedValues:
-    def test_rejects_invalid_bandpass_method(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"bandpass": {"l_freq": 1.0, "h_freq": 40.0, "method": "butterworth"}}
+    def test_rejects_invalid_highpass_method(self, tmp_config_file, minimal_valid_data):
+        minimal_valid_data["preprocessing"] = {"highpass": {"l_freq": 0.1, "method": "butterworth"}}
         with pytest.raises(ValueError):
             SettingsManager(tmp_config_file(minimal_valid_data))
 
@@ -125,25 +132,35 @@ class TestAllowedValues:
         with pytest.raises(ValueError):
             SettingsManager(tmp_config_file(minimal_valid_data))
 
+    def test_rejects_invalid_resample_filter_stage(self, tmp_config_file, minimal_valid_data):
+        minimal_valid_data["preprocessing"] = {"resample_filter_stage": "middle"}
+        with pytest.raises(ValueError):
+            SettingsManager(tmp_config_file(minimal_valid_data))
+
     def test_rejects_invalid_decoder_model(self, tmp_config_file, minimal_valid_data):
         minimal_valid_data["decoders"]["model"] = "XGBoost"
         with pytest.raises(ValueError):
             SettingsManager(tmp_config_file(minimal_valid_data))
 
-    def test_rejects_extra_key_in_bandpass(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"bandpass": {"l_freq": 1.0, "h_freq": 40.0, "typo_key": 99}}
+    def test_rejects_extra_key_in_highpass(self, tmp_config_file, minimal_valid_data):
+        minimal_valid_data["preprocessing"] = {"highpass": {"l_freq": 0.1, "typo_key": 99}}
+        with pytest.raises(ValueError):
+            SettingsManager(tmp_config_file(minimal_valid_data))
+
+    def test_rejects_removed_reject_criteria_section(self, tmp_config_file, minimal_valid_data):
+        minimal_valid_data["preprocessing"] = {"reject_criteria": {"hard_amplitude": 1e-4}}
         with pytest.raises(ValueError):
             SettingsManager(tmp_config_file(minimal_valid_data))
 
 
 class TestRangeValidation:
-    def test_rejects_l_freq_above_h_freq(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"bandpass": {"l_freq": 40.0, "h_freq": 1.0}}
+    def test_rejects_non_positive_highpass(self, tmp_config_file, minimal_valid_data):
+        minimal_valid_data["preprocessing"] = {"highpass": {"l_freq": 0.0}}
         with pytest.raises(ValueError):
             SettingsManager(tmp_config_file(minimal_valid_data))
 
-    def test_rejects_equal_l_h_freq(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"bandpass": {"l_freq": 10.0, "h_freq": 10.0}}
+    def test_rejects_non_positive_lowpass(self, tmp_config_file, minimal_valid_data):
+        minimal_valid_data["preprocessing"] = {"lowpass": {"h_freq": -1.0}}
         with pytest.raises(ValueError):
             SettingsManager(tmp_config_file(minimal_valid_data))
 
@@ -152,13 +169,13 @@ class TestRangeValidation:
         with pytest.raises(ValueError):
             SettingsManager(tmp_config_file(minimal_valid_data))
 
-    def test_rejects_zero_reject(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"epochs": {"reject": 0.0}}
+    def test_rejects_zero_final_resample_rate(self, tmp_config_file, minimal_valid_data):
+        minimal_valid_data["preprocessing"] = {"final_resample": {"target_rate": 0}}
         with pytest.raises(ValueError):
             SettingsManager(tmp_config_file(minimal_valid_data))
 
-    def test_rejects_negative_reject(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"epochs": {"reject": -1e-4}}
+    def test_rejects_negative_final_resample_rate(self, tmp_config_file, minimal_valid_data):
+        minimal_valid_data["preprocessing"] = {"final_resample": {"target_rate": -100}}
         with pytest.raises(ValueError):
             SettingsManager(tmp_config_file(minimal_valid_data))
 
