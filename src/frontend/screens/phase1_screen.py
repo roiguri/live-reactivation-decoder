@@ -132,7 +132,6 @@ class Phase1Screen(QWidget):
         self._preprocessing_view.loading_requested.connect(self.show_loading)
         self._preprocessing_view.loading_done.connect(self.hide_loading)
         self._load_data_view.data_loaded.connect(self._preprocessing_view.on_data_loaded)
-        self._preprocessing_view.step1_complete.connect(self._on_ica_review_displayed)
         self._preprocessing_view.step2_complete.connect(
             self._on_preprocessing_complete_displayed
         )
@@ -155,11 +154,6 @@ class Phase1Screen(QWidget):
         self._load_data_view.set_session(session)
         self._preprocessing_view.set_session(session)
         self._journey_panel.advance(1)
-
-    def _on_ica_review_displayed(self) -> None:
-        # Step 1 succeeded — the panel button now confirms ICA rejections.
-        self._journey_panel.set_node_action(2, self._preprocessing_view.trigger_confirm)
-        self._journey_panel.set_node_action_label(2, "Confirm && Continue")
 
     def _on_preprocessing_complete_displayed(self) -> None:
         self._journey_panel.set_node_action(2, self._preprocessing_view.trigger_continue)
