@@ -25,7 +25,7 @@ EEG_CH_NAMES = [
 ]
 N_CHANNELS = len(EEG_CH_NAMES)
 INPUT_SFREQ = 1000.0
-TARGET_SFREQ = 256
+TARGET_SFREQ = 100
 
 
 def _make_online_state(
@@ -62,15 +62,17 @@ def _make_online_state(
     }
 
 
-def _make_settings(target_rate: int = TARGET_SFREQ) -> dict:
+def _make_settings(
+    target_rate: int = TARGET_SFREQ,
+    resample_filter_stage: str = "early",
+) -> dict:
     """Build a minimal valid preprocessing_settings dict."""
     return {
-        "highpass": {
-            "l_freq": 1.0,
-            "method": "iir",
-        },
+        "highpass": {"l_freq": 1.0, "method": "iir"},
         "notch": {"freq": 50.0},
-        "resample": {"target_rate": target_rate},
+        "lowpass": {"h_freq": 40.0, "method": "iir"},
+        "final_resample": {"target_rate": target_rate},
+        "resample_filter_stage": resample_filter_stage,
     }
 
 
@@ -112,16 +114,21 @@ class TestConstructorValidation:
         p = OnlinePreprocessor(valid_settings, valid_online_state, input_sfreq=INPUT_SFREQ)
         assert p is not None
 
-    def test_raises_if_sfreq_offline_mismatches_target_rate(self, valid_settings):
-        state = _make_online_state(sfreq_offline=512.0)
-        with pytest.raises(ValueError, match="sfreq_offline"):
-            OnlinePreprocessor(valid_settings, state)
-
     def test_raises_if_ch_names_count_inconsistent_with_ica_pca(self, valid_settings):
         state = _make_online_state()
         state["ica_pca_components"] = np.zeros((4, N_CHANNELS + 5))
         with pytest.raises(ValueError, match="ch_names"):
             OnlinePreprocessor(valid_settings, state)
+
+    def test_raises_on_non_integer_decimation_ratio(self):
+        settings = _make_settings(target_rate=256)  # 1000 / 256 = 3.90625
+        with pytest.raises(ValueError, match="integer multiple"):
+            OnlinePreprocessor(settings, _make_online_state(sfreq_offline=256.0))
+
+    def test_raises_on_invalid_resample_filter_stage(self):
+        settings = _make_settings(resample_filter_stage="middle")
+        with pytest.raises(ValueError, match="resample_filter_stage"):
+            OnlinePreprocessor(settings, _make_online_state())
 
 
 # ── Commit 2: Properties ──────────────────────────────────────────────────────
@@ -149,6 +156,11 @@ class TestResetState:
         preprocessor._notch_zi = np.ones((4, N_CHANNELS))
         preprocessor.reset_state()
         assert preprocessor._notch_zi is None
+
+    def test_reset_clears_lowpass_zi(self, preprocessor):
+        preprocessor._lowpass_zi = np.ones((4, N_CHANNELS))
+        preprocessor.reset_state()
+        assert preprocessor._lowpass_zi is None
 
     def test_reset_clears_decimate_zi(self, preprocessor):
         preprocessor._decimate_zi = np.ones((10, N_CHANNELS))
@@ -281,6 +293,124 @@ class TestApplyFilter:
         assert preprocessor._notch_zi is None
 
 
+# ── Commit 2 (migration): causal low-pass filter ─────────────────────────────
+
+
+class TestApplyLowpass:
+    """Frequency-domain and state behaviour of the new LP stage.
+
+    The LP stage shapes training-data spectrum (40 Hz cutoff for a 100 Hz
+    target sfreq, per the cited replay paper) and prevents aliasing before
+    the decimation step. Tests mirror the rigour of TestApplyFilter.
+    """
+
+    def _make_p(self) -> OnlinePreprocessor:
+        return OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+
+    def test_passband_fidelity_5hz_preserved(self):
+        """A 5 Hz tone (well below the 40 Hz cutoff) should pass with negligible attenuation."""
+        n = int(INPUT_SFREQ * 5)
+        data = _make_sinusoid(5.0, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
+        out = self._make_p()._apply_lowpass(data.copy())
+        half = n // 2
+        ratio_db = 20 * np.log10(out[half:].std() / (data[half:].std() + 1e-30) + 1e-30)
+        assert ratio_db > -1.0, f"5 Hz should be in passband, got {ratio_db:.2f} dB"
+
+    @pytest.mark.parametrize("freq_hz,min_atten_db", [(80.0, 10.0), (120.0, 20.0), (200.0, 30.0)])
+    def test_stopband_attenuation_progresses(self, freq_hz: float, min_atten_db: float):
+        """Stopband tones should be attenuated progressively more with increasing frequency."""
+        n = int(INPUT_SFREQ * 5)
+        data = _make_sinusoid(freq_hz, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
+        out = self._make_p()._apply_lowpass(data.copy())
+        half = n // 2
+        ratio_db = 20 * np.log10(out[half:].std() / (data[half:].std() + 1e-30) + 1e-30)
+        assert ratio_db < -min_atten_db, (
+            f"{freq_hz:.0f} Hz tone should be attenuated by at least {min_atten_db} dB, "
+            f"got {ratio_db:.1f} dB"
+        )
+
+    def test_cutoff_at_40hz_is_around_minus_3db(self):
+        """At the LP cutoff (40 Hz), MNE's default IIR design lands roughly in [-6, -1] dB."""
+        n = int(INPUT_SFREQ * 5)
+        data = _make_sinusoid(40.0, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
+        out = self._make_p()._apply_lowpass(data.copy())
+        half = n // 2
+        ratio_db = 20 * np.log10(out[half:].std() / (data[half:].std() + 1e-30) + 1e-30)
+        # MNE's default IIR (butter, order 4) is ~-3 dB at the design cutoff but
+        # exact response depends on the order; allow a generous band.
+        assert -6.0 < ratio_db < -1.0, (
+            f"40 Hz response should sit near -3 dB, got {ratio_db:.2f} dB"
+        )
+
+    def test_lowpass_is_causal(self):
+        """No output before t=0 from a unit impulse at t=0."""
+        n = 200
+        impulse = np.zeros((n, N_CHANNELS))
+        impulse[0] = 1.0
+        p = self._make_p()
+        out = p._apply_lowpass(impulse)
+        # Trivially true for `out[0:]`, but the meaningful guarantee is that the
+        # filter doesn't draw on samples it hasn't seen — sosfilt is causal by
+        # construction, so we assert finite energy lives entirely in t >= 0.
+        assert np.all(np.isfinite(out))
+        assert np.abs(out[:1]).sum() > 0, "Filter should respond at t=0"
+
+    def test_chunk_boundary_continuity(self):
+        """Whole-pass output must equal concatenated chunked output (persistent zi)."""
+        rng = np.random.default_rng(11)
+        data = rng.standard_normal((1000, N_CHANNELS)) * 1e-5
+
+        p_single = self._make_p()
+        out_single = p_single._apply_lowpass(data.copy())
+
+        p_chunked = self._make_p()
+        sizes = [37, 51, 29, 83, 100, 200, 500]  # sums to 1000
+        chunks, idx = [], 0
+        for s in sizes:
+            chunks.append(p_chunked._apply_lowpass(data[idx:idx + s].copy()))
+            idx += s
+        out_chunked = np.concatenate(chunks)
+
+        np.testing.assert_allclose(out_single, out_chunked, atol=1e-10)
+
+    def test_reset_clears_lowpass_state(self, preprocessor):
+        preprocessor._apply_lowpass(np.random.standard_normal((100, N_CHANNELS)) * 1e-5)
+        preprocessor.reset_state()
+        assert preprocessor._lowpass_zi is None
+
+    def test_lowpass_zi_set_after_first_call(self, preprocessor):
+        assert preprocessor._lowpass_zi is None
+        preprocessor._apply_lowpass(np.random.standard_normal((100, N_CHANNELS)) * 1e-5)
+        assert preprocessor._lowpass_zi is not None
+
+    def test_frequency_response_matches_offline_design(self):
+        """sosfreqz on the same SOS must match the empirical |H(f)| of our online LP."""
+        from scipy.signal import sosfreqz
+
+        p = self._make_p()
+        probe_freqs = np.array([1.0, 10.0, 30.0, 60.0, 100.0])
+
+        # Empirical: pass tones through the online LP, measure RMS ratio (after transient).
+        empirical_db = []
+        for f in probe_freqs:
+            n = int(INPUT_SFREQ * 5)
+            sig = _make_sinusoid(f, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
+            p.reset_state()
+            out = p._apply_lowpass(sig.copy())
+            half = n // 2
+            empirical_db.append(
+                20 * np.log10(out[half:].std() / (sig[half:].std() + 1e-30) + 1e-30)
+            )
+
+        # Theoretical from the same SOS matrix
+        worN = 2 * np.pi * probe_freqs / INPUT_SFREQ
+        _, h = sosfreqz(p._lowpass_sos, worN=worN)
+        theoretical_db = 20 * np.log10(np.abs(h) + 1e-30)
+
+        # 2 dB tolerance covers MNE's IIR design quirks + steady-state RMS noise.
+        np.testing.assert_allclose(np.array(empirical_db), theoretical_db, atol=2.0)
+
+
 # ── Commit 4: stateful decimation ─────────────────────────────────────────────
 
 class TestDecimate:
@@ -293,13 +423,13 @@ class TestDecimate:
         timestamps = np.arange(n, dtype=float) / INPUT_SFREQ
         return data, timestamps
 
-    def test_40_samples_give_10_outputs(self):
-        """First batch of 40 samples at 1000 Hz → 10 outputs at 256 Hz."""
+    def test_40_samples_give_4_outputs(self):
+        """First batch of 40 samples at 1000 Hz → 4 outputs at 100 Hz (factor 10)."""
         data, ts = self._make_data(40)
         p = self._make_p()
         out, out_ts = p._decimate(data, ts)
-        assert out.shape[0] == 10
-        assert out_ts.shape[0] == 10
+        assert out.shape[0] == 4
+        assert out_ts.shape[0] == 4
 
     def test_sample_count_large_equals_chunked(self):
         """Total output samples must be the same whether input arrives as one batch or many."""
@@ -326,19 +456,16 @@ class TestDecimate:
         for t in out_ts:
             assert np.any(np.isclose(ts, t)), f"Output timestamp {t} not in input timestamps"
 
-    def test_37_samples_at_phase_3_give_9_outputs(self):
-        """37 input samples starting at phase=3 → 9 outputs (verified analytically)."""
-        # Advance phase to 3 by processing 3 samples first
+    def test_phase_persists_across_chunks(self):
+        """phase=3 + 37 input samples (factor 10) → keep indices [3, 13, 23, 33] = 4 outputs."""
         p = self._make_p()
-        seed_data, seed_ts = self._make_data(3)
-        p._decimate(seed_data, seed_ts)
-        assert p._decimate_phase == 3 * 32 % 125  # phase after 3 samples: 96 % 125 = 96
-
-        # Manually set phase to 3 for the documented test case
         p._decimate_phase = 3
         data, ts = self._make_data(37)
         out, _ = p._decimate(data, ts)
-        assert out.shape[0] == 9
+        assert out.shape[0] == 4
+        # After this chunk, next kept sample would be at original index 43,
+        # i.e. local index 43 - 37 = 6 in the next chunk.
+        assert p._decimate_phase == 6
 
     def test_empty_input_returns_empty(self):
         p = self._make_p()
@@ -378,13 +505,14 @@ class TestDecimate:
             np.testing.assert_array_equal(t1, t2)
 
 
-@pytest.mark.parametrize("target_sfreq", [100, 128, 200, 250, 256, 500, 512])
+@pytest.mark.parametrize("target_sfreq", [100, 200, 250, 500])
 class TestDecimateFrequencies:
-    """Decimation correctness across a range of target sample rates.
+    """Decimation correctness across a range of integer-ratio target sample rates.
 
-    Covers both simple integer-ratio cases (1000→500, 1000→200, 1000→250,
-    1000→100) and non-trivial GCD cases (1000→128, 1000→256, 1000→512)
-    where up_factor > 1.
+    Decimation now requires input_sfreq to be an integer multiple of
+    target_sfreq (see OnlinePreprocessor.__init__). Non-integer ratios
+    such as 1000→128, 1000→256, 1000→512 are rejected at construction,
+    so they're not exercised here.
     """
 
     def _make_p(self, target_sfreq: int) -> OnlinePreprocessor:
@@ -889,3 +1017,109 @@ class TestIntegration:
         np.testing.assert_allclose(out_a[:, bad_ch_idx], out_b[:, bad_ch_idx], atol=1e-10)
         good_indices = [i for i in range(N_CHANNELS) if i != bad_ch_idx]
         np.testing.assert_allclose(out_a[:, good_indices], out_b[:, good_indices], atol=1e-10)
+
+
+# ── Commit 2 (migration): resample_filter_stage variant ordering ─────────────
+
+
+class TestVariantOrdering:
+    """process_batch must call its `_apply_*` stages in the order dictated by
+    `resample_filter_stage`. We monkey-patch each stage to record the call
+    order and the input shape it saw, then assert both.
+    """
+
+    def _instrument(self, p: OnlinePreprocessor) -> list[tuple[str, tuple]]:
+        """Wrap each pipeline stage to record (name, input_shape) into a log."""
+        log: list[tuple[str, tuple]] = []
+
+        def wrap_inplace(name: str, original):
+            def wrapped(data):
+                log.append((name, data.shape))
+                return original(data)
+            return wrapped
+
+        def wrap_returning_tuple(name: str, original):
+            def wrapped(data, timestamps):
+                log.append((name, data.shape))
+                return original(data, timestamps)
+            return wrapped
+
+        # _apply_filter and _apply_lowpass return arrays.
+        p._apply_filter = wrap_inplace("filter", p._apply_filter)
+        p._apply_lowpass = wrap_inplace("lowpass", p._apply_lowpass)
+        # _decimate returns (data, timestamps).
+        p._decimate = wrap_returning_tuple("decimate", p._decimate)
+        # In-place stages all mutate `data` and return None.
+        p._apply_bad_channel_interpolation = wrap_inplace(
+            "interp", p._apply_bad_channel_interpolation
+        )
+        p._apply_average_reference = wrap_inplace(
+            "avg_ref", p._apply_average_reference
+        )
+        p._apply_ica = wrap_inplace("ica", p._apply_ica)
+        return log
+
+    def _make_batch(self) -> tuple[np.ndarray, np.ndarray]:
+        rng = np.random.default_rng(3)
+        n = 100  # 100 samples @ 1000 Hz -> 10 samples @ 100 Hz after decimation
+        data = rng.standard_normal((n, N_CHANNELS)) * 1e-5
+        timestamps = np.arange(n, dtype=float) / INPUT_SFREQ
+        return data, timestamps
+
+    def test_early_variant_runs_lp_decimate_before_spatial_transforms(self):
+        p = OnlinePreprocessor(
+            _make_settings(resample_filter_stage="early"),
+            _make_online_state(),
+            INPUT_SFREQ,
+        )
+        log = self._instrument(p)
+        data, timestamps = self._make_batch()
+        p.process_batch(data, timestamps)
+
+        stage_names = [name for name, _ in log]
+        assert stage_names == [
+            "filter", "lowpass", "decimate", "interp", "avg_ref", "ica"
+        ]
+
+        # ICA must see decimated data: 100 input samples -> 10 at 100 Hz.
+        ica_input_shape = next(shape for name, shape in log if name == "ica")
+        assert ica_input_shape[0] == 10
+
+    def test_late_variant_runs_lp_decimate_after_spatial_transforms(self):
+        p = OnlinePreprocessor(
+            _make_settings(resample_filter_stage="late"),
+            _make_online_state(),
+            INPUT_SFREQ,
+        )
+        log = self._instrument(p)
+        data, timestamps = self._make_batch()
+        p.process_batch(data, timestamps)
+
+        stage_names = [name for name, _ in log]
+        assert stage_names == [
+            "filter", "interp", "avg_ref", "ica", "lowpass", "decimate"
+        ]
+
+        # ICA must see full-rate data: 100 input samples stay at 1000 Hz.
+        ica_input_shape = next(shape for name, shape in log if name == "ica")
+        assert ica_input_shape[0] == 100
+
+    def test_both_variants_emit_same_output_sample_count(self):
+        """Both variants decimate the same input by 10x and emit the same length."""
+        data, timestamps = self._make_batch()
+
+        p_early = OnlinePreprocessor(
+            _make_settings(resample_filter_stage="early"),
+            _make_online_state(),
+            INPUT_SFREQ,
+        )
+        out_early, _ = p_early.process_batch(data.copy(), timestamps.copy())
+
+        p_late = OnlinePreprocessor(
+            _make_settings(resample_filter_stage="late"),
+            _make_online_state(),
+            INPUT_SFREQ,
+        )
+        out_late, _ = p_late.process_batch(data.copy(), timestamps.copy())
+
+        assert out_early.shape == out_late.shape

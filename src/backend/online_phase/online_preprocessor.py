@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from math import gcd
 from typing import Optional
 
 import mne
@@ -19,12 +18,24 @@ class OnlinePreprocessor:
     Replicates the offline pipeline's spatial transforms using matrices
     exported from Phase 1, applied to streaming micro-batches.
 
-    Pipeline order (mirrors offline):
+    Pipeline order (mirrors offline). Two variants selected by
+    settings["preprocessing"]["resample_filter_stage"]:
+
+      "early" — LP + decimate run before the spatial transforms:
         1. High-pass + notch filter (causal IIR, persistent zi)
-        2. Decimate to target rate (FIR anti-alias + phase tracking)
-        3. Interpolate bad channels (fixed weight matrix)
-        4. Average reference
-        5. Apply ICA (fixed unmixing/mixing matrices)
+        2. Low-pass filter at h_freq Hz (causal IIR, persistent zi)
+        3. Decimate to target rate (FIR anti-alias + integer subsample)
+        4. Interpolate bad channels (fixed weight matrix)
+        5. Average reference
+        6. Apply ICA (fixed unmixing/mixing matrices)
+
+      "late" — LP + decimate run after the spatial transforms:
+        1. High-pass + notch filter (causal IIR, persistent zi)
+        2. Interpolate bad channels (fixed weight matrix)
+        3. Average reference
+        4. Apply ICA (fixed unmixing/mixing matrices)
+        5. Low-pass filter at h_freq Hz (causal IIR, persistent zi)
+        6. Decimate to target rate (FIR anti-alias + integer subsample)
     """
 
     def __init__(
@@ -36,7 +47,15 @@ class OnlinePreprocessor:
         self._validate_inputs(preprocessing_settings, online_state)
 
         self._input_sfreq = float(input_sfreq)
-        self._target_sfreq = float(preprocessing_settings["resample"]["target_rate"])
+        self._target_sfreq = float(preprocessing_settings["final_resample"]["target_rate"])
+        self._resample_filter_stage: str = preprocessing_settings.get(
+            "resample_filter_stage", "early"
+        )
+        if self._resample_filter_stage not in ("early", "late"):
+            raise ValueError(
+                f"resample_filter_stage must be 'early' or 'late', got "
+                f"{self._resample_filter_stage!r}."
+            )
 
         # Spatial transform matrices from Phase 1
         self._ch_names: list[str] = list(online_state["ch_names"])
@@ -82,18 +101,36 @@ class OnlinePreprocessor:
             self._notch_sos: Optional[np.ndarray] = tf2sos(b, a)
         else:
             self._notch_sos = None
-        # Decimation: reduce from input_sfreq to target_sfreq
-        # Ratio: down_factor / up_factor (e.g. 125/32 for 1000→256 Hz)
-        common = gcd(int(self._input_sfreq), int(self._target_sfreq))
-        self._up_factor: int = int(self._target_sfreq) // common
-        self._down_factor: int = int(self._input_sfreq) // common
+
+        # Low-pass filter (40 Hz default, IIR causal). 
+        lp = preprocessing_settings["lowpass"]
+        lp_params = mne.filter.create_filter(
+            data=None,
+            sfreq=self._input_sfreq,
+            l_freq=None,
+            h_freq=lp["h_freq"],
+            method=lp.get("method", "iir"),
+            verbose=False,
+        )
+        self._lowpass_sos: np.ndarray = lp_params["sos"]
+
+        # Decimation
+        # TODO: currently don't support non-integer decimation ratios
+        if int(self._input_sfreq) % int(self._target_sfreq) != 0:
+            raise ValueError(
+                f"input_sfreq ({self._input_sfreq}) must be an integer multiple "
+                f"of target_sfreq ({self._target_sfreq}). Non-integer decimation "
+                "ratios are not supported."
+            )
+        self._decimation: int = int(self._input_sfreq) // int(self._target_sfreq)
         cutoff = 0.9 * self._target_sfreq / 2.0
-        n_taps = 10 * self._up_factor + 1
+        n_taps = 10 * self._decimation + 1
         self._decimate_fir: np.ndarray = firwin(n_taps, cutoff, fs=self._input_sfreq)
 
         # Persistent filter state — reset to None each reset_state()
         self._highpass_zi: Optional[np.ndarray] = None
         self._notch_zi: Optional[np.ndarray] = None
+        self._lowpass_zi: Optional[np.ndarray] = None
         self._decimate_zi: Optional[np.ndarray] = None
         self._decimate_phase: int = 0
 
@@ -115,6 +152,7 @@ class OnlinePreprocessor:
         """Reset all causal filter state to initial values (as if no data has been seen)."""
         self._highpass_zi = None
         self._notch_zi = None
+        self._lowpass_zi = None
         self._decimate_zi = None
         self._decimate_phase = 0
 
@@ -148,10 +186,20 @@ class OnlinePreprocessor:
 
         data = eeg_batch.copy().astype(float)
         data = self._apply_filter(data)
-        data, out_timestamps = self._decimate(data, timestamps)
-        self._apply_bad_channel_interpolation(data)
-        self._apply_average_reference(data)
-        self._apply_ica(data)
+        if self._resample_filter_stage == "early":
+            # LP + decimate happen before spatial transforms
+            data = self._apply_lowpass(data)
+            data, out_timestamps = self._decimate(data, timestamps)
+            self._apply_bad_channel_interpolation(data)
+            self._apply_average_reference(data)
+            self._apply_ica(data)
+        else:
+            # spatial transforms at input_sfreq, then LP + decimate
+            self._apply_bad_channel_interpolation(data)
+            self._apply_average_reference(data)
+            self._apply_ica(data)
+            data = self._apply_lowpass(data)
+            data, out_timestamps = self._decimate(data, timestamps)
         return data, out_timestamps
 
     # ── Private: filtering ────────────────────────────────────────────────────
@@ -183,10 +231,36 @@ class OnlinePreprocessor:
 
         return filtered
 
+    def _apply_lowpass(self, data: np.ndarray) -> np.ndarray:
+        """Apply causal low-pass with persistent zi state.
+
+        Mirrors _apply_filter's structure but with only the LP stage. Runs
+        before _decimate (in either variant) to remove energy above the new
+        Nyquist and prevent aliasing.
+
+        Args:
+            data: (n_samples, n_channels)
+
+        Returns:
+            Filtered array, same shape.
+        """
+        if self._lowpass_zi is None:
+            zi_template = sosfilt_zi(self._lowpass_sos)
+            self._lowpass_zi = zi_template[:, :, np.newaxis] * data[0]
+
+        filtered, self._lowpass_zi = sosfilt(
+            self._lowpass_sos, data, axis=0, zi=self._lowpass_zi
+        )
+        return filtered
+
     def _decimate(
         self, data: np.ndarray, timestamps: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Anti-alias FIR lowpass + phase-tracked subsampling from input_sfreq to target_sfreq.
+        """Anti-alias FIR + integer subsampling from input_sfreq to target_sfreq.
+
+        Integer-ratio only (e.g. 1000 -> 100 Hz = decimation factor 10). The
+        FIR anti-alias filter carries persistent zi across chunks; the phase
+        tracks where the next kept sample lands inside the next chunk.
 
         Args:
             data: (n_samples, n_channels)
@@ -201,29 +275,17 @@ class OnlinePreprocessor:
         if n_in == 0:
             return np.empty((0, n_ch)), np.empty((0,))
 
-        # Anti-aliasing FIR — zero-init (see online_filtering.md for rationale)
+        # Anti-aliasing FIR — zero-init
         if self._decimate_zi is None:
             self._decimate_zi = np.zeros((len(self._decimate_fir) - 1, n_ch))
         filtered, self._decimate_zi = lfilter(
             self._decimate_fir, 1.0, data, axis=0, zi=self._decimate_zi
         )
 
-        # Phase-tracked subsampling (see online_filtering.md for algorithm details)
         phase = self._decimate_phase
-        n_out = (n_in * self._up_factor + phase) // self._down_factor
-
-        if n_out == 0:
-            self._decimate_phase = (phase + n_in * self._up_factor) % self._down_factor
-            return np.empty((0, n_ch)), np.empty((0,))
-
-        # k-th output is at input index ceil(((k+1)*down - phase) / up) - 1
-        k = np.arange(n_out)
-        out_indices = (
-            np.ceil(((k + 1) * self._down_factor - phase) / self._up_factor).astype(int) - 1
-        )
-        out_indices = np.clip(out_indices, 0, n_in - 1)
-
-        self._decimate_phase = (phase + n_in * self._up_factor) % self._down_factor
+        d = self._decimation
+        out_indices = np.arange(phase, n_in, d)
+        self._decimate_phase = (d - ((n_in - phase) % d)) % d
 
         return filtered[out_indices], timestamps[out_indices]
 
@@ -281,18 +343,6 @@ class OnlinePreprocessor:
         preprocessing_settings: dict,
         online_state: dict,
     ) -> None:
-        # Cross-validate Phase 1 sample rate against Phase 2 config.
-        # A mismatch means filter coefficients would be designed for the wrong rate,
-        # producing silently wrong results with no crash.
-        target_rate = preprocessing_settings["resample"]["target_rate"]
-        sfreq_offline = online_state["sfreq_offline"]
-        if abs(float(sfreq_offline) - float(target_rate)) > 1e-6:
-            raise ValueError(
-                f"online_state['sfreq_offline'] ({sfreq_offline}) does not match "
-                f"preprocessing_settings['resample']['target_rate'] ({target_rate}). "
-                "Phase 1 and Phase 2 configs are out of sync."
-            )
-
         # Catch channel/ICA dimension mismatch early — otherwise it manifests as a
         # cryptic NumPy broadcast error on the first process_batch() call.
         ch_names = online_state["ch_names"]

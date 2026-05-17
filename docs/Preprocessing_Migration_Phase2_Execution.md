@@ -128,7 +128,7 @@ pytest online_decoder/tests/online_phase/test_online_preprocessor.py -v -k "filt
 
 > **🛑 Ask before committing.**
 
-**Message:** `feat(online): add lowpass stage and decimate to 100 Hz`
+**Message:** `feat(prepro-fix): add lowpass stage and decimate to 100 Hz`
 
 **Scope:**
 - [../src/backend/online_phase/online_preprocessor.py](../src/backend/online_phase/online_preprocessor.py)
@@ -180,7 +180,7 @@ pytest online_decoder/tests/online_phase/test_online_preprocessor.py -v -k "lowp
 
 > **🛑 Ask before committing.**
 
-**Message:** `refactor(online): use positional indices from online_state`
+**Message:** `refactor(prepro-fix): use positional indices from online_state`
 
 **Scope:**
 - [../src/backend/online_phase/online_preprocessor.py](../src/backend/online_phase/online_preprocessor.py)
@@ -219,7 +219,7 @@ pytest online_decoder/tests/online_phase/test_online_preprocessor.py -v -k "vali
 
 > **🛑 Ask before committing.**
 
-**Message:** `feat(online): apply positional EEG hygiene downstream of trigger split`
+**Message:** `feat(prepro-fix): apply positional EEG hygiene downstream of trigger split`
 
 **Scope:**
 - [../src/backend/online_phase/lsl_receiver.py](../src/backend/online_phase/lsl_receiver.py)
@@ -250,7 +250,7 @@ pytest online_decoder/tests/online_phase/test_lsl_receiver.py -v
 
 > **🛑 Ask before committing.**
 
-**Message:** `tools: align benchmark_preprocessor defaults with new schema`
+**Message:** `tools(prepro-fix): align benchmark_preprocessor defaults with new schema`
 
 **Scope:**
 - [../scripts/benchmark_preprocessor.py](../scripts/benchmark_preprocessor.py)
@@ -276,16 +276,21 @@ python online_decoder/scripts/benchmark_preprocessor.py --target-sfreq 100 --n-c
 
 > **🛑 Ask before committing.**
 
-**Message:** `docs(online): document new OnlinePreprocessor pipeline order`
+**Message:** `docs(prepro-fix): document new OnlinePreprocessor pipeline order`
 
 **Scope:**
 - [backend_architecture.md](backend_architecture.md)
+- [../../knowledge_base/02_reference/online_filtering.md](../../knowledge_base/02_reference/online_filtering.md)
 - Possibly [../CLAUDE.md](../CLAUDE.md)
 
 **Changes:**
 - Add a short section to `backend_architecture.md` describing the new online pipeline order (both variants), the positional online_state, and how `LSLReceiver` applies hygiene.
 - Reference [Preprocessing_Migration_Plan.md](Preprocessing_Migration_Plan.md) for the full design rationale.
 - Update `CLAUDE.md`'s "Current Backend Scope" bullet if the architecture summary needs adjustment.
+- **Update `online_filtering.md` for Commit 2's changes:**
+  - Rewrite the "Decimation: 1000 Hz → 256 Hz" section for the new integer 1000 → 100 Hz case. The polyphase machinery (`up_factor`, `down_factor`, phase-counter loop, "first output at sample 3") is gone; the algorithm is now `np.arange(phase, n_in, decimation)` with simpler phase tracking. The attributes table needs to drop `_up_factor`/`_down_factor` and add `_decimation`.
+  - Add a section for the new `_apply_lowpass` stage (40 Hz IIR cascaded after HP+notch). Extend the group-delay table with the LP contribution (~10 ms more delay near the 40 Hz cutoff).
+  - Add an explicit note that `out_timestamps` returned from `_decimate` is the timestamp of the *input sample at the kept index*, not the effective time of the filtered value. Document the ~50 ms FIR group delay + ~10 ms IIR LP delay that the timestamps don't compensate for. Note this is a constant offset (consistent across predictions) and existed before Commit 2 — Commit 2 just makes it slightly larger by adding the LP stage. List the three mitigations (subtract FIR delay from timestamps, train classifier with shifted timepoints, or use identical causal filters offline) for future reference.
 
 **Dependencies:** Commits 1–5 landed.
 
