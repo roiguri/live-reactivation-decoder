@@ -1,5 +1,20 @@
 # Migrate preprocessing to `tomer_preprocessing_new.py` reference
 
+> **Status (2026-05-17).** Offline scope **done**: config schema
+> (`config_models.py` + `experiment_config.yaml`), `OfflinePreprocessor`
+> (four-step API + new pipeline order), `OfflineOrchestrator`, and the
+> existing frontend (settings + preprocessing screens, MNE interactive
+> windows, `ica_component_card.py` deleted) are migrated, with `mne-icalabel`
+> added and `autoreject` removed. Offline + core test suites green.
+>
+> **Online phase deferred** (separate effort): `online_preprocessor.py`,
+> `lsl_receiver.py`, `artifact_loader.py` still consume the old
+> name-bearing schema. Until they are migrated, **all existing
+> `decoder_pipeline.joblib` artifacts are invalid** and the offline↔online
+> numerical-parity tests in `tests/online_phase/test_online_preprocessor.py`
+> are skipped (see their skip reasons). The 10 `test_stream_worker.py`
+> errors are a pre-existing missing-`qtbot` environment issue, unrelated.
+
 ## Context
 
 The pipeline in [../src/backend/offline_phase/preprocessor.py](../src/backend/offline_phase/preprocessor.py) and its causal mirror in [../src/backend/online_phase/online_preprocessor.py](../src/backend/online_phase/online_preprocessor.py) were modelled on an **outdated** reference. The current reference of record is [../../knowledge_base/02_reference/tomer_preprocessing_new.py](../../knowledge_base/02_reference/tomer_preprocessing_new.py), with its ICA helper [../../knowledge_base/02_reference/ica_handler.py](../../knowledge_base/02_reference/ica_handler.py).

@@ -18,7 +18,7 @@ Last reconciled with code on **2026-05-10**.
 
 **Offline phase implementation status (as of last reconciliation):**
 - ✅ `SettingsManager` + Pydantic config models (`src/backend/core/`)
-- ✅ `OfflinePreprocessor` (`src/backend/offline_phase/preprocessor.py`) — accepts a pre-loaded `mne.io.Raw` via constructor; two-step pipeline: `run_step1_prepare_ica()` and `run_step2_finish_pipeline()`
+- ✅ `OfflinePreprocessor` (`src/backend/offline_phase/preprocessor.py`) — accepts a pre-loaded `mne.io.Raw` via constructor; **new reference pipeline** (see `docs/Preprocessing_Migration_Plan.md`): four operator-gated steps `run_step1a_filter()` / `set_bad_channels()` / `run_step1b_fit_ica()` / `run_step2_apply_and_save()`. Channel hygiene → HP → notch → (early: LP+resample) → interpolate bads → epoch → average ref → ICA (infomax+extended, HP-only fit copy) → ICLabel suggest → apply → (late: LP+resample) → save. No AutoReject. `export_online_state()` is fully positional (`eeg_chunk_indices`, `bad_indices`; no channel names). **Online phase still consumes the old schema — its migration is tracked separately and current `decoder_pipeline.joblib` artifacts are invalid until then.**
 - ✅ `ModelEvaluator` (`src/backend/offline_phase/evaluator.py`)
 - ✅ `ModelTrainer` (`src/backend/offline_phase/trainer.py`)
 - ✅ Shared utilities (`src/backend/offline_phase/utils.py`) — `build_classifier`, `get_task_data`
@@ -43,9 +43,9 @@ Because EEG processing and live inference are computationally demanding, mixing 
 
 1. UI initializes `SettingsManager` and `OfflineOrchestrator`.
 2. UI calls `orchestrator.set_file_path(data_dir)` then `orchestrator.load_raw_data()` to load the EEG file from disk.
-3. UI calls `orchestrator.run_step1_prepare_ica()`. Internally creates `OfflinePreprocessor` (with raw injected) and delegates. Returns ICA object and auto-suggested artifact components.
-4. UI presents ICA components. The researcher selects which to drop.
-5. UI calls `orchestrator.run_step2_finish_pipeline(exclude_components)`. Preprocessor finishes; orchestrator stores `epochs` internally.
+3. UI calls `orchestrator.run_step1a_filter()` (creates `OfflinePreprocessor` with raw injected). Returns the filtered `Raw`; the UI pops `raw.plot(block=True)` on the main thread for manual bad-channel marking.
+4. UI calls `orchestrator.set_bad_channels(raw.info["bads"])`, then `orchestrator.run_step1b_fit_ica()`. Returns `(ica, epochs, suggested)`; the UI pops `ica.plot_sources(epochs, block=True)` (suggestions pre-filled by ICLabel).
+5. UI calls `orchestrator.run_step2_apply_and_save(exclude_components)`. Preprocessor applies ICA, finishes, and saves; orchestrator stores `epochs` internally.
 6. UI calls `orchestrator.run_evaluation()`. Internally calls `ModelEvaluator`. Returns AUC/TGM arrays for plotting.
 7. The researcher clicks a specific timepoint on the graph.
 8. UI calls `orchestrator.run_training(timepoint)`. Internally calls `ModelTrainer`, bundles models with preprocessor's `online_state`, and saves `decoder_pipeline.joblib`. Returns spatial patterns and `mne.Info` for topomap display.
@@ -69,11 +69,11 @@ Because EEG processing and live inference are computationally demanding, mixing 
 
 #### **3. OfflinePreprocessor**
 
-* **Role:** The Heavy Cleaner. Loads continuous data, applies zero-phase filters, calculates ICA, and epochs the data. Crucially, it records exactly what it did (the online_state) so Phase 2 can replicate the spatial transforms.
+* **Role:** The Heavy Cleaner. Channel hygiene, causal IIR filters, ICA on cleaned epochs, and the two manual selections (bad channels, ICA components) gated for MNE's interactive windows. Records the fitted spatial state positionally so Phase 2 can replicate it.
 
-* **Inputs:** Pre-loaded `mne.io.Raw` object (via constructor), preprocessing settings. File I/O is the caller's responsibility (`OfflineOrchestrator._load_eeg_raw()`).
+* **Inputs:** Pre-loaded `mne.io.Raw` object (via constructor), preprocessing settings. File I/O is the caller's responsibility (`OfflineOrchestrator._load_eeg_raw()` — read + parallel-port decode + keep EEG only; montage/EMG hygiene is the preprocessor's job).
 
-* **Outputs:** Cleaned mne.Epochs and online_state (ICA weights, dropped channels).
+* **Outputs:** Cleaned `mne.Epochs` at the configured `final_resample.target_rate`, and a positional `online_state` (`eeg_chunk_indices`, `bad_indices`, ICA matrices, `pre_whitener` — no channel names).
 
 #### **4. ModelEvaluator**
 
@@ -106,40 +106,33 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-class BandpassSettings(BaseModel):
-    """
-    Validated bandpass/notch configuration for preprocessing.
-    Contract: l_freq must remain below h_freq.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    l_freq: float = Field(default=0.1, gt=0)
-    h_freq: float = 40.0
-    method: Literal["iir", "fir"] = "iir"
-    notch: Optional[float] = 50.0
-
-
-class ResampleSettings(BaseModel):
-    """
-    Target sample rate for Phase 1 outputs and Phase 2 model-facing features.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    target_rate: int = Field(default=256, ge=1)
+# NOTE: src/backend/core/config_models.py is the source of truth. The
+# preprocessing schema was migrated to the new reference (see
+# docs/Preprocessing_Migration_Plan.md). PreprocessingSettings now holds:
+#   resample_filter_stage: Literal["early", "late"] = "early"
+#   channel_hygiene: ChannelHygieneSettings   # drop_emg, rename_hegoc_to_heog,
+#                                              # montage_name, afz_case_fix
+#   highpass: HighpassSettings                # l_freq, method
+#   notch:    NotchSettings                   # freq (Optional → null disables)
+#   ica:      ICASettings                     # method=infomax, extended=True,
+#                                              # n_components: Optional[int]=None,
+#                                              # fit_l_freq, iclabel{enabled,drop_labels}
+#   epochs:   EpochSettings                   # tmin, tmax,
+#                                              # baseline: Optional[(lo,hi)]=None
+#   lowpass:  LowpassSettings                 # h_freq, method
+#   final_resample: FinalResampleSettings     # target_rate (default 100)
+# BandpassSettings / ResampleSettings / RejectCriteriaSettings were removed.
 
 
 class ICASettings(BaseModel):
-    """
-    ICA fitting configuration used during Phase 1 preprocessing.
-    """
+    """ICA fitting configuration used during Phase 1 preprocessing."""
 
     model_config = ConfigDict(extra="forbid")
 
-    n_components: int = Field(default=25, ge=1)
-    method: Literal["fastica", "infomax", "picard"] = "fastica"
-    fit_l_freq: float = Field(default=1.0, gt=0)  # HP freq for the ICA fitting copy
+    method: Literal["infomax", "picard", "fastica"] = "infomax"
+    extended: bool = True
+    n_components: Optional[int] = Field(default=None, ge=1)  # None → MNE decides
+    fit_l_freq: float = Field(default=1.0, gt=0)  # HP-only ICA fit copy
 
 
 class EpochSettings(BaseModel):
