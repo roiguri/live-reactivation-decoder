@@ -48,15 +48,27 @@ def synthetic_raw_with_events() -> mne.io.RawArray:
 
 @pytest.fixture
 def preprocessing_settings() -> dict:
-    """Minimal preprocessing settings dict matching the config schema defaults."""
-    return {
+    """Preprocessing settings dict matching the new config schema.
+
+    Tuned for fast unit tests: fastica + 4 components, ICLabel off by
+    default (tests that exercise the suggestion mock it explicitly), and
+    the "early" resample/filter stage so epochs are small (100 Hz).
+    """
+    from backend.core.config_models import PreprocessingSettings
+
+    overrides = {
         "random_state": 42,
-        "bandpass": {"l_freq": 1.0, "h_freq": 40.0, "method": "iir", "notch": 50.0},
-        "resample": {"target_rate": 250},
-        "reject_criteria": {"hard_amplitude": 1e-3, "flat_threshold": 0.5e-6, "noisy_z_score": 3.0},
-        "ica": {"n_components": 4, "method": "fastica", "fit_l_freq": 1.0},
+        "resample_filter_stage": "early",
+        "ica": {
+            "method": "fastica",
+            "n_components": 4,
+            "fit_l_freq": 1.0,
+            "iclabel": {"enabled": False},
+        },
         "epochs": {"tmin": -0.1, "tmax": 0.5, "baseline": [None, 0]},
+        "final_resample": {"target_rate": 100},
     }
+    return PreprocessingSettings(**overrides).model_dump()
 
 
 @pytest.fixture

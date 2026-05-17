@@ -6,31 +6,35 @@ from typing import Any, Optional
 
 import mne
 import numpy as np
-from autoreject import AutoReject
 
 logger = logging.getLogger(__name__)
 
 
 class OfflinePreprocessor:
     """
-    Executes the offline cleaning pipeline for a single subject recording.
-    Designed for two-step execution to allow manual ICA artifact rejection between steps.
+    Executes the offline cleaning pipeline for a single subject recording,
+    modelled on ``knowledge_base/02_reference/tomer_preprocessing_new.py`` plus
+    the instructor's parameters (see docs/Preprocessing_Migration_Plan.md).
 
-    Caller is responsible for loading raw data and passing it via the constructor.
+    Caller is responsible for loading raw data and passing it via the
+    constructor (or assigning ``self.raw`` directly).
 
-    Step 1 — run_step1_prepare_ica():
-        1. Band-pass + notch filter.
-        2. Resample to target rate.
-        3. Detect and interpolate bad channels.
-        4. Re-reference to average.
-        5. Fit ICA and auto-detect EOG/ECG components.
-        Returns suggested component indices for user review.
+    The pipeline is split into four operator-gated steps so the two manual
+    selections (bad channels, ICA components) happen on MNE's native
+    interactive windows, which must run on the GUI main thread:
 
-    Step 2 — run_step2_finish_pipeline():
-        6. Apply ICA with user-confirmed component exclusions.
-        7. Epoch around stimulus triggers.
-        8. AutoReject to repair/drop bad epochs.
-        9. Save cleaned epochs to .fif.
+    1. ``run_step1a_filter()`` (worker)
+       Channel hygiene → high-pass → notch → (if ``resample_filter_stage ==
+       "early"``) low-pass + resample on the raw. Returns the ``Raw`` so the
+       UI can pop ``raw.plot(block=True)`` for manual bad-channel marking.
+    2. ``set_bad_channels(bads)`` (main thread, after the window closes)
+       Stores the operator's bad-channel selection.
+    3. ``run_step1b_fit_ica(event_mapping)`` (worker)
+       Interpolate bads → epoch → average reference → fit ICA (HP-only fit
+       copy) → ICLabel pre-suggestion. Returns ``(ica, epochs, suggested)``.
+    4. ``run_step2_apply_and_save(exclude, event_mapping, output_dir)`` (worker)
+       Apply ICA → (if ``resample_filter_stage == "late"``) low-pass +
+       resample on the epochs → save ``{subject}_epo.fif``.
     """
 
     def __init__(
@@ -46,85 +50,127 @@ class OfflinePreprocessor:
         self.raw: Optional[mne.io.Raw] = raw
         self.epochs: Optional[mne.Epochs] = None
         self.ica: Optional[mne.preprocessing.ICA] = None
+
         self._bad_channels: list[str] = []
         self._interp_weights: Optional[np.ndarray] = None
+        self._suggested_exclude: list[int] = []
+
+        # Positional channel bookkeeping for the online handoff.
+        self._original_ch_names: list[str] = []   # pre-hygiene .vhdr order
+        self._dropped_channels: list[str] = []    # removed by channel hygiene
+        self._post_hygiene_eeg_names: list[str] = []
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def run_step1_prepare_ica(self) -> list[int]:
+    def run_step1a_filter(self) -> mne.io.Raw:
         """
-        First half of the pipeline:
-            1. Band-pass + notch filter.
-            2. Resample to target rate.
-            3. Detect and interpolate bad channels.
-            4. Re-reference to average.
-            5. Fit ICA and auto-detect EOG/ECG artifact components.
+        Channel hygiene → high-pass → notch → (early variant only) low-pass +
+        resample on the raw.
 
         Returns:
-            Suggested EOG/ECG component indices for the user to review.
+            The filtered ``Raw`` for the UI's interactive bad-channel window.
 
         Raises:
-            RuntimeError: if raw data has not been provided (via constructor or direct assignment).
+            RuntimeError: if raw data has not been provided.
         """
         if self.raw is None:
             raise RuntimeError(
-                "raw must be set before calling run_step1_prepare_ica(). "
+                "raw must be set before calling run_step1a_filter(). "
                 "Pass raw to the constructor or assign self.raw directly."
             )
 
-        self._filter()
-        self._resample()
-        self._detect_bad_channels()
-        self._reference()
-        suggested = self._fit_ica()
-        logger.info("ICA fitted. Suggested components: %s", suggested)
-        return suggested
+        self._original_ch_names = list(self.raw.ch_names)
+        self._channel_hygiene()
+        self._highpass()
+        self._notch()
+        if self._stage == "early":
+            self._lowpass(self.raw)
+            self._resample(self.raw)
+        logger.info(
+            "Step 1A complete (stage=%s, sfreq=%.1f Hz).",
+            self._stage, self.raw.info["sfreq"],
+        )
+        return self.raw
 
-    def run_step2_finish_pipeline(
-        self,
-        exclude_components: list[int],
-        event_mapping: dict[str, int],
-        output_dir: Path,
-    ) -> None:
+    def set_bad_channels(self, bads: list[str]) -> None:
+        """Store the operator's bad-channel selection (read off ``raw.info['bads']``)."""
+        self._bad_channels = list(bads)
+        logger.info("Operator marked bad channels: %s", self._bad_channels)
+
+    def run_step1b_fit_ica(
+        self, event_mapping: dict[str, int]
+    ) -> tuple[mne.preprocessing.ICA, mne.Epochs, list[int]]:
         """
-        Second half of the pipeline:
-            7. Apply ICA with user-confirmed component exclusions.
-            8. Epoch around stimulus triggers.
-            9. AutoReject to repair/drop bad epochs.
-            10. Save cleaned epochs to .fif.
+        Interpolate bads → epoch → average reference → fit ICA → ICLabel.
 
         Args:
-            exclude_components: Final list of ICA component indices to remove
-                                (user-confirmed, may differ from suggestions).
             event_mapping: {event_name: trigger_id} — MNE convention.
-            output_dir: Directory to write the .fif epochs file.
+
+        Returns:
+            (ica, epochs_for_review, suggested_exclude) — ``ica`` and
+            ``epochs_for_review`` feed MNE's interactive component window;
+            ``suggested_exclude`` pre-populates ``ica.exclude``.
+
+        Raises:
+            RuntimeError: if run_step1a_filter() has not been called first.
         """
-        if self.raw is None or self.ica is None:
-            raise RuntimeError("run_step1_prepare_ica() must be called first.")
+        if self.raw is None or not self._original_ch_names:
+            raise RuntimeError("Call run_step1a_filter() before run_step1b_fit_ica().")
 
-        self.ica.exclude = exclude_components
-        self.ica.apply(self.raw, verbose=False)
-
+        self._interpolate_bads()
         self.epochs = self._epoch(event_mapping)
-        # TODO: consider handling the case were no epochs are found.
-        logger.info("Epochs before AutoReject: %d", len(self.epochs))
+        logger.info("Epochs created: %d", len(self.epochs))
+        self._reference()
+        self._suggested_exclude = self._fit_ica()
+        logger.info(
+            "ICA fitted (%d components). ICLabel suggested: %s",
+            self.ica.n_components_, self._suggested_exclude,
+        )
+        return self.ica, self.epochs, self._suggested_exclude
 
-        self._autoreject()
-        logger.info("Epochs after AutoReject: %d", len(self.epochs))
+    def run_step2_apply_and_save(
+        self,
+        exclude_components: list[int],
+        output_dir: Path,
+    ) -> dict[str, Any]:
+        """
+        Apply ICA → (late variant only) low-pass + resample on epochs → save.
+
+        Args:
+            exclude_components: Final operator-confirmed ICA component indices.
+            output_dir: Directory to write the ``{subject}_epo.fif`` file.
+
+        Returns:
+            {"n_epochs": int, "n_excluded": int}
+
+        Raises:
+            RuntimeError: if run_step1b_fit_ica() has not been called first.
+        """
+        if self.ica is None or self.epochs is None:
+            raise RuntimeError(
+                "Call run_step1b_fit_ica() before run_step2_apply_and_save()."
+            )
+
+        self.ica.exclude = list(exclude_components)
+        self.ica.apply(self.epochs, verbose=False)
+
+        if self._stage == "late":
+            self._lowpass(self.epochs)
+            self._resample(self.epochs)
 
         self._save(Path(output_dir))
+        return {"n_epochs": len(self.epochs), "n_excluded": len(self.ica.exclude)}
 
     def export_online_state(self) -> dict[str, Any]:
         """
-        Extracts the ICA spatial transforms and channel metadata needed by
-        the online preprocessor to replicate offline cleaning on live numpy windows.
+        Extract the fitted numerical artifacts needed by the online phase.
 
-        Returns:
-            Dict containing ICA matrices, excluded components, bad channel names,
-            channel order, and offline sampling rate.
+        Everything is positional — no channel names cross the LSL boundary.
+        Recipe parameters live in ``settings`` and are read there by both
+        phases; only fitted *state* is exported here.
 
         Raises:
-            RuntimeError: if called before run_step2_finish_pipeline().
+            RuntimeError: if called before the pipeline has produced an ICA.
         """
         if self.ica is None or self.raw is None:
             raise RuntimeError(
@@ -133,7 +179,10 @@ class OfflinePreprocessor:
 
         n_comp = self.ica.n_components_
         return {
-            "bad_channels": list(self._bad_channels),
+            # Which positions of the pre-hygiene channel array survive hygiene.
+            "eeg_chunk_indices": self._compute_eeg_chunk_indices(),
+            # Operator-marked bads as positions in the post-hygiene EEG array.
+            "bad_indices": self._compute_bad_indices(),
             "interp_weights": self._interp_weights,
             "ica_unmixing": self.ica.unmixing_matrix_.copy(),
             "ica_mixing": self.ica.mixing_matrix_.copy(),
@@ -145,49 +194,78 @@ class OfflinePreprocessor:
             # Per-channel-type rescaling MNE applies before PCA in ICA.fit/apply.
             # Required for online ICA to match offline numerically.
             "pre_whitener": self.ica.pre_whitener_.copy(),
-            "ch_names": [self.raw.ch_names[i] for i in mne.pick_types(self.raw.info, eeg=True)],
-            "sfreq_offline": float(self.raw.info["sfreq"]),
         }
 
-    # ── Private: Stage 1 ─────────────────────────────────────────────────────
+    # ── Settings helpers ──────────────────────────────────────────────────────
 
-    def _filter(self) -> None:
-        bp = self.settings["bandpass"]
+    @property
+    def _stage(self) -> str:
+        return self.settings.get("resample_filter_stage", "early")
+
+    # ── Private: channel hygiene ──────────────────────────────────────────────
+
+    def _channel_hygiene(self) -> None:
+        """EMG drop, HEGOC→HEOG rename, hardware montage with the AFz case fix."""
+        ch = self.settings.get("channel_hygiene", {})
+
+        if ch.get("drop_emg", True) and "EMG" in self.raw.ch_names:
+            self.raw.set_channel_types({"EMG": "emg"})
+            self.raw.drop_channels(["EMG"])
+            self._dropped_channels.append("EMG")
+            logger.info("Channel hygiene: dropped EMG")
+
+        if ch.get("rename_hegoc_to_heog", True) and "HEGOC" in self.raw.ch_names:
+            self.raw.rename_channels({"HEGOC": "HEOG"})
+            logger.info("Channel hygiene: renamed HEGOC → HEOG")
+
+        montage_name = ch.get("montage_name", "easycap-M1")
+        montage = mne.channels.make_standard_montage(montage_name)
+        if ch.get("afz_case_fix", True) and "AFz" in montage.ch_names:
+            montage.ch_names[montage.ch_names.index("AFz")] = "Afz"
+        self.raw.set_montage(
+            montage, match_case=False, on_missing="warn", verbose=False
+        )
+
+        self._post_hygiene_eeg_names = [
+            self.raw.ch_names[i] for i in mne.pick_types(self.raw.info, eeg=True)
+        ]
+
+    # ── Private: filtering / resampling ───────────────────────────────────────
+
+    def _highpass(self) -> None:
+        hp = self.settings["highpass"]
         self.raw.filter(
-            l_freq=bp["l_freq"],
-            h_freq=bp["h_freq"],
-            method=bp["method"],
+            l_freq=hp["l_freq"], h_freq=None, method=hp.get("method", "iir"),
             verbose=False,
         )
-        if bp.get("notch"):
-            self.raw.notch_filter(freqs=bp["notch"], verbose=False)
 
-    def _resample(self) -> None:
-        target = self.settings["resample"]["target_rate"]
-        if self.raw.info["sfreq"] > target:
-            self.raw.resample(target, verbose=False)
+    def _notch(self) -> None:
+        freq = self.settings.get("notch", {}).get("freq")
+        if freq:
+            self.raw.notch_filter(freqs=freq, verbose=False)
 
-    def _detect_bad_channels(self) -> None:
-        rc = self.settings["reject_criteria"]
-        data = self.raw.get_data(picks="eeg")
-        stds = data.std(axis=1)
+    def _lowpass(self, inst) -> None:
+        lp = self.settings["lowpass"]
+        inst.filter(
+            l_freq=None, h_freq=lp["h_freq"], method=lp.get("method", "iir"),
+            verbose=False,
+        )
 
-        flat_idx = np.where(stds < rc["flat_threshold"])[0]
-        z = (stds - stds.mean()) / stds.std() if stds.std() > 0 else np.zeros_like(stds)
-        noisy_idx = np.where(z > rc["noisy_z_score"])[0]
+    def _resample(self, inst) -> None:
+        target = self.settings["final_resample"]["target_rate"]
+        if inst.info["sfreq"] > target:
+            inst.resample(target, verbose=False)
 
-        picks_eeg = mne.pick_types(self.raw.info, eeg=True)
-        bads = list({
-            self.raw.ch_names[picks_eeg[i]]
-            for i in np.concatenate([flat_idx, noisy_idx]).astype(int)
-        })
+    # ── Private: bad channels ─────────────────────────────────────────────────
 
-        self.raw.info["bads"] = bads
-        self._bad_channels = bads
-        if bads:
-            logger.info("Bad channels detected: %s", bads)
+    def _interpolate_bads(self) -> None:
+        self.raw.info["bads"] = list(self._bad_channels)
+        if self._bad_channels:
+            logger.info("Interpolating bad channels: %s", self._bad_channels)
+            self._interp_weights = self._compute_interp_weights()
             self.raw.interpolate_bads(reset_bads=True, verbose=False)
-        self._interp_weights = self._compute_interp_weights()
+        else:
+            self._interp_weights = None
 
     def _compute_interp_weights(self) -> Optional[np.ndarray]:
         """Extract spherical-spline interpolation weights for bad channels.
@@ -201,7 +279,9 @@ class OfflinePreprocessor:
         if not self._bad_channels:
             return None
 
-        eeg_picks = mne.pick_types(self.raw.info, eeg=True)
+        # exclude=[] so bad channels (just marked in raw.info['bads']) are
+        # still picked — we need their geometry to derive interp weights.
+        eeg_picks = mne.pick_types(self.raw.info, eeg=True, exclude=[])
         eeg_ch_names = [self.raw.ch_names[i] for i in eeg_picks]
         n_eeg = len(eeg_ch_names)
 
@@ -224,43 +304,7 @@ class OfflinePreprocessor:
         weights = interp_data[np.ix_(bad_local_indices, good_local_indices)].T
         return weights
 
-    def _reference(self) -> None:
-        self.raw.set_eeg_reference("average", projection=False, verbose=False)
-
-    def _fit_ica(self) -> list[int]:
-        ica_s = self.settings["ica"]
-        raw_for_ica = self.raw.copy().filter(
-            l_freq=ica_s["fit_l_freq"], h_freq=None, verbose=False
-        )
-        self.ica = mne.preprocessing.ICA(
-            n_components=ica_s["n_components"],
-            method=ica_s["method"],
-            random_state=self.settings["random_state"],
-            max_iter="auto",
-        )
-        self.ica.fit(raw_for_ica, verbose=False)
-
-        ch_types = set(self.raw.get_channel_types())
-
-        eog_idx: list[int] = []
-        if "eog" in ch_types:
-            eog_idx, _ = self.ica.find_bads_eog(self.raw, verbose=False)
-
-        ecg_idx: list[int] = []
-        if "ecg" in ch_types:
-            ecg_idx, _ = self.ica.find_bads_ecg(self.raw, verbose=False)
-
-        # TODO: consider richer auto-suggestion when no EOG/ECG channels are present:
-        # - mne-icalabel (ICLabel): neural-net classifier that labels components as
-        #   brain/eye/muscle/heart/line-noise/channel-noise/other without dedicated
-        #   physiological channels. from mne_icalabel import label_components
-        # - Synthetic EOG: correlate components against Fp1/Fp2 average as a proxy
-        #   for eye movements when no dedicated EOG electrode was recorded.
-
-        suggested = list({int(i) for i in eog_idx + ecg_idx})
-        return suggested
-
-    # ── Private: Stage 2 ─────────────────────────────────────────────────────
+    # ── Private: epoching / reference / ICA ───────────────────────────────────
 
     def _epoch(self, event_mapping: dict[str, int]) -> mne.Epochs:
         ep = self.settings["epochs"]
@@ -276,8 +320,8 @@ class OfflinePreprocessor:
             )
             valid_event_id = found_event_id
 
-        rc = self.settings["reject_criteria"]
-        baseline = tuple(ep["baseline"]) if ep["baseline"] is not None else None
+        baseline = ep.get("baseline")
+        baseline = tuple(baseline) if baseline is not None else None
         return mne.Epochs(
             self.raw,
             events,
@@ -285,47 +329,70 @@ class OfflinePreprocessor:
             tmin=ep["tmin"],
             tmax=ep["tmax"],
             baseline=baseline,
-            reject=dict(eeg=rc["hard_amplitude"]),
-            event_repeated="drop", # TODO: consider if this is required.
+            detrend=0,
+            event_repeated="drop",
             preload=True,
             verbose=False,
         )
 
-    def _autoreject(self) -> None:
-        # TODO: consider how to handle errors in pipline
-        if len(self.epochs) == 0:
-            raise RuntimeError(
-                "AutoReject received 0 epochs — the event mapping likely does not match "
-                "the trigger codes in this recording."
-            )
+    def _reference(self) -> None:
+        self.epochs.set_eeg_reference("average", projection=False, verbose=False)
 
-        # AutoReject's cross-validation requires >= 2 epochs per condition.
-        # With short data crops this can fail; skip and warn rather than crash.
-        # consider a finer fallback — e.g. drop only sparse conditions
-        # instead of skipping AutoReject entirely, or make the minimum configurable.
-        condition_counts = {
-            name: int((self.epochs.events[:, 2] == code).sum())
-            for name, code in self.epochs.event_id.items()
-        }
-        if min(condition_counts.values()) < 2:
-            logger.warning(
-                "AutoReject skipped — too few epochs per condition for cross-validation: %s. "
-                "Epochs saved without AutoReject cleaning.",
-                condition_counts,
-            )
-            return
-        # end TODO
-        
-        ar = AutoReject(random_state=self.settings["random_state"], verbose=False)
-        self.epochs, reject_log = ar.fit_transform(self.epochs, return_log=True)
-        n_dropped = reject_log.bad_epochs.sum()
-        # TODO(open): Surface AutoReject outcomes to the UI/report, not only the
-        # log. At minimum expose dropped-epoch count; ideally also repaired
-        # sensor counts/percentages so users can spot overly aggressive cleaning.
-        logger.info("AutoReject dropped %d epochs", n_dropped)
+    def _fit_ica(self) -> list[int]:
+        ica_s = self.settings["ica"]
+        fit_epochs = self.epochs.copy().filter(
+            l_freq=ica_s["fit_l_freq"], h_freq=None, verbose=False
+        )
+
+        fit_params = None
+        if ica_s["method"] == "infomax":
+            fit_params = dict(extended=ica_s.get("extended", True))
+        self.ica = mne.preprocessing.ICA(
+            n_components=ica_s.get("n_components"),
+            method=ica_s["method"],
+            fit_params=fit_params,
+            random_state=self.settings["random_state"],
+            max_iter="auto",
+        )
+        self.ica.fit(fit_epochs, verbose=False)
+
+        return self._iclabel_suggest(fit_epochs)
+
+    def _iclabel_suggest(self, fit_epochs: mne.Epochs) -> list[int]:
+        """Pre-select components whose ICLabel class is in ``ica.iclabel.drop_labels``."""
+        ic = self.settings["ica"].get("iclabel", {})
+        if not ic.get("enabled", True):
+            return []
+
+        from mne_icalabel import label_components
+
+        drop = set(ic.get("drop_labels", []))
+        result = label_components(fit_epochs, self.ica, method="iclabel")
+        labels = result["labels"]
+        suggested = [i for i, lbl in enumerate(labels) if lbl in drop]
+        return suggested
 
     def _save(self, output_dir: Path) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
         out_path = output_dir / f"{self.subject_id}_epo.fif"
         self.epochs.save(out_path, overwrite=True, verbose=False)
         logger.info("Saved → %s", out_path)
+
+    # ── Private: positional handoff ───────────────────────────────────────────
+
+    def _compute_eeg_chunk_indices(self) -> list[int]:
+        """Positions of the pre-hygiene channel array that survived hygiene.
+
+        Encodes "drop EMG" (and any other offline channel drops) positionally
+        so channel names never have to cross the LSL boundary.
+        """
+        dropped = set(self._dropped_channels)
+        return [
+            i for i, name in enumerate(self._original_ch_names)
+            if name not in dropped
+        ]
+
+    def _compute_bad_indices(self) -> list[int]:
+        """Operator-marked bads as positions in the post-hygiene EEG array."""
+        names = self._post_hygiene_eeg_names
+        return [names.index(ch) for ch in self._bad_channels if ch in names]
