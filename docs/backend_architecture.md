@@ -71,7 +71,7 @@ Because EEG processing and live inference are computationally demanding, mixing 
 
 * **Role:** The Heavy Cleaner. Channel hygiene, causal IIR filters, ICA on cleaned epochs, and the two manual selections (bad channels, ICA components) gated for MNE's interactive windows. Records the fitted spatial state positionally so Phase 2 can replicate it.
 
-* **Inputs:** Pre-loaded `mne.io.Raw` object (via constructor), preprocessing settings. File I/O is the caller's responsibility (`OfflineOrchestrator._load_eeg_raw()` — read + parallel-port decode + keep EEG only; montage/EMG hygiene is the preprocessor's job).
+* **Inputs:** Pre-loaded `mne.io.Raw` object (via constructor), preprocessing settings. File I/O is the caller's responsibility (`OfflineOrchestrator._load_eeg_raw()` — read BrainVision with native `.vmrk` markers + keep EEG only; montage/EMG hygiene is the preprocessor's job).
 
 * **Outputs:** Cleaned `mne.Epochs` at the configured `final_resample.target_rate`, and a positional `online_state` (`eeg_chunk_indices`, `bad_indices`, ICA matrices, `pre_whitener` — no channel names).
 
@@ -405,10 +405,8 @@ class OfflinePreprocessor:
     def _epoch(self, event_mapping: Dict[int, str]) -> mne.Epochs:
         """
         Extracts events from ``raw.annotations`` (BrainVision-style
-        ``Stimulus/S<code>`` descriptions). For BindingDecoding recordings,
-        those annotations are injected by ``trigger_decoder.decode_parallel_port_channel``
-        during ``OfflineOrchestrator._load_eeg_raw`` rather than parsed from
-        ``.vmrk`` — see ``knowledge_base/02_reference/parallel_port_trigger_decoding.md``.
+        ``Stimulus/S<code>`` descriptions) loaded natively from the ``.vmrk``
+        by ``mne.io.read_raw_brainvision``.
 
         Inverts the shared ID→name mapping into the form required by MNE if needed.
         Slices the data around the triggers defined in the shared settings,
@@ -562,11 +560,9 @@ class OfflineOrchestrator:
 
     def load_raw_data(self) -> None:
         """
-        Load the raw EEG file from disk. Also decodes parallel-port triggers
-        from the analog "EMG" channel into ``raw.annotations`` and drops the
-        trigger channel (and other non-EEG/EOG/ECG channels) before returning.
-        See ``knowledge_base/02_reference/parallel_port_trigger_decoding.md``
-        for the rationale and the decoder algorithm.
+        Load the raw EEG file from disk. Stimulus markers are read natively
+        from the ``.vmrk`` by ``mne.io.read_raw_brainvision``; non-EEG
+        channels (EOG/ECG/stim/misc) are dropped before returning.
 
         Raises:
             ValueError: if set_file_path() has not been called.

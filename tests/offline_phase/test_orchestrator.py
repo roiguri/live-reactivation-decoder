@@ -99,6 +99,27 @@ class TestLoadRawData:
         assert orc._raw is synthetic_raw
         assert orc._preprocessor is None
 
+    def test_load_eeg_raw_preserves_vmrk_annotations(
+        self, tmp_path: Path, synthetic_raw_with_events: mne.io.RawArray
+    ) -> None:
+        """The revert: events come from the .vmrk (loaded by
+        read_raw_brainvision); _load_eeg_raw must not overwrite or decode them."""
+        orc = _make_orchestrator(tmp_path)
+        src = synthetic_raw_with_events.copy()  # carries 'red'/'green' annotations
+        expected = set(src.annotations.description)
+
+        with patch(
+            "mne.io.read_raw_brainvision", return_value=src
+        ) as mock_read:
+            result = orc._load_eeg_raw(tmp_path / "rec.vhdr")
+
+        mock_read.assert_called_once()
+        # Annotations survived untouched (no decoder, no set_annotations).
+        assert set(result.annotations.description) == expected
+        assert len(result.annotations) == len(synthetic_raw_with_events.annotations)
+        # All synthetic channels are EEG → none dropped by the IO boundary.
+        assert result.ch_names == synthetic_raw_with_events.ch_names
+
 
 # ── TestRunStep1aFilter ───────────────────────────────────────────────────────
 

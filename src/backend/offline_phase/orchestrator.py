@@ -11,7 +11,6 @@ from backend.core.settings_manager import SettingsManager
 from backend.offline_phase.evaluator import ModelEvaluator
 from backend.offline_phase.preprocessor import OfflinePreprocessor
 from backend.offline_phase.trainer import ModelTrainer
-from backend.offline_phase.trigger_decoder import decode_parallel_port_channel
 
 logger = logging.getLogger(__name__)
 
@@ -255,25 +254,23 @@ class OfflineOrchestrator:
 
     def _load_eeg_raw(self, vhdr: Path) -> mne.io.Raw:
         """
-        Load a BrainVision file, decode the parallel-port trigger channel into
-        annotations, and keep only the EEG channels (plus EMG, which channel
-        hygiene drops downstream). Montage and EMG handling are the
-        preprocessor's responsibility — this method is the pure IO boundary.
+        Load a BrainVision file and keep only the EEG channels (plus EMG, which
+        channel hygiene drops downstream). Stimulus markers are read natively
+        from the ``.vmrk`` by ``mne.io.read_raw_brainvision`` and left on the
+        raw for ``mne.events_from_annotations`` downstream. Montage and EMG
+        handling are the preprocessor's responsibility — this method is the
+        pure IO boundary.
         """
         # TODO: recordings that exceed available RAM will raise MemoryError here.
         # Consider supporting mne memmap preload (preload="path/to/file.bin").
+        # read_raw_brainvision loads the .vmrk Stimulus/Sxx markers as
+        # annotations automatically; we deliberately do not overwrite them.
         raw = mne.io.read_raw_brainvision(vhdr, preload=True, verbose=False)
 
-        # Parallel-port triggers are recorded as analog pulses on a dedicated
-        # channel (not the .vmrk file). Decode them into Annotations now,
-        # before the channel is dropped along with other non-EEG channels.
-        annotations = decode_parallel_port_channel(raw)
-        raw.set_annotations(annotations)
-
         # Keep EEG-typed channels only (EMG is EEG-typed until hygiene retypes
-        # it). The decoded trigger channel, EOG/ECG, stim and misc are dropped
-        # so the offline channel array is positionally aligned with the
-        # 64-channel post-trigger-split LSL EEG array.
+        # it). EOG/ECG, stim and misc are dropped so the offline channel array
+        # is positionally aligned with the 64-channel post-trigger-split LSL
+        # EEG array.
         eeg_picks = mne.pick_types(raw.info, eeg=True).tolist()
         keep = [raw.ch_names[i] for i in eeg_picks]
         dropped = [c for c in raw.ch_names if c not in keep]

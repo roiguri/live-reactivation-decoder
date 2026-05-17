@@ -1,9 +1,11 @@
 """Create a short BrainVision test fixture from a real recording.
 
 Crops a window of an existing recording and writes a new .vhdr/.vmrk/.eeg
-triplet via pybv. The trigger channel is preserved unchanged so the production
-orchestrator load path (and its parallel-port decoder) exercises the same code
-on the fixture as on a full recording.
+triplet via pybv. Stimulus markers from the source ``.vmrk`` are read natively
+by MNE, clipped to the crop window, and carried into the fixture ``.vmrk`` so
+the production offline load path (``read_raw_brainvision`` →
+``mne.events_from_annotations``) finds the same events on the fixture as on a
+full recording.
 
 Usage:
     python scripts/create_test_eeg.py \\
@@ -93,6 +95,57 @@ def _read_channel_resolutions_volts(vhdr: Path, n_channels: int) -> np.ndarray:
     return resolutions
 
 
+def _collect_window_markers(
+    annotations: mne.Annotations,
+    start_s: float,
+    end_s: float,
+    sfreq: float,
+) -> list[tuple[int, str, str]]:
+    """Clip source annotations to ``[start_s, end_s)`` and re-base onsets.
+
+    Returns a list of ``(position_1based, marker_type, marker_description)``
+    tuples in BrainVision .vmrk convention. MNE joins the .vmrk marker type
+    and description with ``/`` (e.g. ``"Stimulus/S 11"``); we split it back so
+    the written marker round-trips through ``mne.events_from_annotations``.
+    """
+    markers: list[tuple[int, str, str]] = []
+    for onset, desc in zip(annotations.onset, annotations.description):
+        if not (start_s <= float(onset) < end_s):
+            continue
+        pos = int(round((float(onset) - start_s) * sfreq)) + 1  # .vmrk is 1-based
+        if "/" in desc:
+            mtype, mdesc = desc.split("/", 1)
+        else:
+            mtype, mdesc = "Stimulus", desc
+        markers.append((pos, mtype, mdesc))
+    return markers
+
+
+def _write_markers_into_vmrk(
+    vmrk_path: Path, markers: list[tuple[int, str, str]]
+) -> None:
+    """Append Stimulus markers to the pybv-written .vmrk's [Marker infos] block.
+
+    pybv writes a header plus ``Mk1=New Segment,...``; we keep that and append
+    ``Mk{n}=<type>,<desc>,<pos>,1,0`` lines after the highest existing Mk index.
+    """
+    lines = vmrk_path.read_text().splitlines()
+    max_mk = 0
+    for ln in lines:
+        if ln.startswith("Mk") and "=" in ln:
+            try:
+                max_mk = max(max_mk, int(ln[2:].split("=", 1)[0]))
+            except ValueError:
+                pass
+
+    new_lines = [
+        f"Mk{max_mk + i + 1}={mtype},{mdesc},{pos},1,0"
+        for i, (pos, mtype, mdesc) in enumerate(markers)
+    ]
+    vmrk_path.write_text("\n".join(lines + new_lines) + "\n")
+    logger.info("Wrote %d stimulus marker(s) into %s", len(markers), vmrk_path.name)
+
+
 def crop_and_write(
     input_dir: Path, output_dir: Path, start_s: float, duration_s: float
 ) -> Path:
@@ -100,17 +153,19 @@ def crop_and_write(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Use MNE only for the lightweight metadata read (sfreq, ch_names) — no data
-    # is loaded into memory because preload=False.
-    logger.info("Reading %s (metadata only)…", vhdr)
+    # is loaded into memory because preload=False. read_raw_brainvision still
+    # parses the .vmrk Stimulus markers into raw_info.annotations.
+    logger.info("Reading %s (metadata + .vmrk markers)…", vhdr)
     raw_info = mne.io.read_raw_brainvision(vhdr, preload=False, verbose="WARNING")
     sfreq = raw_info.info["sfreq"]
     ch_names = list(raw_info.ch_names)
     n_channels = len(ch_names)
     total_s = float(raw_info.times[-1])
+    src_annotations = raw_info.annotations.copy()
     del raw_info
     logger.info(
-        "Source: %.0f Hz, %d channels, %.1f min total",
-        sfreq, n_channels, total_s / 60,
+        "Source: %.0f Hz, %d channels, %.1f min total, %d annotation(s)",
+        sfreq, n_channels, total_s / 60, len(src_annotations),
     )
 
     end_s = start_s + duration_s
@@ -118,6 +173,19 @@ def crop_and_write(
         raise ValueError(
             f"Window [{start_s:.0f}..{end_s:.0f}]s outside source range "
             f"[0..{total_s:.0f}]s; adjust --start-s / --duration-s"
+        )
+
+    markers = _collect_window_markers(src_annotations, start_s, end_s, sfreq)
+    if not markers:
+        if len(src_annotations) == 0:
+            raise ValueError(
+                f"Source {vhdr.name} has no .vmrk stimulus markers — cannot build a "
+                "usable fixture (the reverted offline pipeline reads events from the "
+                ".vmrk). Use a recording whose .vmrk contains Stimulus,Sxx markers."
+            )
+        raise ValueError(
+            f"Source has {len(src_annotations)} marker(s) but none fall inside the "
+            f"crop window [{start_s:.0f}..{end_s:.0f}]s; adjust --start-s / --duration-s."
         )
 
     # Memmap the .eeg as float32 (multiplexed: each sample is one row of
@@ -163,6 +231,10 @@ def crop_and_write(
         folder_out=str(output_dir),
         overwrite=True,
     )
+
+    # pybv writes a .vmrk with only "New Segment"; carry the windowed stimulus
+    # markers into it so the offline pipeline's events_from_annotations works.
+    _write_markers_into_vmrk(output_dir / f"{stem}.vmrk", markers)
 
     out_eeg = output_dir / f"{stem}.eeg"
     size_mb = out_eeg.stat().st_size / (1024 * 1024)
