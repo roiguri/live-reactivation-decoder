@@ -39,14 +39,15 @@ def _attach_preprocessor_stub(
     stub.ica = ica
     stub.epochs = epochs
     stub.export_online_state.return_value = {
-        "bad_channels": [],
+        "eeg_chunk_indices": [0, 1, 2],
+        "bad_indices": [],
+        "interp_weights": None,
         "ica_unmixing": np.eye(3),
         "ica_mixing": np.eye(3),
         "ica_pca_components": np.eye(3),
         "ica_pca_mean": None,
         "ica_exclude": [],
-        "ch_names": ["Fz", "Cz", "Pz"],
-        "sfreq_offline": 256.0,
+        "pre_whitener": np.ones((3, 1)),
     }
     orchestrator._preprocessor = stub
     orchestrator._raw = raw  # simulate load_raw_data() having run
@@ -96,91 +97,121 @@ class TestLoadRawData:
             orc.load_raw_data()
 
         assert orc._raw is synthetic_raw
-        assert orc._preprocessor is None  # preprocessor not created yet
+        assert orc._preprocessor is None
 
 
-# ── TestRunStep1PrepareIca ────────────────────────────────────────────────────
+# ── TestRunStep1aFilter ───────────────────────────────────────────────────────
 
 
-class TestRunStep1PrepareIca:
+class TestRunStep1aFilter:
     def test_raises_if_raw_not_loaded(self, tmp_path: Path) -> None:
         orc = _make_orchestrator(tmp_path)
         with pytest.raises(RuntimeError, match="load_raw_data"):
-            orc.run_step1_prepare_ica()
+            orc.run_step1a_filter()
 
-    def test_creates_preprocessor_with_raw_in_constructor(
+    def test_creates_preprocessor_with_raw_and_returns_raw(
         self, tmp_path: Path, synthetic_raw: mne.io.RawArray
     ) -> None:
         orc = _make_orchestrator(tmp_path)
         orc.set_file_path(tmp_path)
         orc._raw = synthetic_raw
 
-        fake_ica = MagicMock(spec=mne.preprocessing.ICA)
-
         with patch(
             "backend.offline_phase.orchestrator.OfflinePreprocessor"
         ) as MockPrep:
             instance = MockPrep.return_value
-            instance.ica = fake_ica
-            instance.run_step1_prepare_ica.return_value = [0, 2]
+            instance.run_step1a_filter.return_value = "filtered_raw"
 
-            ica_obj, suggested = orc.run_step1_prepare_ica()
+            result = orc.run_step1a_filter()
 
-        # raw must be passed as constructor keyword argument
         _, kwargs = MockPrep.call_args
         assert kwargs.get("raw") is synthetic_raw
-        instance.run_step1_prepare_ica.assert_called_once()
-        assert ica_obj is fake_ica
-        assert suggested == [0, 2]
+        instance.run_step1a_filter.assert_called_once()
+        assert result == "filtered_raw"
 
 
-# ── TestRunStep2FinishPipeline ────────────────────────────────────────────────
+# ── TestSetBadChannels ────────────────────────────────────────────────────────
 
 
-class TestRunStep2FinishPipeline:
+class TestSetBadChannels:
     def test_raises_if_no_preprocessor(self, tmp_path: Path) -> None:
         orc = _make_orchestrator(tmp_path)
-        with pytest.raises(RuntimeError, match="run_step1_prepare_ica"):
-            orc.run_step2_finish_pipeline([0])
+        with pytest.raises(RuntimeError, match="run_step1a_filter"):
+            orc.set_bad_channels(["Fp1"])
+
+    def test_forwards_to_preprocessor(self, tmp_path: Path) -> None:
+        orc = _make_orchestrator(tmp_path)
+        stub = _attach_preprocessor_stub(orc)
+        orc.set_bad_channels(["Fp1", "Oz"])
+        stub.set_bad_channels.assert_called_once_with(["Fp1", "Oz"])
+
+
+# ── TestRunStep1bFitIca ───────────────────────────────────────────────────────
+
+
+class TestRunStep1bFitIca:
+    def test_raises_if_no_preprocessor(self, tmp_path: Path) -> None:
+        orc = _make_orchestrator(tmp_path)
+        with pytest.raises(RuntimeError, match="run_step1a_filter"):
+            orc.run_step1b_fit_ica()
+
+    def test_returns_ica_epochs_suggested_and_passes_event_mapping(
+        self, tmp_path: Path
+    ) -> None:
+        sm = MagicMock()
+        sm.get_event_mapping.return_value = {"red": 1}
+        orc = _make_orchestrator(tmp_path, sm)
+        stub = _attach_preprocessor_stub(orc)
+        stub.run_step1b_fit_ica.return_value = ("ica", "epochs", [0, 2])
+
+        ica, epochs, suggested = orc.run_step1b_fit_ica()
+
+        stub.run_step1b_fit_ica.assert_called_once_with({"red": 1})
+        assert (ica, epochs, suggested) == ("ica", "epochs", [0, 2])
+        assert orc._epochs == "epochs"
+
+
+# ── TestRunStep2ApplyAndSave ──────────────────────────────────────────────────
+
+
+class TestRunStep2ApplyAndSave:
+    def test_raises_if_no_preprocessor(self, tmp_path: Path) -> None:
+        orc = _make_orchestrator(tmp_path)
+        with pytest.raises(RuntimeError, match="run_step1b_fit_ica"):
+            orc.run_step2_apply_and_save([0])
 
     def test_raises_if_no_ica(self, tmp_path: Path) -> None:
         orc = _make_orchestrator(tmp_path)
         _attach_preprocessor_stub(orc, ica=None)
-        with pytest.raises(RuntimeError, match="run_step1_prepare_ica"):
-            orc.run_step2_finish_pipeline([0])
+        with pytest.raises(RuntimeError, match="run_step1b_fit_ica"):
+            orc.run_step2_apply_and_save([0])
 
     def test_calls_preprocessor_and_returns_stats(
         self, tmp_path: Path, synthetic_epochs: mne.EpochsArray
     ) -> None:
         orc = _make_orchestrator(tmp_path)
         stub = _attach_preprocessor_stub(orc)
+        stub.run_step2_apply_and_save.return_value = {"n_epochs": 90, "n_excluded": 2}
+        stub.epochs = synthetic_epochs
 
-        def _side_effect(**_kwargs):
-            stub.epochs = synthetic_epochs
+        result = orc.run_step2_apply_and_save([0, 1])
 
-        stub.run_step2_finish_pipeline.side_effect = _side_effect
-
-        result = orc.run_step2_finish_pipeline([0, 1])
-
-        stub.run_step2_finish_pipeline.assert_called_once()
+        stub.run_step2_apply_and_save.assert_called_once()
         assert orc._epochs is synthetic_epochs
-        assert result == {"n_epochs": len(synthetic_epochs)}
+        assert result == {"n_epochs": 90, "n_excluded": 2}
 
     def test_passes_excluded_components_to_preprocessor(
         self, tmp_path: Path, synthetic_epochs: mne.EpochsArray
     ) -> None:
         orc = _make_orchestrator(tmp_path)
         stub = _attach_preprocessor_stub(orc)
+        stub.run_step2_apply_and_save.return_value = {"n_epochs": 1, "n_excluded": 2}
+        stub.epochs = synthetic_epochs
 
-        def _side_effect(exclude_components, **_kwargs):
-            stub.epochs = synthetic_epochs
+        orc.run_step2_apply_and_save([3, 5])
 
-        stub.run_step2_finish_pipeline.side_effect = _side_effect
-
-        orc.run_step2_finish_pipeline([3, 5])
-
-        call_kwargs = stub.run_step2_finish_pipeline.call_args
-        assert call_kwargs.kwargs["exclude_components"] == [3, 5]
+        call = stub.run_step2_apply_and_save.call_args
+        assert call.kwargs["exclude_components"] == [3, 5]
 
 
 # ── TestRunEvaluation ─────────────────────────────────────────────────────────
@@ -189,7 +220,7 @@ class TestRunStep2FinishPipeline:
 class TestRunEvaluation:
     def test_raises_if_no_epochs(self, tmp_path: Path) -> None:
         orc = _make_orchestrator(tmp_path)
-        with pytest.raises(RuntimeError, match="run_step2_finish_pipeline"):
+        with pytest.raises(RuntimeError, match="run_step2_apply_and_save"):
             orc.run_evaluation()
 
     def test_returns_evaluator_result(
@@ -250,10 +281,11 @@ class TestRunTraining:
         assert "models" in state
         assert "spatial_patterns" in state
         assert "mne_info" in state
-        assert "decoding_timepoint" in state
         assert state["decoding_timepoint"] == timepoint
         assert "ica_unmixing" in state
-        assert "ch_names" in state
+        assert "eeg_chunk_indices" in state
+        assert "bad_indices" in state
+        assert "ch_names" not in state
 
     def test_returns_spatial_patterns_and_info(
         self, tmp_path: Path, synthetic_epochs: mne.EpochsArray, evaluator_settings: dict
@@ -302,15 +334,20 @@ class TestGetOnlineState:
 class TestStateOrdering:
     """Confirm that out-of-order calls raise descriptive RuntimeErrors."""
 
-    def test_prepare_ica_before_load(self, tmp_path: Path) -> None:
+    def test_step1a_before_load(self, tmp_path: Path) -> None:
         orc = _make_orchestrator(tmp_path)
         with pytest.raises(RuntimeError):
-            orc.run_step1_prepare_ica()
+            orc.run_step1a_filter()
 
-    def test_pipeline_before_prepare_ica(self, tmp_path: Path) -> None:
+    def test_step1b_before_step1a(self, tmp_path: Path) -> None:
         orc = _make_orchestrator(tmp_path)
         with pytest.raises(RuntimeError):
-            orc.run_step2_finish_pipeline([])
+            orc.run_step1b_fit_ica()
+
+    def test_step2_before_step1b(self, tmp_path: Path) -> None:
+        orc = _make_orchestrator(tmp_path)
+        with pytest.raises(RuntimeError):
+            orc.run_step2_apply_and_save([])
 
     def test_evaluation_before_pipeline(self, tmp_path: Path) -> None:
         orc = _make_orchestrator(tmp_path)

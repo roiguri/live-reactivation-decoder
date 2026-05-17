@@ -23,12 +23,18 @@ class OfflineOrchestrator:
     Owns file I/O (raw loading), holds intermediate state between user-triggered
     steps, and bundles the final decoder_pipeline.joblib export.
 
-    Typical call sequence:
+    The preprocessing pipeline is split into four operator-gated calls so the
+    two manual selections happen on MNE's native interactive windows (which
+    must run on the GUI main thread):
+
         set_file_path(data_dir)
-        load_raw_data()                        # IO — user clicks Load
-        ica, suggested = run_step1_prepare_ica()  # preprocessing + ICA — user clicks Start
-        # UI: user reviews ICA components, selects excluded_components
-        stats = run_step2_finish_pipeline(excluded_components)
+        load_raw_data()                              # IO — user clicks Load
+        raw = run_step1a_filter()                    # worker
+        # UI: raw.plot(block=True) on the main thread → operator marks bads
+        set_bad_channels(raw.info["bads"])           # main thread
+        ica, epochs, suggested = run_step1b_fit_ica()  # worker
+        # UI: ica.plot_sources(epochs, block=True) → operator toggles excludes
+        stats = run_step2_apply_and_save(excluded)   # worker
         eval_results = run_evaluation()
         # UI: user clicks timepoint on TGM plot
         result = run_training(timepoint)
@@ -74,65 +80,87 @@ class OfflineOrchestrator:
         self._raw = self._load_eeg_raw(vhdr)
         logger.info("Raw EEG loaded from %s", vhdr)
 
-    def run_step1_prepare_ica(self) -> tuple[mne.preprocessing.ICA, list[int]]:
+    def run_step1a_filter(self) -> mne.io.Raw:
         """
-        Run signal preprocessing (filter, resample, bad channels, reference) and
-        fit ICA. Returns the ICA object and auto-suggested artifact components for
-        the user to review before committing exclusions.
-
-        Returns:
-            (ica_obj, suggested_components) — ica_obj for UI topomap display;
-            suggested_components are auto-detected EOG/ECG indices to pre-select.
+        Channel hygiene → high-pass → notch → (early variant) low-pass +
+        resample. Returns the filtered ``Raw`` for the UI's interactive
+        bad-channel window.
 
         Raises:
             RuntimeError: if load_raw_data() has not been called first.
         """
         if self._raw is None:
-            raise RuntimeError("Call load_raw_data() before run_step1_prepare_ica().")
+            raise RuntimeError("Call load_raw_data() before run_step1a_filter().")
 
         self._preprocessor = OfflinePreprocessor(
             data_dir=self._data_dir,
             preprocessing_settings=self._settings.get_preprocessing_params(),
             raw=self._raw,
         )
-        suggested = self._preprocessor.run_step1_prepare_ica()
-        logger.info("ICA fitted. %d component(s) auto-suggested.", len(suggested))
-        return self._preprocessor.ica, suggested
+        return self._preprocessor.run_step1a_filter()
 
-    def run_step2_finish_pipeline(
+    def set_bad_channels(self, bads: list[str]) -> None:
+        """Forward the operator's bad-channel selection to the preprocessor.
+
+        Raises:
+            RuntimeError: if run_step1a_filter() has not been called first.
+        """
+        if self._preprocessor is None:
+            raise RuntimeError("Call run_step1a_filter() before set_bad_channels().")
+        self._preprocessor.set_bad_channels(bads)
+
+    def run_step1b_fit_ica(
+        self,
+    ) -> tuple[mne.preprocessing.ICA, mne.Epochs, list[int]]:
+        """
+        Interpolate bads → epoch → average reference → fit ICA → ICLabel.
+
+        Returns:
+            (ica, epochs_for_review, suggested_exclude) — feed the first two
+            to MNE's interactive component window; ``suggested_exclude``
+            pre-populates ``ica.exclude``.
+
+        Raises:
+            RuntimeError: if run_step1a_filter() has not been called first.
+        """
+        if self._preprocessor is None:
+            raise RuntimeError("Call run_step1a_filter() before run_step1b_fit_ica().")
+
+        ica, epochs, suggested = self._preprocessor.run_step1b_fit_ica(
+            self._settings.get_event_mapping()
+        )
+        self._epochs = epochs
+        logger.info("ICA fitted. %d component(s) suggested.", len(suggested))
+        return ica, epochs, suggested
+
+    def run_step2_apply_and_save(
         self, excluded_components: list[int]
     ) -> dict[str, Any]:
         """
-        Apply ICA, epoch, and run AutoReject using the user-confirmed exclusions.
+        Apply ICA with the user-confirmed exclusions, finish the pipeline, and
+        save the cleaned epochs.
 
         Args:
             excluded_components: Final ICA component indices to remove.
 
         Returns:
-            {"n_epochs": int, "event_counts": dict[str, int], "channel_names": list[str]}
+            {"n_epochs": int, "n_excluded": int}
 
         Raises:
-            RuntimeError: if run_step1_prepare_ica() has not been called first.
+            RuntimeError: if run_step1b_fit_ica() has not been called first.
         """
         if self._preprocessor is None or self._preprocessor.ica is None:
             raise RuntimeError(
-                "Call run_step1_prepare_ica() before run_step2_finish_pipeline()."
+                "Call run_step1b_fit_ica() before run_step2_apply_and_save()."
             )
 
-        self._preprocessor.run_step2_finish_pipeline(
+        result = self._preprocessor.run_step2_apply_and_save(
             exclude_components=excluded_components,
-            event_mapping=self._settings.get_event_mapping(),
             output_dir=self._output_dir / "epochs",
         )
         self._epochs = self._preprocessor.epochs
         logger.info("Preprocessing complete. %d epochs retained.", len(self._epochs))
-        # TODO: surface AutoReject drop count + bad-channel count for the UI
-        # complete page. `n_dropped` is computed in preprocessor._autoreject
-        # (reject_log.bad_epochs.sum()) but currently discarded; store it on the
-        # preprocessor (e.g. self._autoreject_dropped: int | None where None =
-        # AR was skipped) and forward here as
-        # `{"n_epochs": ..., "autoreject_dropped": ..., "bad_channels": [...]}`.
-        return {"n_epochs": len(self._epochs)}
+        return result
 
     def run_evaluation(self) -> dict[str, Any]:
         """
@@ -142,11 +170,11 @@ class OfflineOrchestrator:
             Full evaluator result dict (times, AUC curves, TGMs, suggested_timepoint).
 
         Raises:
-            RuntimeError: if run_step2_finish_pipeline() has not been called first.
+            RuntimeError: if run_step2_apply_and_save() has not been called first.
         """
         if self._epochs is None:
             raise RuntimeError(
-                "Call run_step2_finish_pipeline() before run_evaluation()."
+                "Call run_step2_apply_and_save() before run_evaluation()."
             )
 
         evaluator = ModelEvaluator(self._epochs, self._settings.get_decoder_settings())
@@ -180,7 +208,6 @@ class OfflineOrchestrator:
 
         trainer = ModelTrainer(self._epochs, self._settings.get_decoder_settings())
         training_results = trainer.run_training(timepoint)
-        # TODO: change according to information needed in phase2
         self.online_state = {
             **self._preprocessor.export_online_state(),
             "models": training_results["models"],
@@ -191,7 +218,6 @@ class OfflineOrchestrator:
 
         save_path = self._save_to_disk()
         logger.info("Training complete. Pipeline saved → %s", save_path)
-        # TODO: consider removing some of the returned values.
         return {
             "model_filepath": save_path,
             "spatial_patterns": training_results["spatial_patterns"],
@@ -229,47 +255,36 @@ class OfflineOrchestrator:
 
     def _load_eeg_raw(self, vhdr: Path) -> mne.io.Raw:
         """
-        Load a BrainVision file and retain only EEG channels with a known
-        montage position plus EOG/ECG channels needed for ICA artifact detection.
+        Load a BrainVision file, decode the parallel-port trigger channel into
+        annotations, and keep only the EEG channels (plus EMG, which channel
+        hygiene drops downstream). Montage and EMG handling are the
+        preprocessor's responsibility — this method is the pure IO boundary.
         """
         # TODO: recordings that exceed available RAM will raise MemoryError here.
-        # Consider supporting mne memmap preload (preload="path/to/file.bin") so
-        # the OS pages signal data from disk without a contiguous RAM allocation.
+        # Consider supporting mne memmap preload (preload="path/to/file.bin").
         raw = mne.io.read_raw_brainvision(vhdr, preload=True, verbose=False)
-        montage = mne.channels.make_standard_montage("standard_1020")
-        raw.set_montage(montage, match_case=False, on_missing="warn")
 
         # Parallel-port triggers are recorded as analog pulses on a dedicated
         # channel (not the .vmrk file). Decode them into Annotations now,
         # before the channel is dropped along with other non-EEG channels.
         annotations = decode_parallel_port_channel(raw)
-        # TODO: this overrides any existing anotations on the raw; consider merging with existing ones instead of replacing.
         raw.set_annotations(annotations)
 
-        # TODO: consider this code part - added due to issues with emg channel in test data
-        # Keep only EEG channels with a known montage position plus physiological
-        # reference channels (EOG/ECG) needed for ICA artifact detection.
-        # Everything else (e.g. the EMG trigger channel, stim, misc) is dropped.
-        montage_names = {ch.lower() for ch in montage.ch_names}
-        eeg_picks = [
-            i for i in mne.pick_types(raw.info, eeg=True)
-            if raw.ch_names[i].lower() in montage_names
-        ]
-        eog_picks = mne.pick_types(raw.info, eog=True).tolist()
-        ecg_picks = mne.pick_types(raw.info, ecg=True).tolist()
-        keep = sorted(set(eeg_picks) | set(eog_picks) | set(ecg_picks))
-        dropped = [raw.ch_names[i] for i in range(len(raw.ch_names)) if i not in keep]
+        # Keep EEG-typed channels only (EMG is EEG-typed until hygiene retypes
+        # it). The decoded trigger channel, EOG/ECG, stim and misc are dropped
+        # so the offline channel array is positionally aligned with the
+        # 64-channel post-trigger-split LSL EEG array.
+        eeg_picks = mne.pick_types(raw.info, eeg=True).tolist()
+        keep = [raw.ch_names[i] for i in eeg_picks]
+        dropped = [c for c in raw.ch_names if c not in keep]
         if dropped:
-            logger.info("Dropping non-EEG/EOG/ECG channels: %s", dropped)
+            logger.info("Dropping non-EEG channels: %s", dropped)
         raw.pick(keep)
-        # End TODO
-
         return raw
 
     # ── Private: persistence ──────────────────────────────────────────────────
 
     def _save_to_disk(self) -> Path:
-        # TODO: review safe path
         save_path = self._output_dir / "models" / "decoder_pipeline.joblib"
         save_path.parent.mkdir(parents=True, exist_ok=True)
         joblib.dump(self.online_state, save_path)
