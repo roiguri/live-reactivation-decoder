@@ -29,36 +29,39 @@ TARGET_SFREQ = 100
 
 
 def _make_online_state(
-    ch_names: list[str] = EEG_CH_NAMES,
-    bad_channels: list[str] | None = None,
+    n_eeg: int = N_CHANNELS,
+    eeg_chunk_indices: list[int] | None = None,
+    bad_indices: list[int] | None = None,
     interp_weights: np.ndarray | None = None,
     n_components: int = 4,
-    sfreq_offline: float = float(TARGET_SFREQ),
+    sfreq_offline: float = float(TARGET_SFREQ),  # legacy kwarg; no longer in the schema
 ) -> dict:
-    """Build a minimal but valid online_state dict."""
-    if bad_channels is None:
-        bad_channels = []
+    """Build a minimal but valid online_state dict (positional schema)."""
+    if eeg_chunk_indices is None:
+        # Default: keep the first n_eeg positions of the post-trigger-split LSL chunk
+        # (e.g. positions 0..n_eeg-1 with no offline drops).
+        eeg_chunk_indices = list(range(n_eeg))
+    if bad_indices is None:
+        bad_indices = []
 
-    n_ch = len(ch_names)
     rng = np.random.default_rng(0)
 
-    pca_components = rng.standard_normal((n_components, n_ch))
+    pca_components = rng.standard_normal((n_components, n_eeg))
     unmixing = rng.standard_normal((n_components, n_components))
     mixing = np.linalg.pinv(unmixing)
 
     return {
-        "bad_channels": bad_channels,
+        "eeg_chunk_indices": eeg_chunk_indices,
+        "bad_indices": bad_indices,
         "interp_weights": interp_weights,
-        "ch_names": ch_names,
         "ica_unmixing": unmixing,
         "ica_mixing": mixing,
         "ica_pca_components": pca_components,
-        "ica_pca_mean": np.zeros(n_ch),
+        "ica_pca_mean": np.zeros(n_eeg),
         "ica_exclude": [],
         # Default to ones so synthetic-matrix tests get an identity rescaling.
         # The real-ICA fixture overrides this with ica.pre_whitener_.
-        "pre_whitener": np.ones((n_ch, 1)),
-        "sfreq_offline": sfreq_offline,
+        "pre_whitener": np.ones((n_eeg, 1)),
     }
 
 
@@ -74,6 +77,30 @@ def _make_settings(
         "final_resample": {"target_rate": target_rate},
         "resample_filter_stage": resample_filter_stage,
     }
+
+
+def _adapt_offline_state_to_positional(state: dict) -> dict:
+    """Translate Roi's current name-based offline export into the new positional
+    schema OnlinePreprocessor now expects.
+
+    Temporary bridge until Roi's offline-side migration lands. Once Roi's
+    export_online_state() emits eeg_chunk_indices + bad_indices directly,
+    this helper goes away.
+    """
+    ch_names = list(state["ch_names"])
+    bad_indices = [ch_names.index(name) for name in state.get("bad_channels", [])]
+    new_state = {
+        "eeg_chunk_indices": list(range(len(ch_names))),
+        "bad_indices": bad_indices,
+        "interp_weights": state["interp_weights"],
+        "ica_unmixing": state["ica_unmixing"],
+        "ica_mixing": state["ica_mixing"],
+        "ica_pca_components": state["ica_pca_components"],
+        "ica_pca_mean": state["ica_pca_mean"],
+        "ica_exclude": state["ica_exclude"],
+        "pre_whitener": state["pre_whitener"],
+    }
+    return new_state
 
 
 def _make_offline_settings(target_rate: int = TARGET_SFREQ) -> dict:
@@ -114,10 +141,33 @@ class TestConstructorValidation:
         p = OnlinePreprocessor(valid_settings, valid_online_state, input_sfreq=INPUT_SFREQ)
         assert p is not None
 
-    def test_raises_if_ch_names_count_inconsistent_with_ica_pca(self, valid_settings):
+    def test_raises_if_pca_cols_inconsistent_with_eeg_chunk_indices(self, valid_settings):
         state = _make_online_state()
         state["ica_pca_components"] = np.zeros((4, N_CHANNELS + 5))
-        with pytest.raises(ValueError, match="ch_names"):
+        with pytest.raises(ValueError, match="eeg_chunk_indices"):
+            OnlinePreprocessor(valid_settings, state)
+
+    def test_raises_on_negative_eeg_chunk_index(self, valid_settings):
+        state = _make_online_state(eeg_chunk_indices=[0, 1, -1] + list(range(3, N_CHANNELS)))
+        with pytest.raises(ValueError, match="negative"):
+            OnlinePreprocessor(valid_settings, state)
+
+    def test_raises_on_duplicate_eeg_chunk_indices(self, valid_settings):
+        dup = list(range(N_CHANNELS))
+        dup[0] = dup[1]
+        state = _make_online_state(eeg_chunk_indices=dup)
+        with pytest.raises(ValueError, match="duplicates"):
+            OnlinePreprocessor(valid_settings, state)
+
+    def test_raises_on_out_of_range_bad_indices(self, valid_settings):
+        state = _make_online_state(bad_indices=[N_CHANNELS + 1])
+        with pytest.raises(ValueError, match="bad_indices"):
+            OnlinePreprocessor(valid_settings, state)
+
+    def test_raises_on_out_of_range_ica_exclude(self, valid_settings):
+        state = _make_online_state(n_components=4)
+        state["ica_exclude"] = [99]  # n_components=4, so 99 is out of range
+        with pytest.raises(ValueError, match="ica_exclude"):
             OnlinePreprocessor(valid_settings, state)
 
     def test_raises_on_non_integer_decimation_ratio(self):
@@ -572,11 +622,16 @@ class TestDecimateFrequencies:
 # ── Commit 5: spatial transforms ──────────────────────────────────────────────
 
 def _make_preprocessor_with_bad_channel() -> OnlinePreprocessor:
-    """Preprocessor with Fp1 declared as bad and interp_weights set."""
+    """Preprocessor with channel at index 0 (Fp1 in the EEG_CH_NAMES layout)
+    declared as bad and interp_weights set.
+
+    The bad/good indices are now positional — we use names only to drive MNE's
+    interpolate_bads (which is name-based) when generating the reference weight
+    matrix. The online state stores indices only.
+    """
     import mne
     ch_names = list(EEG_CH_NAMES)
-    bad_channels = ["Fp1"]
-    bad_idx = ch_names.index("Fp1")
+    bad_idx = ch_names.index("Fp1")  # positional index in the post-hygiene array
     good_indices = [i for i in range(len(ch_names)) if i != bad_idx]
 
     # Compute real interp weights via MNE identity-basis trick
@@ -585,16 +640,14 @@ def _make_preprocessor_with_bad_channel() -> OnlinePreprocessor:
     raw = mne.io.RawArray(np.eye(n_eeg), info, verbose=False)
     montage = mne.channels.make_standard_montage("standard_1020")
     raw.set_montage(montage, match_case=False, on_missing="warn", verbose=False)
-    raw.info["bads"] = bad_channels
+    raw.info["bads"] = [ch_names[bad_idx]]
     raw.interpolate_bads(reset_bads=False, verbose=False)
     interp_data = raw.get_data()
-    bad_local = [bad_idx]
-    good_local = good_indices
-    weights = interp_data[np.ix_(bad_local, good_local)].T  # (n_good, 1)
+    weights = interp_data[np.ix_([bad_idx], good_indices)].T  # (n_good, 1)
 
     state = _make_online_state(
-        ch_names=ch_names,
-        bad_channels=bad_channels,
+        n_eeg=n_eeg,
+        bad_indices=[bad_idx],
         interp_weights=weights,
     )
     return OnlinePreprocessor(_make_settings(), state, INPUT_SFREQ)
@@ -748,7 +801,7 @@ class TestApplyICA:
         offline._fit_ica()
         offline.ica.exclude = [0, 2]
 
-        state = offline.export_online_state()
+        state = _adapt_offline_state_to_positional(offline.export_online_state())
         online = OnlinePreprocessor(
             preprocessing_settings=_make_settings(),
             online_state=state,
@@ -953,7 +1006,7 @@ class TestIntegration:
     def test_process_batch_smoke_with_real_offline_state(self, tmp_path):
         """process_batch() must run without error using state from export_online_state()."""
         offline, _ = self._build_offline_with_ica(tmp_path)
-        state = offline.export_online_state()
+        state = _adapt_offline_state_to_positional(offline.export_online_state())
 
         online = OnlinePreprocessor(
             preprocessing_settings=_make_settings(),
@@ -988,8 +1041,9 @@ class TestIntegration:
 
         offline._fit_ica()
         offline.ica.exclude = [0]
-        state = offline.export_online_state()
-        assert state["interp_weights"] is not None
+        offline_state = offline.export_online_state()
+        assert offline_state["interp_weights"] is not None
+        state = _adapt_offline_state_to_positional(offline_state)
 
         online = OnlinePreprocessor(
             preprocessing_settings=_make_settings(),
@@ -997,7 +1051,7 @@ class TestIntegration:
             input_sfreq=INPUT_SFREQ,
         )
 
-        bad_ch_idx = state["ch_names"].index(fp1_name)
+        bad_ch_idx = offline_state["ch_names"].index(fp1_name)
         rng = np.random.default_rng(21)
         base = rng.standard_normal((400, N_CHANNELS)) * 1e-5
         timestamps = np.arange(400, dtype=float) / INPUT_SFREQ

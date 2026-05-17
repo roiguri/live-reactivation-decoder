@@ -58,8 +58,8 @@ class OnlinePreprocessor:
             )
 
         # Spatial transform matrices from Phase 1
-        self._ch_names: list[str] = list(online_state["ch_names"])
-        self._bad_channels: list[str] = list(online_state["bad_channels"])
+        self._eeg_chunk_indices: list[int] = list(online_state["eeg_chunk_indices"])
+        self._bad_indices: list[int] = list(online_state["bad_indices"])
         self._interp_weights: Optional[np.ndarray] = online_state["interp_weights"]
         self._ica_unmixing: np.ndarray = np.array(online_state["ica_unmixing"])
         self._ica_mixing: np.ndarray = np.array(online_state["ica_mixing"])
@@ -71,15 +71,12 @@ class OnlinePreprocessor:
         )
         self._ica_exclude: list[int] = list(online_state["ica_exclude"])
         # Per-channel-type rescaling factor MNE applies inside ICA.fit/apply.
-        # Stored as (n_ch, 1); we transpose to (1, n_ch) once for row-major broadcasting.
         self._pre_whitener: np.ndarray = np.array(online_state["pre_whitener"]).reshape(-1, 1).T
 
-        # Derive good/bad channel index lists from ch_names
-        self._bad_indices: list[int] = [
-            self._ch_names.index(ch) for ch in self._bad_channels
-        ]
+        # Derive good indices from the post-hygiene channel count and the bad list.
+        self._n_eeg: int = len(self._eeg_chunk_indices)
         self._good_indices: list[int] = [
-            i for i in range(len(self._ch_names)) if i not in self._bad_indices
+            i for i in range(self._n_eeg) if i not in self._bad_indices
         ]
 
         # Filter coefficients
@@ -138,7 +135,7 @@ class OnlinePreprocessor:
 
     @property
     def n_channels(self) -> int:
-        return len(self._ch_names)
+        return self._n_eeg
 
     @property
     def target_sfreq(self) -> float:
@@ -343,13 +340,56 @@ class OnlinePreprocessor:
         preprocessing_settings: dict,
         online_state: dict,
     ) -> None:
+        # All checks are positional shape/range consistency. We don't know the
+        # LSL stream's channel count here (that's the receiver's concern), so
+        # eeg_chunk_indices is bounded only by uniqueness and non-negativity.
+        eeg_chunk_indices = list(online_state["eeg_chunk_indices"])
+        n_eeg = len(eeg_chunk_indices)
+
+        if any(i < 0 for i in eeg_chunk_indices):
+            raise ValueError(
+                f"online_state['eeg_chunk_indices'] contains negative values: "
+                f"{[i for i in eeg_chunk_indices if i < 0]}."
+            )
+        if len(set(eeg_chunk_indices)) != n_eeg:
+            duplicates = [i for i in eeg_chunk_indices if eeg_chunk_indices.count(i) > 1]
+            raise ValueError(
+                f"online_state['eeg_chunk_indices'] contains duplicates: {sorted(set(duplicates))}."
+            )
+
+        bad_indices = list(online_state["bad_indices"])
+        if any(i < 0 or i >= n_eeg for i in bad_indices):
+            raise ValueError(
+                f"online_state['bad_indices'] must be in [0, {n_eeg}); got {bad_indices}."
+            )
+        if len(set(bad_indices)) != len(bad_indices):
+            raise ValueError(
+                f"online_state['bad_indices'] contains duplicates: {bad_indices}."
+            )
+
         # Catch channel/ICA dimension mismatch early — otherwise it manifests as a
         # cryptic NumPy broadcast error on the first process_batch() call.
-        ch_names = online_state["ch_names"]
         pca_components = online_state["ica_pca_components"]
-        if hasattr(pca_components, "shape") and pca_components.shape[1] != len(ch_names):
+        if hasattr(pca_components, "shape") and pca_components.shape[1] != n_eeg:
             raise ValueError(
                 f"online_state['ica_pca_components'] has {pca_components.shape[1]} columns "
-                f"but online_state['ch_names'] has {len(ch_names)} entries. "
-                "ch_names and ICA matrices are inconsistent."
+                f"but eeg_chunk_indices has {n_eeg} entries. "
+                "online_state shape is inconsistent."
             )
+
+        n_components = pca_components.shape[0] if hasattr(pca_components, "shape") else 0
+        ica_exclude = list(online_state.get("ica_exclude", []))
+        if any(i < 0 or i >= n_components for i in ica_exclude):
+            raise ValueError(
+                f"online_state['ica_exclude'] must be in [0, {n_components}); got {ica_exclude}."
+            )
+
+        interp_weights = online_state["interp_weights"]
+        if interp_weights is not None and hasattr(interp_weights, "shape"):
+            n_good_expected = n_eeg - len(bad_indices)
+            if interp_weights.shape != (n_good_expected, len(bad_indices)):
+                raise ValueError(
+                    f"online_state['interp_weights'] shape {interp_weights.shape} does not "
+                    f"match expected ({n_good_expected}, {len(bad_indices)}) for {n_eeg} EEG "
+                    f"channels with {len(bad_indices)} bads."
+                )
