@@ -280,7 +280,11 @@ python online_decoder/scripts/benchmark_preprocessor.py --target-sfreq 100 --n-c
 
 ---
 
-### Commit 6 — Documentation (optional but recommended)
+### Commit 6 — Documentation (partial, pulled forward before PR)
+
+> Pulled forward before opening the PR for Commits 1–4 so reviewers see accurate Phase 2 docs. A follow-up commit will refresh the large stale `OnlinePreprocessor` code-block class doc inside `backend_architecture.md` (~line 1100) and the `CLAUDE.md` "Current Backend Scope" bullet if needed.
+
+
 
 > **🛑 Ask before committing.**
 

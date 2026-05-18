@@ -695,7 +695,7 @@ online_state = preprocessor.export_online_state()
         # TODO(open): Revisit which fields belong in runtime metadata.
         # Keep this minimal unless the live runtime, UI, or reporting has a
         # concrete consumer for an additional field.
-        "feature_width": len(online_state["ch_names"]),
+        "feature_width": len(online_state["eeg_chunk_indices"]),
         "decoding_timepoint": timepoint,
     },
 }
@@ -708,7 +708,13 @@ the full artifact if the frontend needs an in-memory Phase 1 to Phase 2 handoff.
 1. `StreamWorker` asks `LSLReceiver` for all newly available data.
 2. If data exists, `StreamWorker` appends it to an internal batch accumulator.
 3. When about `40 ms` of samples are available, `StreamWorker` hands one batch to `OnlinePreprocessor.process_batch()`.
-4. `OnlinePreprocessor` applies causal bandpass/notch filtering with persistent state, decimation to the configured target rate, fixed bad-channel handling from Phase 1, average reference, and fixed ICA transform from Phase 1.
+4. `OnlinePreprocessor` applies, in order:
+   - Positional EEG channel hygiene (`eeg_chunk_indices` slice — drops EMG and any other offline-dropped channels from the raw 64-EEG array).
+   - Causal high-pass + notch filter (IIR, persistent `zi`).
+   - Then, branching on `settings["preprocessing"]["resample_filter_stage"]`:
+     - **"early"**: 40 Hz LP → decimate 1000→100 Hz → bad-channel interp → average reference → ICA.
+     - **"late"**: bad-channel interp → average reference → ICA → 40 Hz LP → decimate 1000→100 Hz.
+   - The variant flag is configured per training run and stored implicitly via the ICA matrices in `online_state` (matrices fit at the rate the offline pipeline ran at).
 5. `LiveInferenceEngine.predict()` scores all decimated outputs from that batch.
 6. `StreamWorker` emits probabilities, aligned timestamps, and markers through `prediction_ready`; `PredictionLogger` and the UI are consumers of that signal.
 
@@ -747,10 +753,13 @@ the full artifact if the frontend needs an in-memory Phase 1 to Phase 2 handoff.
 
 #### **2. OnlinePreprocessor (The Cleaner)**
 
-* **Role:** Applies causal filters and Phase 1 spatial transforms to streaming micro-batches, producing decimated features at the configured target rate.
-* **Inputs:** `eeg_batch` `(n_samples, n_channels)`, aligned timestamps, `preprocessing_settings`, and `online_state` from Phase 1.
-* **Outputs:** `features` `(n_out, n_channels)` plus aligned output timestamps at `target_sfreq`.
+* **Role:** Applies positional EEG channel hygiene, causal filters, and Phase 1 spatial transforms to streaming micro-batches, producing decimated features at the configured target rate (100 Hz).
+* **Inputs:** `eeg_batch` `(n_samples, raw_n_channels)` straight from `LSLReceiver` (post-trigger-split, pre-hygiene), aligned timestamps, `preprocessing_settings` (HP/notch/LP/final_resample/`resample_filter_stage`), and `online_state` from Phase 1 (`eeg_chunk_indices`, `bad_indices`, ICA matrices, interp weights, pre_whitener).
+* **Outputs:** `features` `(n_out, n_eeg_post_hygiene)` plus aligned output timestamps at `target_sfreq = 100 Hz`. `n_eeg_post_hygiene = len(eeg_chunk_indices)`.
+* **Pipeline:** see Data Flow above — variant-flagged (`resample_filter_stage: "early" | "late"`).
 * **Status:** ✅ Implemented in `src/backend/online_phase/online_preprocessor.py`.
+
+> **Note:** the detailed signature/docstring code block further down (line ~1100) is stale and tracks the pre-migration design (bandpass schema, `ch_names`/`bad_channels`, 256 Hz target). It will be rewritten as a follow-up. The current source of truth is the code itself.
 
 #### **3. LiveInferenceEngine (The Brain)**
 
