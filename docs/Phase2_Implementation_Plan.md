@@ -53,7 +53,7 @@ StreamWorker.run()
 - `[x]` `scripts/smoke_stream_worker.py` exists for headless worker/logger smoke checks.
 - `[x]` `StreamWorker` emits optional per-batch latency diagnostics.
 - `[~]` Replay smoke tooling has preflight checks and visible replay-subprocess errors; end-to-end replay is blocked until a Phase 1 artifact matching the Phase 2 envelope is available.
-- `[x]` Phase 1 sample rate locked: configurable via `resample.target_rate` in YAML (default 256 Hz). `online_state` schema locked.
+- `[x]` Phase 1 sample rate locked: configurable via `final_resample.target_rate` in YAML (post-migration default 100 Hz). `online_state` schema migrated to positional indices (`eeg_chunk_indices`, `bad_indices`) — see Preprocessing_Migration_Phase2_Execution.md.
 
 ## Component Plan
 
@@ -92,11 +92,12 @@ StreamWorker.run()
 4. Average reference
 5. Apply ICA — delta formula with `pre_whitener`
 
-**Key implementation notes:**
-- Target rate is fully configurable via `preprocessing_settings["resample"]["target_rate"]` — not hardcoded. Default 256 Hz comes from `experiment_config.yaml`.
-- Constructor cross-validates `online_state["sfreq_offline"]` against `target_rate` to catch Phase 1/2 config drift.
-- `online_state` must include: `bad_channels`, `interp_weights`, `ch_names`, `ica_unmixing`, `ica_mixing`, `ica_pca_components`, `ica_pca_mean`, `ica_exclude`, `pre_whitener`, `sfreq_offline`.
-- Benchmark: 0.21 ms mean per batch (default config), 0.53 ms worst-case (64 ch, 40 ICA comp) — well within 40 ms budget.
+**Key implementation notes (post-migration):**
+- Target rate configured via `preprocessing_settings["final_resample"]["target_rate"]`. Default 100 Hz (paper-aligned). Decimation is integer-only — non-integer ratios raise at construction.
+- Constructor's `sfreq_offline` cross-check has been removed — under the settings-only-recipe model both sides read from the same dict, so the check was a tautology.
+- `online_state` schema is fully positional: `eeg_chunk_indices`, `bad_indices`, `interp_weights`, `ica_unmixing`, `ica_mixing`, `ica_pca_components`, `ica_pca_mean`, `ica_exclude`, `pre_whitener`. No `ch_names`/`bad_channels`/`sfreq_offline` — those name-based fields don't survive into the LSL world.
+- Pipeline order is variant-flagged via `preprocessing_settings["resample_filter_stage"]` ("early" runs LP+decimate before spatial transforms; "late" runs them after ICA).
+- Benchmark numbers in this doc predate the migration and will be refreshed once `benchmark_preprocessor.py` is updated (Commit 5 of the migration).
 
 **Tests before live use:**
 - `[x]` Chunked filtering equals one continuous causal filtering call for the same data.
@@ -264,17 +265,18 @@ live.stop()
 
 Previously blocking decisions — all now resolved.
 
-### `[x]` Model-Facing Sample Rate
+### `[x]` Model-Facing Sample Rate (post-migration)
 
-Locked at **configurable via `resample.target_rate`** in `experiment_config.yaml` (default 256 Hz, not hardcoded). `OnlinePreprocessor` reads it from `preprocessing_settings` and cross-validates against `online_state["sfreq_offline"]`.
+Locked at **configurable via `final_resample.target_rate`** in `experiment_config.yaml` (default 100 Hz, paper-aligned). `OnlinePreprocessor` reads it from `preprocessing_settings`. Decimation is integer-only: construction asserts `input_sfreq % target_sfreq == 0`. The pre-migration `sfreq_offline` cross-check was a settings-vs-settings tautology and has been removed.
 
-### `[x]` `online_state` Schema
+### `[x]` `online_state` Schema (post-migration, positional)
 
-`OfflinePreprocessor.export_online_state()` now exports:
-- `bad_channels`, `interp_weights` (precomputed spherical-spline weight matrix, or None)
-- `ch_names`, `sfreq_offline`
-- `ica_unmixing`, `ica_mixing`, `ica_pca_components`, `ica_pca_mean`, `ica_exclude`
-- `pre_whitener` (per-channel-type rescaling factor from MNE ICA fitting)
+`OfflinePreprocessor.export_online_state()` exports a fully positional schema (no channel names — names don't cross the LSL boundary):
+- `eeg_chunk_indices: list[int]` — which raw LSL EEG positions to keep (encodes EMG drop and any other offline hygiene as a positional list).
+- `bad_indices: list[int]` — bad-channel positions in the post-hygiene array.
+- `interp_weights: np.ndarray | None` — `(n_good, n_bad)` precomputed spherical-spline weights, or None.
+- `ica_unmixing`, `ica_mixing`, `ica_pca_components`, `ica_pca_mean`, `ica_exclude`.
+- `pre_whitener` (per-channel-type rescaling factor from MNE ICA fitting).
 
 ### `[x]` Artifact envelope
 

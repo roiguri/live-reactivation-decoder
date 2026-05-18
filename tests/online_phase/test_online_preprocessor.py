@@ -25,54 +25,82 @@ EEG_CH_NAMES = [
 ]
 N_CHANNELS = len(EEG_CH_NAMES)
 INPUT_SFREQ = 1000.0
-TARGET_SFREQ = 256
+TARGET_SFREQ = 100
 
 
 def _make_online_state(
-    ch_names: list[str] = EEG_CH_NAMES,
-    bad_channels: list[str] | None = None,
+    n_eeg: int = N_CHANNELS,
+    eeg_chunk_indices: list[int] | None = None,
+    bad_indices: list[int] | None = None,
     interp_weights: np.ndarray | None = None,
     n_components: int = 4,
-    sfreq_offline: float = float(TARGET_SFREQ),
+    sfreq_offline: float = float(TARGET_SFREQ),  # legacy kwarg; no longer in the schema
 ) -> dict:
-    """Build a minimal but valid online_state dict."""
-    if bad_channels is None:
-        bad_channels = []
+    """Build a minimal but valid online_state dict (positional schema)."""
+    if eeg_chunk_indices is None:
+        # Default: keep the first n_eeg positions of the post-trigger-split LSL chunk
+        # (e.g. positions 0..n_eeg-1 with no offline drops).
+        eeg_chunk_indices = list(range(n_eeg))
+    if bad_indices is None:
+        bad_indices = []
 
-    n_ch = len(ch_names)
     rng = np.random.default_rng(0)
 
-    pca_components = rng.standard_normal((n_components, n_ch))
+    pca_components = rng.standard_normal((n_components, n_eeg))
     unmixing = rng.standard_normal((n_components, n_components))
     mixing = np.linalg.pinv(unmixing)
 
     return {
-        "bad_channels": bad_channels,
+        "eeg_chunk_indices": eeg_chunk_indices,
+        "bad_indices": bad_indices,
         "interp_weights": interp_weights,
-        "ch_names": ch_names,
         "ica_unmixing": unmixing,
         "ica_mixing": mixing,
         "ica_pca_components": pca_components,
-        "ica_pca_mean": np.zeros(n_ch),
+        "ica_pca_mean": np.zeros(n_eeg),
         "ica_exclude": [],
         # Default to ones so synthetic-matrix tests get an identity rescaling.
         # The real-ICA fixture overrides this with ica.pre_whitener_.
-        "pre_whitener": np.ones((n_ch, 1)),
-        "sfreq_offline": sfreq_offline,
+        "pre_whitener": np.ones((n_eeg, 1)),
     }
 
 
-def _make_settings(target_rate: int = TARGET_SFREQ) -> dict:
+def _make_settings(
+    target_rate: int = TARGET_SFREQ,
+    resample_filter_stage: str = "early",
+) -> dict:
     """Build a minimal valid preprocessing_settings dict."""
     return {
-        "bandpass": {
-            "l_freq": 1.0,
-            "h_freq": 40.0,
-            "method": "iir",
-            "notch": 50.0,
-        },
-        "resample": {"target_rate": target_rate},
+        "highpass": {"l_freq": 1.0, "method": "iir"},
+        "notch": {"freq": 50.0},
+        "lowpass": {"h_freq": 40.0, "method": "iir"},
+        "final_resample": {"target_rate": target_rate},
+        "resample_filter_stage": resample_filter_stage,
     }
+
+
+def _adapt_offline_state_to_positional(state: dict) -> dict:
+    """Translate Roi's current name-based offline export into the new positional
+    schema OnlinePreprocessor now expects.
+
+    Temporary bridge until Roi's offline-side migration lands. Once Roi's
+    export_online_state() emits eeg_chunk_indices + bad_indices directly,
+    this helper goes away.
+    """
+    ch_names = list(state["ch_names"])
+    bad_indices = [ch_names.index(name) for name in state.get("bad_channels", [])]
+    new_state = {
+        "eeg_chunk_indices": list(range(len(ch_names))),
+        "bad_indices": bad_indices,
+        "interp_weights": state["interp_weights"],
+        "ica_unmixing": state["ica_unmixing"],
+        "ica_mixing": state["ica_mixing"],
+        "ica_pca_components": state["ica_pca_components"],
+        "ica_pca_mean": state["ica_pca_mean"],
+        "ica_exclude": state["ica_exclude"],
+        "pre_whitener": state["pre_whitener"],
+    }
+    return new_state
 
 
 def _make_offline_settings(target_rate: int = TARGET_SFREQ) -> dict:
@@ -103,7 +131,9 @@ def valid_online_state() -> dict:
 
 @pytest.fixture
 def preprocessor(valid_settings, valid_online_state) -> OnlinePreprocessor:
-    return OnlinePreprocessor(valid_settings, valid_online_state, input_sfreq=INPUT_SFREQ)
+    return OnlinePreprocessor(
+        valid_settings, valid_online_state, input_sfreq=INPUT_SFREQ,
+    )
 
 
 # ── Commit 2: Constructor validation ─────────────────────────────────────────
@@ -113,16 +143,44 @@ class TestConstructorValidation:
         p = OnlinePreprocessor(valid_settings, valid_online_state, input_sfreq=INPUT_SFREQ)
         assert p is not None
 
-    def test_raises_if_sfreq_offline_mismatches_target_rate(self, valid_settings):
-        state = _make_online_state(sfreq_offline=512.0)
-        with pytest.raises(ValueError, match="sfreq_offline"):
-            OnlinePreprocessor(valid_settings, state)
-
-    def test_raises_if_ch_names_count_inconsistent_with_ica_pca(self, valid_settings):
+    def test_raises_if_pca_cols_inconsistent_with_eeg_chunk_indices(self, valid_settings):
         state = _make_online_state()
         state["ica_pca_components"] = np.zeros((4, N_CHANNELS + 5))
-        with pytest.raises(ValueError, match="ch_names"):
+        with pytest.raises(ValueError, match="eeg_chunk_indices"):
             OnlinePreprocessor(valid_settings, state)
+
+    def test_raises_on_negative_eeg_chunk_index(self, valid_settings):
+        state = _make_online_state(eeg_chunk_indices=[0, 1, -1] + list(range(3, N_CHANNELS)))
+        with pytest.raises(ValueError, match="eeg_chunk_indices"):
+            OnlinePreprocessor(valid_settings, state)
+
+    def test_raises_on_duplicate_eeg_chunk_indices(self, valid_settings):
+        dup = list(range(N_CHANNELS))
+        dup[0] = dup[1]
+        state = _make_online_state(eeg_chunk_indices=dup)
+        with pytest.raises(ValueError, match="duplicates"):
+            OnlinePreprocessor(valid_settings, state)
+
+    def test_raises_on_out_of_range_bad_indices(self, valid_settings):
+        state = _make_online_state(bad_indices=[N_CHANNELS + 1])
+        with pytest.raises(ValueError, match="bad_indices"):
+            OnlinePreprocessor(valid_settings, state)
+
+    def test_raises_on_out_of_range_ica_exclude(self, valid_settings):
+        state = _make_online_state(n_components=4)
+        state["ica_exclude"] = [99]  # n_components=4, so 99 is out of range
+        with pytest.raises(ValueError, match="ica_exclude"):
+            OnlinePreprocessor(valid_settings, state)
+
+    def test_raises_on_non_integer_decimation_ratio(self):
+        settings = _make_settings(target_rate=256)  # 1000 / 256 = 3.90625
+        with pytest.raises(ValueError, match="integer multiple"):
+            OnlinePreprocessor(settings, _make_online_state(sfreq_offline=256.0))
+
+    def test_raises_on_invalid_resample_filter_stage(self):
+        settings = _make_settings(resample_filter_stage="middle")
+        with pytest.raises(ValueError, match="resample_filter_stage"):
+            OnlinePreprocessor(settings, _make_online_state())
 
 
 # ── Commit 2: Properties ──────────────────────────────────────────────────────
@@ -141,15 +199,20 @@ class TestProperties:
 # ── Commit 2: reset_state ────────────────────────────────────────────────────
 
 class TestResetState:
-    def test_reset_clears_bandpass_zi(self, preprocessor):
-        preprocessor._bandpass_zi = np.ones((4, N_CHANNELS))
+    def test_reset_clears_highpass_zi(self, preprocessor):
+        preprocessor._highpass_zi = np.ones((4, N_CHANNELS))
         preprocessor.reset_state()
-        assert preprocessor._bandpass_zi is None
+        assert preprocessor._highpass_zi is None
 
     def test_reset_clears_notch_zi(self, preprocessor):
         preprocessor._notch_zi = np.ones((4, N_CHANNELS))
         preprocessor.reset_state()
         assert preprocessor._notch_zi is None
+
+    def test_reset_clears_lowpass_zi(self, preprocessor):
+        preprocessor._lowpass_zi = np.ones((4, N_CHANNELS))
+        preprocessor.reset_state()
+        assert preprocessor._lowpass_zi is None
 
     def test_reset_clears_decimate_zi(self, preprocessor):
         preprocessor._decimate_zi = np.ones((10, N_CHANNELS))
@@ -162,7 +225,7 @@ class TestResetState:
         assert preprocessor._decimate_phase == 0
 
 
-# ── Commit 3: causal bandpass + notch filter ──────────────────────────────────
+# ── Commit 3: causal high-pass + notch filter ────────────────────────────────
 
 def _make_sinusoid(freq_hz: float, n_samples: int, n_channels: int, sfreq: float) -> np.ndarray:
     t = np.arange(n_samples) / sfreq
@@ -201,18 +264,40 @@ class TestApplyFilter:
 
         np.testing.assert_allclose(result_single, result_chunked, atol=1e-10)
 
-    def test_highfreq_attenuated(self):
-        """Sinusoid well above h_freq=40 Hz must be strongly attenuated."""
+    def test_apply_filter_passes_high_frequencies(self):
+        """HP-only stage must pass frequencies above the HP cutoff that aren't on the notch.
+
+        Confirms the filter is HP-only (no upper rolloff) and that the 0.05 Hz drift
+        below the HP cutoff is suppressed. Together these pin the stage as HP+notch,
+        not bandpass.
+        """
         n = int(INPUT_SFREQ * 5)
-        data = _make_sinusoid(100.0, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
         p = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
-        out = p._apply_filter(data)
-        # Take second half to skip filter transient.
-        # Causal single-pass IIR has half the effective order of offline filtfilt,
-        # so -30 dB (not -40 dB) is the meaningful guarantee at 2.5× the cutoff.
+
+        # 100 Hz tone is above the (former) bandpass upper edge of 40 Hz and not at the
+        # 50 Hz notch — under HP-only it should pass through nearly untouched.
+        high_data = _make_sinusoid(100.0, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
+        high_out = p._apply_filter(high_data.copy())
         half = n // 2
-        ratio_db = 20 * np.log10(out[half:].std() / data[half:].std() + 1e-30)
-        assert ratio_db < -30, f"Expected >30 dB attenuation, got {ratio_db:.1f} dB"
+        high_ratio_db = 20 * np.log10(
+            high_out[half:].std() / (high_data[half:].std() + 1e-30) + 1e-30
+        )
+        assert high_ratio_db > -3, (
+            f"100 Hz should pass through HP-only stage, got {high_ratio_db:.1f} dB"
+        )
+
+        # 0.05 Hz drift is well below the 1 Hz HP cutoff — must be heavily attenuated.
+        p.reset_state()
+        n_long = int(INPUT_SFREQ * 30)  # need a long signal to see sub-1 Hz
+        drift = _make_sinusoid(0.05, n_long, N_CHANNELS, INPUT_SFREQ) * 1e-5
+        drift_out = p._apply_filter(drift.copy())
+        half_long = n_long // 2
+        drift_ratio_db = 20 * np.log10(
+            drift_out[half_long:].std() / (drift[half_long:].std() + 1e-30) + 1e-30
+        )
+        assert drift_ratio_db < -40, (
+            f"0.05 Hz drift should be suppressed, got {drift_ratio_db:.1f} dB"
+        )
 
     def test_lowfreq_attenuated(self):
         """Sinusoid well below l_freq=1 Hz must be strongly attenuated."""
@@ -229,7 +314,7 @@ class TestApplyFilter:
         n = int(INPUT_SFREQ * 5)
         data = _make_sinusoid(50.0, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
         settings = _make_settings()
-        settings["bandpass"]["notch"] = 50.0
+        settings["notch"] = {"freq": 50.0}
         p = OnlinePreprocessor(settings, _make_online_state(), INPUT_SFREQ)
         out = p._apply_filter(data)
         half = n // 2
@@ -237,28 +322,145 @@ class TestApplyFilter:
         assert ratio_db < -20, f"Expected notch attenuation, got {ratio_db:.1f} dB"
 
     def test_no_notch_leaves_50hz_intact(self):
-        """50 Hz sinusoid must NOT be attenuated when notch=None."""
+        """50 Hz sinusoid must NOT be attenuated when notch is disabled."""
         n = int(INPUT_SFREQ * 5)
         data = _make_sinusoid(50.0, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
         settings = _make_settings()
-        settings["bandpass"]["notch"] = None
-        settings["bandpass"]["h_freq"] = 80.0  # widen bandpass so 50 Hz passes
+        settings["notch"] = None
         p = OnlinePreprocessor(settings, _make_online_state(), INPUT_SFREQ)
         out = p._apply_filter(data)
         half = n // 2
         ratio_db = 20 * np.log10(out[half:].std() / (data[half:].std() + 1e-30) + 1e-30)
         assert ratio_db > -6, f"50 Hz should pass through, got {ratio_db:.1f} dB"
 
-    def test_bandpass_zi_set_after_first_call(self, preprocessor):
-        assert preprocessor._bandpass_zi is None
+    def test_highpass_zi_set_after_first_call(self, preprocessor):
+        assert preprocessor._highpass_zi is None
         preprocessor._apply_filter(np.random.standard_normal((100, N_CHANNELS)) * 1e-5)
-        assert preprocessor._bandpass_zi is not None
+        assert preprocessor._highpass_zi is not None
 
     def test_reset_clears_filter_zi(self, preprocessor):
         preprocessor._apply_filter(np.random.standard_normal((100, N_CHANNELS)) * 1e-5)
         preprocessor.reset_state()
-        assert preprocessor._bandpass_zi is None
+        assert preprocessor._highpass_zi is None
         assert preprocessor._notch_zi is None
+
+
+# ── Commit 2 (migration): causal low-pass filter ─────────────────────────────
+
+
+class TestApplyLowpass:
+    """Frequency-domain and state behaviour of the new LP stage.
+
+    The LP stage shapes training-data spectrum (40 Hz cutoff for a 100 Hz
+    target sfreq, per the cited replay paper) and prevents aliasing before
+    the decimation step. Tests mirror the rigour of TestApplyFilter.
+    """
+
+    def _make_p(self) -> OnlinePreprocessor:
+        return OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+
+    def test_passband_fidelity_5hz_preserved(self):
+        """A 5 Hz tone (well below the 40 Hz cutoff) should pass with negligible attenuation."""
+        n = int(INPUT_SFREQ * 5)
+        data = _make_sinusoid(5.0, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
+        out = self._make_p()._apply_lowpass(data.copy())
+        half = n // 2
+        ratio_db = 20 * np.log10(out[half:].std() / (data[half:].std() + 1e-30) + 1e-30)
+        assert ratio_db > -1.0, f"5 Hz should be in passband, got {ratio_db:.2f} dB"
+
+    @pytest.mark.parametrize("freq_hz,min_atten_db", [(80.0, 10.0), (120.0, 20.0), (200.0, 30.0)])
+    def test_stopband_attenuation_progresses(self, freq_hz: float, min_atten_db: float):
+        """Stopband tones should be attenuated progressively more with increasing frequency."""
+        n = int(INPUT_SFREQ * 5)
+        data = _make_sinusoid(freq_hz, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
+        out = self._make_p()._apply_lowpass(data.copy())
+        half = n // 2
+        ratio_db = 20 * np.log10(out[half:].std() / (data[half:].std() + 1e-30) + 1e-30)
+        assert ratio_db < -min_atten_db, (
+            f"{freq_hz:.0f} Hz tone should be attenuated by at least {min_atten_db} dB, "
+            f"got {ratio_db:.1f} dB"
+        )
+
+    def test_cutoff_at_40hz_is_around_minus_3db(self):
+        """At the LP cutoff (40 Hz), MNE's default IIR design lands roughly in [-6, -1] dB."""
+        n = int(INPUT_SFREQ * 5)
+        data = _make_sinusoid(40.0, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
+        out = self._make_p()._apply_lowpass(data.copy())
+        half = n // 2
+        ratio_db = 20 * np.log10(out[half:].std() / (data[half:].std() + 1e-30) + 1e-30)
+        # MNE's default IIR (butter, order 4) is ~-3 dB at the design cutoff but
+        # exact response depends on the order; allow a generous band.
+        assert -6.0 < ratio_db < -1.0, (
+            f"40 Hz response should sit near -3 dB, got {ratio_db:.2f} dB"
+        )
+
+    def test_lowpass_is_causal(self):
+        """No output before t=0 from a unit impulse at t=0."""
+        n = 200
+        impulse = np.zeros((n, N_CHANNELS))
+        impulse[0] = 1.0
+        p = self._make_p()
+        out = p._apply_lowpass(impulse)
+        # Trivially true for `out[0:]`, but the meaningful guarantee is that the
+        # filter doesn't draw on samples it hasn't seen — sosfilt is causal by
+        # construction, so we assert finite energy lives entirely in t >= 0.
+        assert np.all(np.isfinite(out))
+        assert np.abs(out[:1]).sum() > 0, "Filter should respond at t=0"
+
+    def test_chunk_boundary_continuity(self):
+        """Whole-pass output must equal concatenated chunked output (persistent zi)."""
+        rng = np.random.default_rng(11)
+        data = rng.standard_normal((1000, N_CHANNELS)) * 1e-5
+
+        p_single = self._make_p()
+        out_single = p_single._apply_lowpass(data.copy())
+
+        p_chunked = self._make_p()
+        sizes = [37, 51, 29, 83, 100, 200, 500]  # sums to 1000
+        chunks, idx = [], 0
+        for s in sizes:
+            chunks.append(p_chunked._apply_lowpass(data[idx:idx + s].copy()))
+            idx += s
+        out_chunked = np.concatenate(chunks)
+
+        np.testing.assert_allclose(out_single, out_chunked, atol=1e-10)
+
+    def test_reset_clears_lowpass_state(self, preprocessor):
+        preprocessor._apply_lowpass(np.random.standard_normal((100, N_CHANNELS)) * 1e-5)
+        preprocessor.reset_state()
+        assert preprocessor._lowpass_zi is None
+
+    def test_lowpass_zi_set_after_first_call(self, preprocessor):
+        assert preprocessor._lowpass_zi is None
+        preprocessor._apply_lowpass(np.random.standard_normal((100, N_CHANNELS)) * 1e-5)
+        assert preprocessor._lowpass_zi is not None
+
+    def test_frequency_response_matches_offline_design(self):
+        """sosfreqz on the same SOS must match the empirical |H(f)| of our online LP."""
+        from scipy.signal import sosfreqz
+
+        p = self._make_p()
+        probe_freqs = np.array([1.0, 10.0, 30.0, 60.0, 100.0])
+
+        # Empirical: pass tones through the online LP, measure RMS ratio (after transient).
+        empirical_db = []
+        for f in probe_freqs:
+            n = int(INPUT_SFREQ * 5)
+            sig = _make_sinusoid(f, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
+            p.reset_state()
+            out = p._apply_lowpass(sig.copy())
+            half = n // 2
+            empirical_db.append(
+                20 * np.log10(out[half:].std() / (sig[half:].std() + 1e-30) + 1e-30)
+            )
+
+        # Theoretical from the same SOS matrix
+        worN = 2 * np.pi * probe_freqs / INPUT_SFREQ
+        _, h = sosfreqz(p._lowpass_sos, worN=worN)
+        theoretical_db = 20 * np.log10(np.abs(h) + 1e-30)
+
+        # 2 dB tolerance covers MNE's IIR design quirks + steady-state RMS noise.
+        np.testing.assert_allclose(np.array(empirical_db), theoretical_db, atol=2.0)
 
 
 # ── Commit 4: stateful decimation ─────────────────────────────────────────────
@@ -273,13 +475,13 @@ class TestDecimate:
         timestamps = np.arange(n, dtype=float) / INPUT_SFREQ
         return data, timestamps
 
-    def test_40_samples_give_10_outputs(self):
-        """First batch of 40 samples at 1000 Hz → 10 outputs at 256 Hz."""
+    def test_40_samples_give_4_outputs(self):
+        """First batch of 40 samples at 1000 Hz → 4 outputs at 100 Hz (factor 10)."""
         data, ts = self._make_data(40)
         p = self._make_p()
         out, out_ts = p._decimate(data, ts)
-        assert out.shape[0] == 10
-        assert out_ts.shape[0] == 10
+        assert out.shape[0] == 4
+        assert out_ts.shape[0] == 4
 
     def test_sample_count_large_equals_chunked(self):
         """Total output samples must be the same whether input arrives as one batch or many."""
@@ -306,19 +508,16 @@ class TestDecimate:
         for t in out_ts:
             assert np.any(np.isclose(ts, t)), f"Output timestamp {t} not in input timestamps"
 
-    def test_37_samples_at_phase_3_give_9_outputs(self):
-        """37 input samples starting at phase=3 → 9 outputs (verified analytically)."""
-        # Advance phase to 3 by processing 3 samples first
+    def test_phase_persists_across_chunks(self):
+        """phase=3 + 37 input samples (factor 10) → keep indices [3, 13, 23, 33] = 4 outputs."""
         p = self._make_p()
-        seed_data, seed_ts = self._make_data(3)
-        p._decimate(seed_data, seed_ts)
-        assert p._decimate_phase == 3 * 32 % 125  # phase after 3 samples: 96 % 125 = 96
-
-        # Manually set phase to 3 for the documented test case
         p._decimate_phase = 3
         data, ts = self._make_data(37)
         out, _ = p._decimate(data, ts)
-        assert out.shape[0] == 9
+        assert out.shape[0] == 4
+        # After this chunk, next kept sample would be at original index 43,
+        # i.e. local index 43 - 37 = 6 in the next chunk.
+        assert p._decimate_phase == 6
 
     def test_empty_input_returns_empty(self):
         p = self._make_p()
@@ -358,13 +557,14 @@ class TestDecimate:
             np.testing.assert_array_equal(t1, t2)
 
 
-@pytest.mark.parametrize("target_sfreq", [100, 128, 200, 250, 256, 500, 512])
+@pytest.mark.parametrize("target_sfreq", [100, 200, 250, 500])
 class TestDecimateFrequencies:
-    """Decimation correctness across a range of target sample rates.
+    """Decimation correctness across a range of integer-ratio target sample rates.
 
-    Covers both simple integer-ratio cases (1000→500, 1000→200, 1000→250,
-    1000→100) and non-trivial GCD cases (1000→128, 1000→256, 1000→512)
-    where up_factor > 1.
+    Decimation now requires input_sfreq to be an integer multiple of
+    target_sfreq (see OnlinePreprocessor.__init__). Non-integer ratios
+    such as 1000→128, 1000→256, 1000→512 are rejected at construction,
+    so they're not exercised here.
     """
 
     def _make_p(self, target_sfreq: int) -> OnlinePreprocessor:
@@ -424,11 +624,16 @@ class TestDecimateFrequencies:
 # ── Commit 5: spatial transforms ──────────────────────────────────────────────
 
 def _make_preprocessor_with_bad_channel() -> OnlinePreprocessor:
-    """Preprocessor with Fp1 declared as bad and interp_weights set."""
+    """Preprocessor with channel at index 0 (Fp1 in the EEG_CH_NAMES layout)
+    declared as bad and interp_weights set.
+
+    The bad/good indices are now positional — we use names only to drive MNE's
+    interpolate_bads (which is name-based) when generating the reference weight
+    matrix. The online state stores indices only.
+    """
     import mne
     ch_names = list(EEG_CH_NAMES)
-    bad_channels = ["Fp1"]
-    bad_idx = ch_names.index("Fp1")
+    bad_idx = ch_names.index("Fp1")  # positional index in the post-hygiene array
     good_indices = [i for i in range(len(ch_names)) if i != bad_idx]
 
     # Compute real interp weights via MNE identity-basis trick
@@ -437,16 +642,14 @@ def _make_preprocessor_with_bad_channel() -> OnlinePreprocessor:
     raw = mne.io.RawArray(np.eye(n_eeg), info, verbose=False)
     montage = mne.channels.make_standard_montage("standard_1020")
     raw.set_montage(montage, match_case=False, on_missing="warn", verbose=False)
-    raw.info["bads"] = bad_channels
+    raw.info["bads"] = [ch_names[bad_idx]]
     raw.interpolate_bads(reset_bads=False, verbose=False)
     interp_data = raw.get_data()
-    bad_local = [bad_idx]
-    good_local = good_indices
-    weights = interp_data[np.ix_(bad_local, good_local)].T  # (n_good, 1)
+    weights = interp_data[np.ix_([bad_idx], good_indices)].T  # (n_good, 1)
 
     state = _make_online_state(
-        ch_names=ch_names,
-        bad_channels=bad_channels,
+        n_eeg=n_eeg,
+        bad_indices=[bad_idx],
         interp_weights=weights,
     )
     return OnlinePreprocessor(_make_settings(), state, INPUT_SFREQ)
@@ -600,7 +803,7 @@ class TestApplyICA:
         offline._fit_ica()
         offline.ica.exclude = [0, 2]
 
-        state = offline.export_online_state()
+        state = _adapt_offline_state_to_positional(offline.export_online_state())
         online = OnlinePreprocessor(
             preprocessing_settings=_make_settings(),
             online_state=state,
@@ -681,11 +884,26 @@ class TestProcessBatch:
         timestamps = np.arange(n, dtype=float) / INPUT_SFREQ
         return data, timestamps
 
-    def test_wrong_channel_count_raises(self):
+    def test_non_2d_batch_raises(self):
         p = self._make_p()
-        bad_batch = np.zeros((40, N_CHANNELS + 1))
+        bad_batch = np.zeros(40)  # 1D
         timestamps = np.zeros(40)
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="2D"):
+            p.process_batch(bad_batch, timestamps)
+
+    def test_too_narrow_batch_raises_index_error_at_slice(self):
+        """A batch narrower than max(eeg_chunk_indices) + 1 fails at the slice.
+        We don't validate the width up front, so NumPy raises IndexError when
+        it tries to read a column that doesn't exist. Caught here as a sanity
+        check that misconfiguration doesn't pass silently.
+        """
+        p = self._make_p()
+        # eeg_chunk_indices defaults to list(range(N_CHANNELS)), so the slice
+        # references index N_CHANNELS-1. A batch with N_CHANNELS-1 columns
+        # fails on that index.
+        bad_batch = np.zeros((40, N_CHANNELS - 1))
+        timestamps = np.zeros(40)
+        with pytest.raises(IndexError):
             p.process_batch(bad_batch, timestamps)
 
     def test_timestamp_length_mismatch_raises(self):
@@ -697,11 +915,11 @@ class TestProcessBatch:
 
     def test_empty_batch_returns_empty_without_state_change(self):
         p = self._make_p()
-        assert p._bandpass_zi is None
+        assert p._highpass_zi is None
         out, out_ts = p.process_batch(np.empty((0, N_CHANNELS)), np.empty(0))
         assert out.shape == (0, N_CHANNELS)
         assert out_ts.shape == (0,)
-        assert p._bandpass_zi is None  # state not touched
+        assert p._highpass_zi is None  # state not touched
 
     def test_output_shape(self):
         p = self._make_p()
@@ -752,6 +970,40 @@ class TestProcessBatch:
         original = batch.copy()
         p.process_batch(batch, timestamps)
         np.testing.assert_array_equal(batch, original)
+
+
+# ── Commit 4 (migration): in-preprocessor EEG channel hygiene ────────────────
+
+
+class TestProcessBatchHygiene:
+    """eeg_chunk_indices is applied at the entry of process_batch, dropping
+    raw LSL EEG columns down to the offline post-hygiene channel set before
+    any spectral or spatial transform runs.
+    """
+
+    def test_process_batch_applies_chunk_indices_drops_emg_column(self):
+        """A raw 22-column batch with eeg_chunk_indices=[0..7, 9..21] (drop position 8)
+        produces a 21-column output. Use a small toy n_eeg = 21 so we can craft
+        the input without needing the full 64-channel layout.
+        """
+        raw_n = 22
+        keep = list(range(0, 8)) + list(range(9, raw_n))  # drop position 8 (1 channel)
+        n_eeg = len(keep)  # 21
+        state = _make_online_state(n_eeg=n_eeg, eeg_chunk_indices=keep)
+        p = OnlinePreprocessor(_make_settings(), state, INPUT_SFREQ)
+
+        # Build a 40-sample batch where each raw column has a distinct value
+        # equal to its index, so we can verify which survived.
+        data = np.zeros((40, raw_n), dtype=float)
+        for col in range(raw_n):
+            data[:, col] = float(col) * 1e-5
+        timestamps = np.arange(40, dtype=float) / INPUT_SFREQ
+
+        out, _ = p.process_batch(data, timestamps)
+
+        # The hygiene drops column 8. The preprocessor then runs filter/decimate/
+        # etc. — we don't assert on those numerics here, just on the *width*.
+        assert out.shape[1] == n_eeg
 
 
 # ── Commit 7: public API export ───────────────────────────────────────────────
@@ -805,7 +1057,7 @@ class TestIntegration:
     def test_process_batch_smoke_with_real_offline_state(self, tmp_path):
         """process_batch() must run without error using state from export_online_state()."""
         offline, _ = self._build_offline_with_ica(tmp_path)
-        state = offline.export_online_state()
+        state = _adapt_offline_state_to_positional(offline.export_online_state())
 
         online = OnlinePreprocessor(
             preprocessing_settings=_make_settings(),
@@ -840,8 +1092,9 @@ class TestIntegration:
 
         offline._fit_ica()
         offline.ica.exclude = [0]
-        state = offline.export_online_state()
-        assert state["interp_weights"] is not None
+        offline_state = offline.export_online_state()
+        assert offline_state["interp_weights"] is not None
+        state = _adapt_offline_state_to_positional(offline_state)
 
         online = OnlinePreprocessor(
             preprocessing_settings=_make_settings(),
@@ -849,7 +1102,7 @@ class TestIntegration:
             input_sfreq=INPUT_SFREQ,
         )
 
-        bad_ch_idx = state["ch_names"].index(fp1_name)
+        bad_ch_idx = offline_state["ch_names"].index(fp1_name)
         rng = np.random.default_rng(21)
         base = rng.standard_normal((400, N_CHANNELS)) * 1e-5
         timestamps = np.arange(400, dtype=float) / INPUT_SFREQ
@@ -869,3 +1122,109 @@ class TestIntegration:
         np.testing.assert_allclose(out_a[:, bad_ch_idx], out_b[:, bad_ch_idx], atol=1e-10)
         good_indices = [i for i in range(N_CHANNELS) if i != bad_ch_idx]
         np.testing.assert_allclose(out_a[:, good_indices], out_b[:, good_indices], atol=1e-10)
+
+
+# ── Commit 2 (migration): resample_filter_stage variant ordering ─────────────
+
+
+class TestVariantOrdering:
+    """process_batch must call its `_apply_*` stages in the order dictated by
+    `resample_filter_stage`. We monkey-patch each stage to record the call
+    order and the input shape it saw, then assert both.
+    """
+
+    def _instrument(self, p: OnlinePreprocessor) -> list[tuple[str, tuple]]:
+        """Wrap each pipeline stage to record (name, input_shape) into a log."""
+        log: list[tuple[str, tuple]] = []
+
+        def wrap_inplace(name: str, original):
+            def wrapped(data):
+                log.append((name, data.shape))
+                return original(data)
+            return wrapped
+
+        def wrap_returning_tuple(name: str, original):
+            def wrapped(data, timestamps):
+                log.append((name, data.shape))
+                return original(data, timestamps)
+            return wrapped
+
+        # _apply_filter and _apply_lowpass return arrays.
+        p._apply_filter = wrap_inplace("filter", p._apply_filter)
+        p._apply_lowpass = wrap_inplace("lowpass", p._apply_lowpass)
+        # _decimate returns (data, timestamps).
+        p._decimate = wrap_returning_tuple("decimate", p._decimate)
+        # In-place stages all mutate `data` and return None.
+        p._apply_bad_channel_interpolation = wrap_inplace(
+            "interp", p._apply_bad_channel_interpolation
+        )
+        p._apply_average_reference = wrap_inplace(
+            "avg_ref", p._apply_average_reference
+        )
+        p._apply_ica = wrap_inplace("ica", p._apply_ica)
+        return log
+
+    def _make_batch(self) -> tuple[np.ndarray, np.ndarray]:
+        rng = np.random.default_rng(3)
+        n = 100  # 100 samples @ 1000 Hz -> 10 samples @ 100 Hz after decimation
+        data = rng.standard_normal((n, N_CHANNELS)) * 1e-5
+        timestamps = np.arange(n, dtype=float) / INPUT_SFREQ
+        return data, timestamps
+
+    def test_early_variant_runs_lp_decimate_before_spatial_transforms(self):
+        p = OnlinePreprocessor(
+            _make_settings(resample_filter_stage="early"),
+            _make_online_state(),
+            INPUT_SFREQ,
+        )
+        log = self._instrument(p)
+        data, timestamps = self._make_batch()
+        p.process_batch(data, timestamps)
+
+        stage_names = [name for name, _ in log]
+        assert stage_names == [
+            "filter", "lowpass", "decimate", "interp", "avg_ref", "ica"
+        ]
+
+        # ICA must see decimated data: 100 input samples -> 10 at 100 Hz.
+        ica_input_shape = next(shape for name, shape in log if name == "ica")
+        assert ica_input_shape[0] == 10
+
+    def test_late_variant_runs_lp_decimate_after_spatial_transforms(self):
+        p = OnlinePreprocessor(
+            _make_settings(resample_filter_stage="late"),
+            _make_online_state(),
+            INPUT_SFREQ,
+        )
+        log = self._instrument(p)
+        data, timestamps = self._make_batch()
+        p.process_batch(data, timestamps)
+
+        stage_names = [name for name, _ in log]
+        assert stage_names == [
+            "filter", "interp", "avg_ref", "ica", "lowpass", "decimate"
+        ]
+
+        # ICA must see full-rate data: 100 input samples stay at 1000 Hz.
+        ica_input_shape = next(shape for name, shape in log if name == "ica")
+        assert ica_input_shape[0] == 100
+
+    def test_both_variants_emit_same_output_sample_count(self):
+        """Both variants decimate the same input by 10x and emit the same length."""
+        data, timestamps = self._make_batch()
+
+        p_early = OnlinePreprocessor(
+            _make_settings(resample_filter_stage="early"),
+            _make_online_state(),
+            INPUT_SFREQ,
+        )
+        out_early, _ = p_early.process_batch(data.copy(), timestamps.copy())
+
+        p_late = OnlinePreprocessor(
+            _make_settings(resample_filter_stage="late"),
+            _make_online_state(),
+            INPUT_SFREQ,
+        )
+        out_late, _ = p_late.process_batch(data.copy(), timestamps.copy())
+
+        assert out_early.shape == out_late.shape

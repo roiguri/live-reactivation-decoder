@@ -107,28 +107,25 @@ def _make_online_state() -> dict:
     n_components = 2
     unmixing = rng.standard_normal((n_components, n_components))
     return {
-        "bad_channels": [],
+        "eeg_chunk_indices": list(range(N_CHANNELS)),
+        "bad_indices": [],
         "interp_weights": None,
-        "ch_names": [f"EEG{i}" for i in range(N_CHANNELS)],
         "ica_unmixing": unmixing,
         "ica_mixing": np.linalg.pinv(unmixing),
         "ica_pca_components": rng.standard_normal((n_components, N_CHANNELS)),
         "ica_pca_mean": np.zeros(N_CHANNELS),
         "ica_exclude": [],
         "pre_whitener": np.ones((N_CHANNELS, 1)),
-        "sfreq_offline": float(TARGET_SFREQ),
     }
 
 
 def _make_settings() -> dict:
     return {
-        "bandpass": {
-            "l_freq": 1.0,
-            "h_freq": 40.0,
-            "method": "iir",
-            "notch": None,
-        },
-        "resample": {"target_rate": TARGET_SFREQ},
+        "highpass": {"l_freq": 1.0, "method": "iir"},
+        "notch": None,
+        "lowpass": {"h_freq": 40.0, "method": "iir"},
+        "final_resample": {"target_rate": TARGET_SFREQ},
+        "resample_filter_stage": "early",
     }
 
 
