@@ -215,33 +215,41 @@ pytest online_decoder/tests/online_phase/test_online_preprocessor.py -v -k "vali
 
 ---
 
-### Commit 4 — LSLReceiver: index-based channel hygiene
+### Commit 4 — OnlinePreprocessor: apply positional EEG hygiene at process_batch entry
 
 > **🛑 Ask before committing.**
 
-**Message:** `feat(prepro-fix): apply positional EEG hygiene downstream of trigger split`
+**Message:** `feat(prepro-fix): apply positional EEG hygiene inside OnlinePreprocessor`
 
 **Scope:**
-- [../src/backend/online_phase/lsl_receiver.py](../src/backend/online_phase/lsl_receiver.py)
-- [../tests/online_phase/test_lsl_receiver.py](../tests/online_phase/test_lsl_receiver.py)
+- [../src/backend/online_phase/online_preprocessor.py](../src/backend/online_phase/online_preprocessor.py)
+- [../tests/online_phase/test_online_preprocessor.py](../tests/online_phase/test_online_preprocessor.py)
+
+**Design decision:** the column selection lives in `OnlinePreprocessor`, **not** `LSLReceiver`. Rationale: every offline-derived artifact (`bad_indices`, ICA matrices, interp weights, `eeg_chunk_indices`) belongs together in the one class that consumes `online_state`. `LSLReceiver` stays pure hardware plumbing — talks to LSL, strips triggers, validates count. It has no business knowing about the offline pipeline. Bonus: smoke tests and future debug/visualization consumers of the receiver get raw 64-channel amplifier output, which is what they want.
 
 **Changes:**
-- **Option A (chosen):** the column selection happens inside `LSLReceiver.pull_new_data`, right after `split_eeg_and_markers`. The receiver owns the channel layout — keeping hygiene there avoids an extra indirection in `StreamWorker` / `LiveStreamSession`.
-- Add `eeg_chunk_indices: list[int] | None = None` parameter to `LSLReceiver.__init__`. If `None`, behave exactly as today (no hygiene; pass through all 64 EEG channels). If set, apply `eeg_chunk = eeg_chunk[:, eeg_chunk_indices]` right after the trigger-split step.
-- Add a validation in `__init__` (or first `pull_new_data` call): `max(eeg_chunk_indices) < eeg_channel_count` and no duplicates.
-- Update [../src/backend/session.py](../src/backend/session.py)'s `build_live_stream_session` to pass `eeg_chunk_indices=artifact.online_state["eeg_chunk_indices"]` when constructing the receiver.
+- In `process_batch`, as the very first transform (before `_apply_filter`):
+  ```python
+  data = eeg_batch[:, self._eeg_chunk_indices].astype(float)
+  ```
+- Loosen the input-shape check to ndim-only (`eeg_batch.ndim == 2`). The raw EEG width is not validated explicitly — if the configured `eeg_chunk_indices` point past the actual batch width, NumPy raises `IndexError` at slice time. The fail-fast value isn't worth the parameter churn: the LSL receiver already validates the stream has 65 channels (64 EEG + trigger) before any data reaches the preprocessor, so the production input width is guaranteed.
+- `self.n_channels` property still returns `len(eeg_chunk_indices)` — the output count. `StreamWorker` and other downstream consumers unaffected.
+- `_validate_inputs` keeps the local checks on `eeg_chunk_indices` (non-negativity, no duplicates) but adds no upper bound — the upper bound isn't knowable at construction time without coupling to the receiver.
+- `LSLReceiver` and `session.py` get **no changes** — the receiver still hands over (n_samples, 64) EEG arrays as it does today.
 
 **Tests:**
-- Update existing `test_split_eeg_and_markers` tests — confirm they still pass with the new optional path (no behaviour change when `eeg_chunk_indices` is None).
-- New: `test_pull_new_data_applies_chunk_indices` — synthesise a (n_samples, 65) chunk where column N has a distinctive value, configure `eeg_chunk_indices` to drop column N, assert it's gone from the output, trigger column is unaffected.
-- New: `test_init_rejects_out_of_range_indices`.
-- New: `test_init_rejects_duplicate_indices`.
+- New `TestProcessBatchHygiene::test_process_batch_applies_chunk_indices_drops_emg_column` — synthesise a 22-column batch with distinct per-column values, configure `eeg_chunk_indices` to drop position 8, assert the output width is 21.
+- `test_too_narrow_batch_raises_index_error_at_slice` — a batch narrower than `max(eeg_chunk_indices) + 1` raises `IndexError` at the slice (documents the failure mode in lieu of a custom shape check).
+- `test_non_2d_batch_raises` — 1D input still raises `ValueError` (the surviving ndim check).
+- No `input_n_channels` kwarg threading through fixtures — existing tests use small synthetic data (`N_CHANNELS=20` or `4`) and `eeg_chunk_indices=list(range(N_CHANNELS))`, which slices any matching-width batch correctly.
+- All existing `test_lsl_receiver.py` and `test_lsl_receiver_integration.py` tests stay as they were before this commit (no `eeg_chunk_indices` arg).
 
-**Dependencies:** Commit 3 landed (positional online_state is the source of `eeg_chunk_indices`).
+**Dependencies:** Commit 3 landed.
 
 **Verification:**
 ```bash
-pytest online_decoder/tests/online_phase/test_lsl_receiver.py -v
+pytest online_decoder/tests/online_phase/test_online_preprocessor.py -v -k "process_batch or validate or chunk_indices"
+pytest online_decoder/tests/online_phase/ --ignore=tests/online_phase/test_lsl_receiver_integration.py
 ```
 
 ---

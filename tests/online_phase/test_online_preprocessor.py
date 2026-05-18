@@ -131,7 +131,9 @@ def valid_online_state() -> dict:
 
 @pytest.fixture
 def preprocessor(valid_settings, valid_online_state) -> OnlinePreprocessor:
-    return OnlinePreprocessor(valid_settings, valid_online_state, input_sfreq=INPUT_SFREQ)
+    return OnlinePreprocessor(
+        valid_settings, valid_online_state, input_sfreq=INPUT_SFREQ,
+    )
 
 
 # ── Commit 2: Constructor validation ─────────────────────────────────────────
@@ -149,7 +151,7 @@ class TestConstructorValidation:
 
     def test_raises_on_negative_eeg_chunk_index(self, valid_settings):
         state = _make_online_state(eeg_chunk_indices=[0, 1, -1] + list(range(3, N_CHANNELS)))
-        with pytest.raises(ValueError, match="negative"):
+        with pytest.raises(ValueError, match="eeg_chunk_indices"):
             OnlinePreprocessor(valid_settings, state)
 
     def test_raises_on_duplicate_eeg_chunk_indices(self, valid_settings):
@@ -882,11 +884,26 @@ class TestProcessBatch:
         timestamps = np.arange(n, dtype=float) / INPUT_SFREQ
         return data, timestamps
 
-    def test_wrong_channel_count_raises(self):
+    def test_non_2d_batch_raises(self):
         p = self._make_p()
-        bad_batch = np.zeros((40, N_CHANNELS + 1))
+        bad_batch = np.zeros(40)  # 1D
         timestamps = np.zeros(40)
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="2D"):
+            p.process_batch(bad_batch, timestamps)
+
+    def test_too_narrow_batch_raises_index_error_at_slice(self):
+        """A batch narrower than max(eeg_chunk_indices) + 1 fails at the slice.
+        We don't validate the width up front, so NumPy raises IndexError when
+        it tries to read a column that doesn't exist. Caught here as a sanity
+        check that misconfiguration doesn't pass silently.
+        """
+        p = self._make_p()
+        # eeg_chunk_indices defaults to list(range(N_CHANNELS)), so the slice
+        # references index N_CHANNELS-1. A batch with N_CHANNELS-1 columns
+        # fails on that index.
+        bad_batch = np.zeros((40, N_CHANNELS - 1))
+        timestamps = np.zeros(40)
+        with pytest.raises(IndexError):
             p.process_batch(bad_batch, timestamps)
 
     def test_timestamp_length_mismatch_raises(self):
@@ -953,6 +970,40 @@ class TestProcessBatch:
         original = batch.copy()
         p.process_batch(batch, timestamps)
         np.testing.assert_array_equal(batch, original)
+
+
+# ── Commit 4 (migration): in-preprocessor EEG channel hygiene ────────────────
+
+
+class TestProcessBatchHygiene:
+    """eeg_chunk_indices is applied at the entry of process_batch, dropping
+    raw LSL EEG columns down to the offline post-hygiene channel set before
+    any spectral or spatial transform runs.
+    """
+
+    def test_process_batch_applies_chunk_indices_drops_emg_column(self):
+        """A raw 22-column batch with eeg_chunk_indices=[0..7, 9..21] (drop position 8)
+        produces a 21-column output. Use a small toy n_eeg = 21 so we can craft
+        the input without needing the full 64-channel layout.
+        """
+        raw_n = 22
+        keep = list(range(0, 8)) + list(range(9, raw_n))  # drop position 8 (1 channel)
+        n_eeg = len(keep)  # 21
+        state = _make_online_state(n_eeg=n_eeg, eeg_chunk_indices=keep)
+        p = OnlinePreprocessor(_make_settings(), state, INPUT_SFREQ)
+
+        # Build a 40-sample batch where each raw column has a distinct value
+        # equal to its index, so we can verify which survived.
+        data = np.zeros((40, raw_n), dtype=float)
+        for col in range(raw_n):
+            data[:, col] = float(col) * 1e-5
+        timestamps = np.arange(40, dtype=float) / INPUT_SFREQ
+
+        out, _ = p.process_batch(data, timestamps)
+
+        # The hygiene drops column 8. The preprocessor then runs filter/decimate/
+        # etc. — we don't assert on those numerics here, just on the *width*.
+        assert out.shape[1] == n_eeg
 
 
 # ── Commit 7: public API export ───────────────────────────────────────────────

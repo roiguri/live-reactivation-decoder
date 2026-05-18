@@ -162,15 +162,21 @@ class OnlinePreprocessor:
         Apply the full online preprocessing pipeline to one micro-batch.
 
         Args:
-            eeg_batch: (n_samples, n_channels) at input_sfreq.
+            eeg_batch: (n_samples, raw_n_channels) at input_sfreq. Comes
+                directly from the LSL receiver (post-trigger-split, pre-hygiene).
+                raw_n_channels is the LSL stream's EEG width (typically 64).
+                Width is not explicitly validated here — if it's wrong, the
+                eeg_chunk_indices slice below will raise IndexError on the first
+                out-of-bounds index.
             timestamps: (n_samples,) LSL timestamps.
 
         Returns:
-            Tuple of (features, output_timestamps) at target_sfreq.
+            Tuple of (features, output_timestamps) at target_sfreq with
+            (n_out_samples, n_channels) where n_channels = len(eeg_chunk_indices).
         """
-        if eeg_batch.ndim != 2 or eeg_batch.shape[1] != self.n_channels:
+        if eeg_batch.ndim != 2:
             raise ValueError(
-                f"eeg_batch must be (n_samples, {self.n_channels}), got {eeg_batch.shape}"
+                f"eeg_batch must be 2D (n_samples, n_channels), got shape {eeg_batch.shape}"
             )
         if timestamps.shape[0] != eeg_batch.shape[0]:
             raise ValueError(
@@ -181,7 +187,8 @@ class OnlinePreprocessor:
         if eeg_batch.shape[0] == 0:
             return np.empty((0, self.n_channels)), np.empty((0,))
 
-        data = eeg_batch.copy().astype(float)
+        # Apply positional EEG hygiene
+        data = eeg_batch[:, self._eeg_chunk_indices].astype(float)
         data = self._apply_filter(data)
         if self._resample_filter_stage == "early":
             # LP + decimate happen before spatial transforms
@@ -340,9 +347,7 @@ class OnlinePreprocessor:
         preprocessing_settings: dict,
         online_state: dict,
     ) -> None:
-        # All checks are positional shape/range consistency. We don't know the
-        # LSL stream's channel count here (that's the receiver's concern), so
-        # eeg_chunk_indices is bounded only by uniqueness and non-negativity.
+        
         eeg_chunk_indices = list(online_state["eeg_chunk_indices"])
         n_eeg = len(eeg_chunk_indices)
 
