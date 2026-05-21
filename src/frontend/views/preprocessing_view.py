@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 
 from PyQt6.QtCore import Qt, QEvent, QEventLoop, QObject, QThread, pyqtSignal as Signal
 from PyQt6.QtGui import QFont
@@ -268,7 +269,30 @@ class PreprocessingView(QWidget):
             # another window. Revisit once we have UX feedback.
             # sources_fig = ica.plot_sources(epochs, block=False, precompute=False)
             # _WaitForClose(sources_fig).wait()
-            topomap_figs = ica.plot_components(inst=epochs)
+            # Single-figure layout: pack all components into one near-square
+            # grid (ncols = ceil(sqrt(n)), nrows fills the rest). size=1.2
+            # makes each topomap ~1.2 inch so a 61-component grid lands
+            # around 10×10 inches — readable on a 1080p workspace without
+            # multiple windows. Operator interactions (title click → toggle
+            # exclude, topomap click → properties) work identically.
+            n = int(ica.n_components_)
+            ncols = max(1, math.ceil(math.sqrt(n)))
+            nrows = max(1, math.ceil(n / ncols))
+            topomap_figs = ica.plot_components(
+                inst=epochs, ncols=ncols, nrows=nrows, size=1.2,
+            )
+            # Auto-maximize so all components are visible regardless of
+            # screen size. The natural figure size (ncols×size inches)
+            # easily exceeds a non-fullscreen workspace; maximizing lets
+            # tight_layout reflow the grid to fill whatever the screen
+            # gives us. Defensive try/except in case a future matplotlib
+            # backend doesn't expose manager.window.
+            for f in (topomap_figs if isinstance(topomap_figs, (list, tuple))
+                      else [topomap_figs]):
+                try:
+                    f.canvas.manager.window.showMaximized()
+                except Exception:
+                    pass
             _WaitForAllFigsClose(topomap_figs).wait()
             excluded = list(ica.exclude)
             logger.info(
