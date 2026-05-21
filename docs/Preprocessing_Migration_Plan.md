@@ -144,7 +144,7 @@ preprocessing:
     # No fit_h_freq — ICA fit copy is HP-only per instructor.
     iclabel:
       enabled: true
-      drop_labels: [muscle, eye, heart, line_noise, channel_noise, other]
+      drop_labels: ["muscle artifact", "eye blink", "heart beat", "line noise", "channel noise"]
 
   epochs:
     tmin: -0.2

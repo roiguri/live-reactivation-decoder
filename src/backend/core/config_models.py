@@ -36,17 +36,46 @@ class LowpassSettings(BaseModel):
     h_freq: float = Field(default=40.0, gt=0)
     method: Literal["iir", "fir"] = "iir"
 
+# TODO: verify this is correct and up-to-date with mne-icalabel. We want to be sure we catch any typos in the config's ``iclabel.drop_labels`` list, which would otherwise silently let real artifacts through (as discovered when comparing against the ``tomer_preprocessing_new`` reference).
+# The exact strings ``mne-icalabel`` returns from
+# ``label_components(..., method='iclabel')`` — see
+# ``mne_icalabel/iclabel/_config.py::ICLABEL_NUMERICAL_TO_STRING``.
+# We pin them here to catch ``iclabel.drop_labels`` typos at config-load
+# time (any string outside this set yields zero matches downstream and
+# would silently let real artifacts through, as discovered when comparing
+# against the ``tomer_preprocessing_new`` reference).
+_ICLABEL_VALID_LABELS: frozenset[str] = frozenset({
+    "brain", "muscle artifact", "eye blink", "heart beat",
+    "line noise", "channel noise", "other",
+})
+
 
 class IclabelSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
-    # Components whose ICLabel class is in this set are pre-selected for exclusion.
+    # Components whose ICLabel class is in this set are pre-selected for
+    # exclusion. Default excludes the five confident-artifact categories;
+    # "other" (ICLabel's low-confidence catch-all) is intentionally NOT
+    # in the default — the operator decides on those manually in the
+    # topomap review window.
     drop_labels: list[str] = Field(
         default_factory=lambda: [
-            "muscle", "eye", "heart", "line_noise", "channel_noise", "other"
+            "muscle artifact", "eye blink", "heart beat",
+            "line noise", "channel noise",
         ]
     )
+
+    @model_validator(mode="after")
+    def _drop_labels_are_known(self) -> IclabelSettings:
+        unknown = [lbl for lbl in self.drop_labels if lbl not in _ICLABEL_VALID_LABELS]
+        if unknown:
+            raise ValueError(
+                f"iclabel.drop_labels contains string(s) ICLabel never returns: "
+                f"{unknown}. Valid labels (from mne-icalabel): "
+                f"{sorted(_ICLABEL_VALID_LABELS)}."
+            )
+        return self
 
 
 class ICASettings(BaseModel):

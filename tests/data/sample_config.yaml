@@ -26,7 +26,7 @@ preprocessing:
     fit_l_freq: 1.0
     iclabel:
       enabled: true
-      drop_labels: [muscle, eye, heart, line_noise, channel_noise, other]
+      drop_labels: ["muscle artifact", "eye blink", "heart beat", "line noise", "channel noise"]
 
   epochs:
     tmin: -0.2

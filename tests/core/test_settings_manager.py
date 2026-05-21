@@ -152,6 +152,30 @@ class TestAllowedValues:
         with pytest.raises(ValueError):
             SettingsManager(tmp_config_file(minimal_valid_data))
 
+    def test_rejects_unknown_iclabel_drop_label(self, tmp_config_file, minimal_valid_data):
+        # ICLabel returns canonical strings with spaces ("muscle artifact",
+        # not "muscle"). Short-name typos used to silently match nothing
+        # downstream, letting real artifacts through. Validator must catch
+        # any string outside ICLabel's known seven categories.
+        minimal_valid_data["preprocessing"] = {
+            "ica": {"iclabel": {"drop_labels": ["muscle", "eye blink"]}}
+        }
+        with pytest.raises(ValueError, match="muscle"):
+            SettingsManager(tmp_config_file(minimal_valid_data))
+
+    def test_accepts_canonical_iclabel_labels(self, tmp_config_file, minimal_valid_data):
+        minimal_valid_data["preprocessing"] = {
+            "ica": {"iclabel": {"drop_labels": [
+                "muscle artifact", "eye blink", "heart beat",
+                "line noise", "channel noise", "other",
+            ]}}
+        }
+        sm = SettingsManager(tmp_config_file(minimal_valid_data))
+        assert sm.get_preprocessing_params()["ica"]["iclabel"]["drop_labels"] == [
+            "muscle artifact", "eye blink", "heart beat",
+            "line noise", "channel noise", "other",
+        ]
+
 
 class TestRangeValidation:
     def test_rejects_non_positive_highpass(self, tmp_config_file, minimal_valid_data):
