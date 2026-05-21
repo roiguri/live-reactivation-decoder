@@ -46,6 +46,37 @@ class _WaitForClose(QObject):
         self._loop.exec()
 
 
+class _WaitForAllFigsClose(QObject):
+    """Block on a nested QEventLoop until every matplotlib figure has closed.
+
+    Used for the ICA topomap-grid review: ``ica.plot_components(inst=epochs)``
+    returns a list of matplotlib figures (~1 per 20 components). Each
+    figure's canvas exposes matplotlib's ``close_event`` signal, which
+    fires exactly once when that figure is destroyed. We count down to
+    zero and quit the nested loop when the last one closes.
+    """
+
+    def __init__(self, figs) -> None:
+        super().__init__()
+        self._loop = QEventLoop()
+        figs = [
+            f for f in (figs if isinstance(figs, (list, tuple)) else [figs])
+            if f is not None
+        ]
+        self._remaining = len(figs)
+        for f in figs:
+            f.canvas.mpl_connect("close_event", self._on_close)
+
+    def _on_close(self, _evt) -> None:
+        self._remaining -= 1
+        if self._remaining <= 0:
+            self._loop.quit()
+
+    def wait(self) -> None:
+        if self._remaining > 0:
+            self._loop.exec()
+
+
 class PreprocessingView(QWidget):
     """Node 3 workspace: 2-page stack (Ready → Preprocessing Complete).
 
@@ -167,7 +198,7 @@ class PreprocessingView(QWidget):
 
     @staticmethod
     def _close_figs(figs) -> None:
-        """Close one or more matplotlib figures returned by MNE plot calls."""
+        """Close one or more matplotlib figures (idempotent)."""
         if figs is None:
             return
         try:
@@ -211,20 +242,34 @@ class PreprocessingView(QWidget):
         try:
             ica.exclude = list(suggested)
             self._wait_overlay(
-                "Review ICA components (pre-selected = suggested), then close "
-                "the MNE windows to continue…"
+                "Review ICA components — click a component's title to "
+                "toggle reject/keep (greyed = reject), click the topomap "
+                "for the detail window. Close all topomap windows when "
+                "done."
             )
-            # Topomap grid is matplotlib, non-blocking. Returns a list of
-            # figures we close once the operator finishes with the sources
-            # window so they don't linger as orphans.
+            # MNE's plot_components(inst=epochs) returns one matplotlib
+            # figure per ~20 components and wires up two click handlers:
+            #   • click a subplot title → toggle ica.exclude (in-place)
+            #   • click the topomap     → open ica.plot_properties
+            # We rely on those native interactions and wait for the
+            # operator to close every figure to signal "done".
+            # TODO(ui): ICLabel's per-component category (brain / muscle /
+            # eye / …) isn't shown in this view — MNE's plot_components
+            # only puts the component index in subplot titles. The
+            # categorisation is implicit (ICLabel-suggested rejects come
+            # in greyed). Decision to make later: leave as-is, mutate the
+            # MNE subplot titles after the fact to append categories, or
+            # swap in a custom paginator widget (see preprocessor._iclabel_suggest).
+            # TODO(ui): we deliberately do NOT show ica.plot_sources(epochs)
+            # alongside the topomap grids. Time-series view sometimes
+            # makes artifacts (blinks, heart) more obvious than the
+            # topomap, but mne-qt-browser 0.7.5 has a precompute bug on
+            # the Epochs path (workaround precompute=False) and pops
+            # another window. Revisit once we have UX feedback.
+            # sources_fig = ica.plot_sources(epochs, block=False, precompute=False)
+            # _WaitForClose(sources_fig).wait()
             topomap_figs = ica.plot_components(inst=epochs)
-            # block=False + nested QEventLoop (block=True is a no-op inside
-            # QApplication.exec()). precompute=False sidesteps an
-            # mne-qt-browser bug on the Epochs path (AttributeError:
-            # BrowserParams.global_times) — no noticeable lag at our
-            # component/epoch counts.
-            sources_fig = ica.plot_sources(epochs, block=False, precompute=False)
-            _WaitForClose(sources_fig).wait()
+            _WaitForAllFigsClose(topomap_figs).wait()
             excluded = list(ica.exclude)
             logger.info(
                 "ICA review closed; operator selected %d component(s) "

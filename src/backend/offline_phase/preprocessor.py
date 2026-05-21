@@ -393,6 +393,21 @@ class OfflinePreprocessor:
         #       but that's a paper-deviation, not just a comfort fix.
         result = label_components(fit_epochs, self.ica, method="iclabel")
         labels = result["labels"]
+        # TODO(ui): the full ICLabel category list (one of brain / muscle /
+        # eye / heart / line_noise / channel_noise / other per component)
+        # is computed here and discarded — only the indices that fall into
+        # `drop_labels` are returned. MNE's plot_components shows component
+        # numbers only, so the operator can't see ICLabel's category in the
+        # review window. Options when we revisit:
+        #   (a) keep current state — ICLabel's categorisation is implicit
+        #       in the pre-fill of ica.exclude; greyed titles indicate
+        #       "ICLabel says reject", that's enough.
+        #   (b) surface labels through run_step1b_fit_ica → view → mutate
+        #       subplot titles after plot_components to append the
+        #       category (e.g. "ICA001 — eye blink").
+        #   (c) replace plot_components with a custom paginator that
+        #       renders titles with categories from the start (see git
+        #       history for an in-progress sketch that was reverted).
         suggested = [i for i, lbl in enumerate(labels) if lbl in drop]
         return suggested
 
