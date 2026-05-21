@@ -340,8 +340,20 @@ class OfflinePreprocessor:
 
     def _fit_ica(self) -> list[int]:
         ica_s = self.settings["ica"]
+        # TODO(decision): revisit the ICA fit-copy filter method.
+        # We forced method="iir" to avoid MNE's default FIR producing a
+        # ~3.3 s kernel on ~1.2 s epochs ("filter_length > signal" warning,
+        # subtly distorted fit). IIR is also consistent with the rest of the
+        # pipeline (highpass/notch/lowpass all IIR) and with the future
+        # causal online side. Trade-off vs FIR:
+        #   - IIR Butterworth order 4 zero-phase: works on short epochs,
+        #     smoother roll-off, no minimum signal length.
+        #   - FIR (default): sharper transition band, needs a longer signal.
+        # If we ever move ICA fitting to full-rate raw or longer epochs,
+        # FIR may again be preferable. Consider exposing this as
+        # settings.preprocessing.ica.fit_method instead of hardcoding.
         fit_epochs = self.epochs.copy().filter(
-            l_freq=ica_s["fit_l_freq"], h_freq=None, verbose=False
+            l_freq=ica_s["fit_l_freq"], h_freq=None, method="iir", verbose=False
         )
 
         fit_params = None
@@ -367,6 +379,18 @@ class OfflinePreprocessor:
         from mne_icalabel import label_components
 
         drop = set(ic.get("drop_labels", []))
+        # TODO(decision): ICLabel was trained on EEG bandpassed [1, 100] Hz
+        # and prints a calibration warning here because our pipeline runs at
+        # [0.1, 40] Hz (paper-aligned: settings.preprocessing.lowpass.h_freq
+        # = 40, final_resample.target_rate = 100). Predictions still come
+        # through — confidence near band edges may be lower. Options when
+        # we revisit:
+        #   (a) accept the warning (current); document it.
+        #   (b) pass a separate fit_epochs filtered to [1, min(45, nyquist)]
+        #       Hz only into label_components, leaving the actual ICA fit
+        #       copy unchanged.
+        #   (c) raise our LP / target_rate to widen the band for ICLabel —
+        #       but that's a paper-deviation, not just a comfort fix.
         result = label_components(fit_epochs, self.ica, method="iclabel")
         labels = result["labels"]
         suggested = [i for i, lbl in enumerate(labels) if lbl in drop]

@@ -162,7 +162,10 @@ class PreprocessingView(QWidget):
                 "the MNE windows to continue…"
             )
             ica.plot_components(inst=epochs)
-            ica.plot_sources(epochs, block=True)
+            # precompute=False sidesteps an mne-qt-browser bug on the Epochs
+            # path (AttributeError: BrowserParams.global_times) and adds no
+            # noticeable lag at our component/epoch counts.
+            ica.plot_sources(epochs, block=True, precompute=False)
             excluded = list(ica.exclude)
         except Exception as exc:  # pragma: no cover — display/runtime guard
             self._on_error(f"ICA review failed: {exc}")
