@@ -569,6 +569,34 @@ class OfflineOrchestrator:
             FileNotFoundError: if no .vhdr file exists in the data directory.
         """
         pass
+```
+
+#### Consideration: BrainVision header filename mismatch (data-side)
+
+Some BrainVision recordings in `data/new_experiment/` were observed with a
+`.vhdr` whose `DataFile=` / `MarkerFile=` (and the `.vmrk`'s `DataFile=`)
+reference a stem that no longer matches the on-disk filenames — for example
+`Bindingdecoding102.vhdr` internally points at `subject102.eeg` /
+`subject102.vmrk`, which do not exist (the real companions are
+`Bindingdecoding102.*`). `mne.io.read_raw_brainvision` follows those internal
+pointers and raises `FileNotFoundError`.
+
+**This is a data defect, not a pipeline bug.** The pipeline intentionally does
+not paper over it — `_load_eeg_raw` calls `mne.io.read_raw_brainvision`
+directly and surfaces the error.
+
+**Mitigation:** development and testing use the `test_set/` recordings, whose
+headers are consistent with their filenames; running the offline pipeline on
+those works as-is. Production recordings should be delivered with matching
+filenames/headers, or fixed up at the data source before being loaded (rename
+the triplet so the on-disk stem matches `DataFile=` / `MarkerFile=`, or edit
+those two lines in the `.vhdr` and the `DataFile=` line in the `.vmrk`).
+
+If this defect reappears at scale, revisit hardening `_load_eeg_raw` to
+tolerate it (e.g. load through a temp directory with corrected header copies
+and an `.eeg` symlink).
+
+```python
 
     def run_step1_prepare_ica(self) -> tuple[mne.preprocessing.ICA, list[int]]:
         """
