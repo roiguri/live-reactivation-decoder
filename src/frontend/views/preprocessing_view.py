@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal as Signal
+import logging
+
+from PyQt6.QtCore import Qt, QEvent, QEventLoop, QObject, QThread, pyqtSignal as Signal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton,
@@ -13,6 +15,35 @@ from frontend.styles.theme import (
 from frontend.workers.preprocessing_worker import (
     PreprocessingStep1AWorker, PreprocessingStep1BWorker, PreprocessingStep2Worker,
 )
+
+logger = logging.getLogger(__name__)
+
+
+class _WaitForClose(QObject):
+    """Block on a nested QEventLoop until ``widget`` receives a close event.
+
+    Why this exists: ``raw.plot(block=True)`` and
+    ``ica.plot_sources(..., block=True)`` from mne-qt-browser don't actually
+    block when invoked inside our already-running ``QApplication.exec()`` —
+    Qt rejects the nested top-level exec ("event loop is already running")
+    and returns immediately, so the rest of the pipeline races ahead before
+    the operator has marked bad channels / picked ICA components. The
+    supported pattern is to run a private ``QEventLoop`` and quit it when
+    the figure window emits its close event.
+    """
+
+    def __init__(self, widget: QWidget) -> None:
+        super().__init__()
+        self._loop = QEventLoop()
+        widget.installEventFilter(self)
+
+    def eventFilter(self, obj, event):  # noqa: N802 — Qt method name
+        if event.type() == QEvent.Type.Close:
+            self._loop.quit()
+        return False
+
+    def wait(self) -> None:
+        self._loop.exec()
 
 
 class PreprocessingView(QWidget):
@@ -134,14 +165,36 @@ class PreprocessingView(QWidget):
         self.loading_requested.emit(message)
         QApplication.processEvents()
 
+    @staticmethod
+    def _close_figs(figs) -> None:
+        """Close one or more matplotlib figures returned by MNE plot calls."""
+        if figs is None:
+            return
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:  # pragma: no cover — matplotlib is a hard dep here
+            return
+        for fig in (figs if isinstance(figs, (list, tuple)) else [figs]):
+            try:
+                plt.close(fig)
+            except Exception:
+                pass
+
     def _on_step1a_done(self, raw) -> None:
         # Worker thread is quitting; the MNE window must run on this (main) thread.
         try:
             self._wait_overlay(
                 "Mark bad channels in the MNE window, then close it to continue…"
             )
-            raw.plot(block=True)
+            # block=False + nested QEventLoop is the working substitute for
+            # block=True, which is a no-op inside QApplication.exec().
+            fig = raw.plot(block=False)
+            _WaitForClose(fig).wait()
             bads = list(raw.info["bads"])
+            logger.info(
+                "Bad-channel review closed; operator selected %d channel(s): %s",
+                len(bads), bads,
+            )
             self._session.offline.set_bad_channels(bads)
         except Exception as exc:  # pragma: no cover — display/runtime guard
             self._on_error(f"Bad-channel review failed: {exc}")
@@ -161,12 +214,24 @@ class PreprocessingView(QWidget):
                 "Review ICA components (pre-selected = suggested), then close "
                 "the MNE windows to continue…"
             )
-            ica.plot_components(inst=epochs)
-            # precompute=False sidesteps an mne-qt-browser bug on the Epochs
-            # path (AttributeError: BrowserParams.global_times) and adds no
-            # noticeable lag at our component/epoch counts.
-            ica.plot_sources(epochs, block=True, precompute=False)
+            # Topomap grid is matplotlib, non-blocking. Returns a list of
+            # figures we close once the operator finishes with the sources
+            # window so they don't linger as orphans.
+            topomap_figs = ica.plot_components(inst=epochs)
+            # block=False + nested QEventLoop (block=True is a no-op inside
+            # QApplication.exec()). precompute=False sidesteps an
+            # mne-qt-browser bug on the Epochs path (AttributeError:
+            # BrowserParams.global_times) — no noticeable lag at our
+            # component/epoch counts.
+            sources_fig = ica.plot_sources(epochs, block=False, precompute=False)
+            _WaitForClose(sources_fig).wait()
             excluded = list(ica.exclude)
+            logger.info(
+                "ICA review closed; operator selected %d component(s) "
+                "(suggested by ICLabel: %s; final: %s)",
+                len(excluded), list(suggested), excluded,
+            )
+            self._close_figs(topomap_figs)
         except Exception as exc:  # pragma: no cover — display/runtime guard
             self._on_error(f"ICA review failed: {exc}")
             return

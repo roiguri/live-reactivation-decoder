@@ -1,3 +1,4 @@
+import logging
 import sys
 
 import mne
@@ -6,6 +7,17 @@ from PyQt6.QtWidgets import QApplication
 from frontend.main_window import MainWindow
 from frontend.screens.phase1_screen import Phase1Screen
 from frontend.styles.theme import GLOBAL_QSS
+
+
+def _configure_logging() -> None:
+    """Surface backend logger.info / .warning messages in the terminal so the
+    operator can audit what the pipeline is doing (which bads were marked,
+    which ICA components were excluded, etc.)."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
 
 def _select_mne_browser_backend() -> None:
@@ -29,6 +41,7 @@ def _select_mne_browser_backend() -> None:
 
 
 def main():
+    _configure_logging()
     _select_mne_browser_backend()
 
     app = QApplication(sys.argv)
