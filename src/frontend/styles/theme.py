@@ -9,6 +9,25 @@ ALERT_RED          = "#C41E3A"
 AMBER              = "#B45309"
 BORDER_GRAY        = "#E5E7EB"
 
+# AUC-chart line palette. Chosen to avoid the obvious red/green/blue/yellow
+# tones so a decoder named ``red decoder`` doesn't get a red line and confuse
+# the colour ↔ name mapping (the legend explicitly bridges the two). No
+# blues — those are reserved for the suggested/selected vertical markers
+# (PRIMARY_BLUE) so the operator's chosen timepoint stays unambiguous.
+CHART_LINE_COLORS = [
+    "#7C3AED",  # purple
+    "#F97316",  # orange
+    "#10B981",  # emerald
+    "#DB2777",  # magenta
+    "#A855F7",  # violet
+    "#A16207",  # bronze
+]
+
+
+def chart_line_color(index: int) -> str:
+    """Cycle the chart palette so >6 decoders still get distinct lines."""
+    return CHART_LINE_COLORS[index % len(CHART_LINE_COLORS)]
+
 def build_app_palette():
     from PyQt6.QtGui import QPalette, QColor
     p = QPalette()

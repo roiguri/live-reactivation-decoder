@@ -9,3 +9,4 @@ mne-qt-browser>=0.6
 onnxruntime>=1.16
 pylsl>=1.16
 pyqt6>=6.6
+pyqtgraph>=0.13

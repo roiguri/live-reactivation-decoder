@@ -12,8 +12,9 @@ from PyQt6.QtWidgets import (
 
 from frontend.styles.theme import (
     AMBER, BORDER_GRAY, CARD_WHITE, PRIMARY_BLUE, PRIMARY_BLUE_HOVER,
-    SUCCESS_GREEN, TEXT_MUTED, TEXT_PRIMARY,
+    SUCCESS_GREEN, TEXT_MUTED, TEXT_PRIMARY, chart_line_color,
 )
+from frontend.widgets.charts import AUCChart
 from frontend.workers.evaluation_worker import EvaluationWorker
 
 _DEVIATION_WARN_MS = 50.0  # |selected − suggested| above this → amber hint shown
@@ -78,6 +79,11 @@ class EvaluationView(QWidget):
         # column always reads "AUC @ selected timepoint", not peak).
         self._stats_auc_lbls: dict[str, QLabel] = {}
         self._table_auc_lbls: dict[str, QLabel] = {}
+        # AUC chart instances: one on the Summary tab plotting all
+        # decoders, plus one inside each per-decoder tab plotting just
+        # that decoder's curve.
+        self._summary_auc_chart: Optional[AUCChart] = None
+        self._decoder_auc_charts: dict[str, AUCChart] = {}
         self._stats_suggested_hint_lbl: Optional[QLabel] = None
         self._stats_confirm_btn: Optional[QPushButton] = None
         self._stats_reset_btn: Optional[QPushButton] = None
@@ -199,7 +205,8 @@ class EvaluationView(QWidget):
         task_names = list(tasks_result.keys())
 
         # Drop any per-decoder tabs left over from a previous run; the
-        # Summary tab (index 0) stays put.
+        # Summary tab (index 0) stays put. Also drop the chart refs since
+        # the chart widgets are destroyed along with the tabs.
         assert self._tabs is not None
         for name, tab in list(self._per_decoder_tabs.items()):
             idx = self._tabs.indexOf(tab)
@@ -207,25 +214,53 @@ class EvaluationView(QWidget):
                 self._tabs.removeTab(idx)
             tab.deleteLater()
         self._per_decoder_tabs.clear()
+        self._decoder_auc_charts.clear()
 
         for task_name in task_names:
-            tab = self._build_decoder_tab(task_name)
+            tab = self._build_decoder_tab(task_name)  # also fills _decoder_auc_charts[task_name]
             self._per_decoder_tabs[task_name] = tab
             self._tabs.addTab(tab, task_name)
 
         # Clearing _confirmed_timepoint first ensures the Confirm button
         # comes back as primary-blue "Confirm Timepoint" on a fresh result.
         self._confirmed_timepoint = None
-        # Build the per-decoder AUC label widgets in BOTH places before
-        # calling _set_selected_timepoint — that method writes into both
-        # _stats_auc_lbls and _table_auc_lbls.
+        # Build the per-decoder AUC label widgets + chart curves in
+        # BOTH places before calling _set_selected_timepoint — that
+        # method writes into the labels and moves the chart markers.
         self._rebuild_stats_decoder_rows(tasks_result)
         self._rebuild_summary_table(tasks_result, suggested_s)
+        self._populate_auc_charts(result.get("times"), tasks_result)
         if self._stats_suggested_hint_lbl is not None:
             self._stats_suggested_hint_lbl.setText(
                 f"Suggested: {suggested_ms:.0f} ms (avg peak)"
             )
         self._set_selected_timepoint(suggested_s)
+
+    def _populate_auc_charts(self, times, tasks_result: dict[str, dict]) -> None:
+        """Push the diagonal AUC curves into the Summary + per-decoder charts.
+
+        Builds a stable ``name → colour`` map up front and threads it
+        through every chart, so a decoder's line keeps the same hue in
+        the Summary view and in its own per-decoder tab. Also seeds the
+        stationary dashed suggested-timepoint marker on every chart.
+        """
+        if times is None or not tasks_result:
+            return
+        curves = {name: t["diagonal_auc"] for name, t in tasks_result.items()}
+        colors = {
+            name: chart_line_color(i) for i, name in enumerate(curves.keys())
+        }
+        suggested_t = (
+            float(self._result["suggested_timepoint"]) if self._result else 0.0
+        )
+        if self._summary_auc_chart is not None:
+            self._summary_auc_chart.set_curves(times, curves, colors=colors)
+            self._summary_auc_chart.set_suggested_timepoint(suggested_t)
+        for name, diag in curves.items():
+            chart = self._decoder_auc_charts.get(name)
+            if chart is not None:
+                chart.set_curves(times, {name: diag}, colors={name: colors[name]})
+                chart.set_suggested_timepoint(suggested_t)
 
     # ── page builders ────────────────────────────────────────────────────────
 
@@ -328,11 +363,7 @@ class EvaluationView(QWidget):
         return tab
 
     def _build_auc_chart_slot(self) -> QWidget:
-        """Bordered card containing the (future) AUC chart + legend.
-
-        Skeleton-only: the inside is a dashed placeholder until the
-        chart widget lands.
-        """
+        """Bordered card holding the multi-decoder AUC chart for Summary."""
         card = QFrame()
         card.setObjectName("auc_card")
         card.setStyleSheet(
@@ -350,12 +381,13 @@ class EvaluationView(QWidget):
         )
         body.addWidget(caption)
 
-        placeholder = self._make_placeholder(
-            "AUC chart goes here\n(one coloured line per decoder; "
-            "click a timepoint to select)",
-            min_h=300,
-        )
-        body.addWidget(placeholder, 1)
+        self._summary_auc_chart = AUCChart(show_legend=True)
+        self._summary_auc_chart.setMinimumHeight(300)
+        # Click on the Summary chart → drive the same _set_selected_timepoint
+        # path used by the stats-panel/table updates so every view stays
+        # in sync.
+        self._summary_auc_chart.timepoint_clicked.connect(self._set_selected_timepoint)
+        body.addWidget(self._summary_auc_chart, 1)
         return card
 
     def _build_stats_panel(self) -> QWidget:
@@ -470,7 +502,10 @@ class EvaluationView(QWidget):
         self._stats_reset_btn = QPushButton("Reset to suggested")
         self._stats_reset_btn.setProperty("class", "secondary")
         self._stats_reset_btn.clicked.connect(self._reset_to_suggested)
-        self._stats_reset_btn.hide()  # only visible when selected ≠ suggested
+        # Always visible — gating is via setEnabled so the row keeps a
+        # stable height and the panel doesn't shift when selected ↔
+        # suggested.
+        self._stats_reset_btn.setEnabled(False)
         body.addWidget(self._stats_reset_btn)
 
         return card
@@ -568,13 +603,11 @@ class EvaluationView(QWidget):
 
         charts = QHBoxLayout()
         charts.setSpacing(12)
-        charts.addWidget(
-            self._make_placeholder(
-                "AUC chart goes here\n(single decoder)",
-                min_h=320,
-            ),
-            1,
-        )
+        chart = AUCChart(show_legend=False)
+        chart.setMinimumHeight(320)
+        chart.timepoint_clicked.connect(self._set_selected_timepoint)
+        self._decoder_auc_charts[task_name] = chart
+        charts.addWidget(chart, 1)
         charts.addWidget(
             self._make_placeholder(
                 "TGM heatmap goes here\n(Train time × Test time, "
@@ -773,7 +806,7 @@ class EvaluationView(QWidget):
         """Update the Selected display + deviation hint + button states.
 
         Called once when results arrive (with the suggested timepoint),
-        and later by the AUC chart on operator click (TODO).
+        and by the AUC charts on operator click.
 
         Picking a new timepoint **unconfirms** any previous commitment —
         the operator has to re-press Confirm to re-lock.
@@ -807,11 +840,20 @@ class EvaluationView(QWidget):
                 self._stats_dev_lbl.hide()
 
         if self._stats_reset_btn is not None:
-            self._stats_reset_btn.setVisible(dev_ms > 1e-6)
+            # Always rendered (avoids layout shifts) — disabled at suggested.
+            self._stats_reset_btn.setEnabled(dev_ms > 1e-6)
 
         self._update_per_decoder_aucs(t_seconds)
+        self._sync_chart_markers(t_seconds)
         self._refresh_confirm_button()
         self._update_ready_state()
+
+    def _sync_chart_markers(self, t_seconds: float) -> None:
+        """Move the vertical marker on every AUC chart to ``t_seconds``."""
+        if self._summary_auc_chart is not None:
+            self._summary_auc_chart.set_selected_timepoint(t_seconds)
+        for chart in self._decoder_auc_charts.values():
+            chart.set_selected_timepoint(t_seconds)
 
     def _update_per_decoder_aucs(self, t_seconds: float) -> None:
         """Rewrite the per-decoder AUC values to show AUC @ ``t_seconds``.
