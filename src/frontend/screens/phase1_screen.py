@@ -27,6 +27,9 @@ class Phase1Screen(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.session = None
+        # Timepoint chosen by the operator on Node 4; Node 5's Training
+        # worker reads this when it fires. None until eval is confirmed.
+        self._selected_timepoint: float | None = None
         self.setObjectName("phase1_screen")
 
         root = QHBoxLayout(self)
@@ -81,6 +84,7 @@ class Phase1Screen(QWidget):
         self._settings_view = SettingsView()
         self._load_data_view = LoadDataView()
         self._preprocessing_view = PreprocessingView()
+        self._evaluation_view = EvaluationView()
 
         self._workspace = QStackedWidget()
         self._workspace.setObjectName("workspace_stack")
@@ -88,7 +92,7 @@ class Phase1Screen(QWidget):
         self._workspace.addWidget(self._settings_view)
         self._workspace.addWidget(self._load_data_view)
         self._workspace.addWidget(self._preprocessing_view)
-        self._workspace.addWidget(EvaluationView())
+        self._workspace.addWidget(self._evaluation_view)
         self._workspace.addWidget(TrainView())
         card_layout.addWidget(self._workspace, 1)
 
@@ -139,6 +143,27 @@ class Phase1Screen(QWidget):
             lambda: self._journey_panel.advance(3)
         )
 
+        # Node 4: Evaluation
+        self._journey_panel.set_node_action(3, self._evaluation_view.trigger_run)
+        self._journey_panel.set_node_ready(3, False)
+        self._evaluation_view.ready_changed.connect(
+            lambda ready: self._journey_panel.set_node_ready(3, ready)
+        )
+        self._evaluation_view.loading_requested.connect(self.show_loading)
+        self._evaluation_view.loading_done.connect(self.hide_loading)
+        # Preprocessing's preprocessing_complete fires when the operator
+        # clicks "Continue to Evaluation"; that's exactly when Node 4 is
+        # eligible to run, so use it as the eval view's enable gate.
+        self._preprocessing_view.preprocessing_complete.connect(
+            self._evaluation_view.on_preprocessing_complete
+        )
+        self._evaluation_view.results_displayed.connect(
+            self._on_eval_results_displayed
+        )
+        self._evaluation_view.evaluation_complete.connect(
+            self._on_evaluation_confirmed
+        )
+
         self._journey_panel.node_changed.connect(self._on_node_changed)
 
     # ── public ────────────────────────────────────────────────────────────────
@@ -153,11 +178,25 @@ class Phase1Screen(QWidget):
         self.session = session
         self._load_data_view.set_session(session)
         self._preprocessing_view.set_session(session)
+        self._evaluation_view.set_session(session)
         self._journey_panel.advance(1)
 
     def _on_preprocessing_complete_displayed(self) -> None:
         self._journey_panel.set_node_action(2, self._preprocessing_view.trigger_continue)
         self._journey_panel.set_node_action_label(2, "Continue to Evaluation")
+
+    def _on_eval_results_displayed(self) -> None:
+        # Eval results page is showing; the journey-panel Node 4 button
+        # now confirms the operator's timepoint choice (defaults to the
+        # ICLabel-suggested timepoint until they click on a chart in a
+        # future plan step).
+        self._journey_panel.set_node_action(3, self._evaluation_view.trigger_confirm)
+        self._journey_panel.set_node_action_label(3, "Approve && Continue")
+
+    def _on_evaluation_confirmed(self, timepoint: float) -> None:
+        # Stash for Node 5's training worker, then advance the trail.
+        self._selected_timepoint = timepoint
+        self._journey_panel.advance(4)
 
     def _on_node_changed(self, completed_node: int) -> None:
         next_idx = completed_node  # node_changed emits 1-indexed completed node
