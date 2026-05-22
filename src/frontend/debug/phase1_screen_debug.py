@@ -181,17 +181,53 @@ class DebugPhase1Screen(Phase1Screen):
         self._update_toolbar()
 
     def _on_reset(self) -> None:
+        """Rewind the walkthrough back to the *empty* Settings page.
+
+        Clears every piece of Settings state the walkthrough populated so
+        the screen looks identical to a fresh launch — pickers reset,
+        Subject/Session/etc. blanked, ``✓  Config loaded`` hidden, the
+        journey-panel Continue button regated as 'not ready', and the
+        trail rewound (node 1 active, the rest inactive).
+        """
         logger.info("Debug walkthrough reset to step 0")
         self._step_idx = 0
-        try:
-            self._settings_view._config_picker.clear()
-            self._settings_view._output_picker.clear()
-            self._load_data_view._picker.clear()
-        except Exception:  # pragma: no cover — defensive
-            pass
+
+        sv = self._settings_view
+        sv._config_picker.clear()
+        sv._output_picker.clear()
+        sv._config_status_lbl.hide()
+        sv._temp_session = None
+        sv._config_path = None
+        sv._output_dir = None
+        sv._update_settings_display(None)
+        sv._update_continue_state()  # emits ready_changed(False) — regate Continue
+
+        self._load_data_view._picker.clear()
+        self._load_data_view._picker.setEnabled(True)
+        self._load_data_view._data_dir = None
+
+        self.session = None  # ``Phase1Screen.session`` lives on the parent
+
+        self._reset_journey_panel()
+
         self._workspace.setCurrentIndex(0)
         self._header_title.setText(_DEBUG_PREFIX + _NODE_TITLES[0])
         self._update_toolbar()
+
+    def _reset_journey_panel(self) -> None:
+        """Best-effort rewind of the side-panel trail to fresh-launch state.
+
+        JourneyPanel has no production reset API, so we poke a couple of
+        private fields (``_completed_segments``, ``_animating_segment``)
+        and re-drive each ``JourneyNode``'s state — dev-mode acceptable.
+        """
+        jp = self._journey_panel
+        jp._anim.stop()  # no-op if not running
+        jp._completed_segments = 0
+        jp._animating_segment = -1
+        for i, node in enumerate(jp._nodes):
+            node.set_state("active" if i == 0 else "inactive")
+        jp.update()
 
     # ── walkthrough actions ──────────────────────────────────────────────────
 
