@@ -14,7 +14,7 @@ from frontend.styles.theme import (
     AMBER, BORDER_GRAY, CARD_WHITE, PRIMARY_BLUE, PRIMARY_BLUE_HOVER,
     SUCCESS_GREEN, TEXT_MUTED, TEXT_PRIMARY, chart_line_color,
 )
-from frontend.widgets.charts import AUCChart
+from frontend.widgets.charts import AUCChart, TGMChart
 from frontend.workers.evaluation_worker import EvaluationWorker
 
 _DEVIATION_WARN_MS = 50.0  # |selected − suggested| above this → amber hint shown
@@ -84,6 +84,13 @@ class EvaluationView(QWidget):
         # that decoder's curve.
         self._summary_auc_chart: Optional[AUCChart] = None
         self._decoder_auc_charts: dict[str, AUCChart] = {}
+        # Per-decoder TGM heatmaps + the stats card widgets that live
+        # inside each per-decoder tab. ``_decoder_stats`` maps
+        # ``task_name → {"timepoint": QSpinBox, "auc_at_t": QLabel,
+        # "peak_auc": QLabel, "peak_ms": QLabel}`` so the populate /
+        # update flow can rewrite the values from one place.
+        self._decoder_tgm_charts: dict[str, TGMChart] = {}
+        self._decoder_stats: dict[str, dict[str, QWidget]] = {}
         self._stats_suggested_hint_lbl: Optional[QLabel] = None
         self._stats_confirm_btn: Optional[QPushButton] = None
         self._stats_reset_btn: Optional[QPushButton] = None
@@ -215,9 +222,11 @@ class EvaluationView(QWidget):
             tab.deleteLater()
         self._per_decoder_tabs.clear()
         self._decoder_auc_charts.clear()
+        self._decoder_tgm_charts.clear()
+        self._decoder_stats.clear()
 
         for task_name in task_names:
-            tab = self._build_decoder_tab(task_name)  # also fills _decoder_auc_charts[task_name]
+            tab = self._build_decoder_tab(task_name)  # also fills the per-decoder dicts
             self._per_decoder_tabs[task_name] = tab
             self._tabs.addTab(tab, task_name)
 
@@ -229,31 +238,33 @@ class EvaluationView(QWidget):
         # method writes into the labels and moves the chart markers.
         self._rebuild_stats_decoder_rows(tasks_result)
         self._rebuild_summary_table(tasks_result, suggested_s)
-        self._populate_auc_charts(result.get("times"), tasks_result)
+        self._populate_charts(result.get("times"), tasks_result)
+        self._populate_decoder_peak_stats(result.get("times"), tasks_result)
         if self._stats_suggested_hint_lbl is not None:
             self._stats_suggested_hint_lbl.setText(
                 f"Suggested: {suggested_ms:.0f} ms (avg peak)"
             )
-        # Constrain the SELECTED TIMEPOINT input to the evaluator's
+        # Constrain every SELECTED TIMEPOINT input to the evaluator's
         # time range, with a step matching the sample spacing — so the
         # spinbox arrows walk one sample at a time.
         times = result.get("times")
-        if self._stats_selected_input is not None and times is not None and len(times) > 1:
+        if times is not None and len(times) > 1:
             step_ms = int(round((times[1] - times[0]) * 1000.0))
-            self._stats_selected_input.setRange(
-                int(round(times[0] * 1000.0)),
-                int(round(times[-1] * 1000.0)),
-            )
-            self._stats_selected_input.setSingleStep(max(1, step_ms))
+            t_lo = int(round(times[0] * 1000.0))
+            t_hi = int(round(times[-1] * 1000.0))
+            for spin in self._all_timepoint_spinboxes():
+                spin.setRange(t_lo, t_hi)
+                spin.setSingleStep(max(1, step_ms))
         self._set_selected_timepoint(suggested_s)
 
-    def _populate_auc_charts(self, times, tasks_result: dict[str, dict]) -> None:
-        """Push the diagonal AUC curves into the Summary + per-decoder charts.
+    def _populate_charts(self, times, tasks_result: dict[str, dict]) -> None:
+        """Push curves into the Summary + per-decoder AUC charts AND
+        seed each per-decoder TGM heatmap with its matrix.
 
         Builds a stable ``name → colour`` map up front and threads it
-        through every chart, so a decoder's line keeps the same hue in
-        the Summary view and in its own per-decoder tab. Also seeds the
-        stationary dashed suggested-timepoint marker on every chart.
+        through every AUC chart, so a decoder's line keeps the same hue
+        across views. Also seeds the stationary dashed suggested-
+        timepoint marker on every chart.
         """
         if times is None or not tasks_result:
             return
@@ -267,11 +278,53 @@ class EvaluationView(QWidget):
         if self._summary_auc_chart is not None:
             self._summary_auc_chart.set_curves(times, curves, colors=colors)
             self._summary_auc_chart.set_suggested_timepoint(suggested_t)
-        for name, diag in curves.items():
-            chart = self._decoder_auc_charts.get(name)
-            if chart is not None:
-                chart.set_curves(times, {name: diag}, colors={name: colors[name]})
-                chart.set_suggested_timepoint(suggested_t)
+        for name, task in tasks_result.items():
+            auc = self._decoder_auc_charts.get(name)
+            if auc is not None:
+                auc.set_curves(times, {name: task["diagonal_auc"]},
+                               colors={name: colors[name]})
+                auc.set_suggested_timepoint(suggested_t)
+            tgm = self._decoder_tgm_charts.get(name)
+            if tgm is not None and task.get("tgm_matrix") is not None:
+                tgm.set_matrix(times, task["tgm_matrix"])
+                tgm.set_suggested_timepoint(suggested_t)
+
+    def _populate_decoder_peak_stats(
+        self, times, tasks_result: dict[str, dict]
+    ) -> None:
+        """Fill the per-decoder stats card's ``Peak AUC`` and ``Peak time``
+        rows. These are timepoint-independent (won't change as the
+        operator moves the selected marker around)."""
+        if times is None:
+            return
+        import numpy as np
+        for name, task in tasks_result.items():
+            stats = self._decoder_stats.get(name)
+            if stats is None:
+                continue
+            diag = task.get("diagonal_auc")
+            peak_auc = float(task.get("peak_auc", float("nan")))
+            peak_ms = "—"
+            if diag is not None and len(diag) > 0:
+                peak_ms = f"{float(times[int(np.argmax(diag))] * 1000.0):.0f}"
+            self._set_stat_value(stats["peak_auc"], f"{peak_auc:.2f}")
+            self._set_stat_value(stats["peak_ms"], peak_ms)
+
+    def _set_stat_value(self, value_lbl: QWidget, text: str) -> None:
+        """Apply the stashed ``suffix`` (e.g. ``" ms"``) to a stat-row value."""
+        suffix = value_lbl.property("suffix") or ""
+        value_lbl.setText(f"{text}{suffix}")
+
+    def _all_timepoint_spinboxes(self) -> list[QSpinBox]:
+        """Every SELECTED TIMEPOINT spinbox in the Eval results screen."""
+        spins: list[QSpinBox] = []
+        if self._stats_selected_input is not None:
+            spins.append(self._stats_selected_input)
+        for stats in self._decoder_stats.values():
+            spin = stats.get("timepoint")
+            if isinstance(spin, QSpinBox):
+                spins.append(spin)
+        return spins
 
     # ── page builders ────────────────────────────────────────────────────────
 
@@ -629,7 +682,19 @@ class EvaluationView(QWidget):
         return header
 
     def _build_decoder_tab(self, task_name: str) -> QWidget:
-        """Per-decoder tab skeleton: name header + AUC + TGM slots."""
+        """Per-decoder tab — two rows.
+
+        Row 1: AUC chart + TGM heatmap side-by-side (equal width). The
+        TGM aspect-locks to a square, so it occupies its half of the
+        row as a square with whitespace below or above as needed.
+
+        Row 2: horizontal stats card spanning the full width — SELECTED
+        TIMEPOINT spinbox + AUC@selected + Peak AUC + Peak time, laid
+        out as cells across the row.
+
+        Picking a timepoint anywhere routes through the same global
+        ``_selected_timepoint`` everything else already syncs to.
+        """
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -643,23 +708,142 @@ class EvaluationView(QWidget):
         header.setStyleSheet(f"color: {TEXT_PRIMARY};")
         layout.addWidget(header)
 
-        charts = QHBoxLayout()
-        charts.setSpacing(12)
-        chart = AUCChart(show_legend=False)
-        chart.setMinimumHeight(320)
-        chart.timepoint_clicked.connect(self._set_selected_timepoint)
-        self._decoder_auc_charts[task_name] = chart
-        charts.addWidget(chart, 1)
-        charts.addWidget(
-            self._make_placeholder(
-                "TGM heatmap goes here\n(Train time × Test time, "
-                "crosshair at selected timepoint)",
-                min_h=320,
-            ),
-            1,
+        # ── Row 1: AUC chart + TGM heatmap side-by-side ──────────────
+        charts_row = QHBoxLayout()
+        charts_row.setSpacing(12)
+
+        auc = AUCChart(show_legend=False)
+        auc.setMinimumHeight(360)
+        auc.timepoint_clicked.connect(self._set_selected_timepoint)
+        self._decoder_auc_charts[task_name] = auc
+        charts_row.addWidget(auc, 1)
+
+        tgm_card = QFrame()
+        tgm_card.setObjectName("tgm_card")
+        tgm_card.setStyleSheet(
+            f"QFrame#tgm_card {{ background: {CARD_WHITE}; "
+            f"border: 1px solid {BORDER_GRAY}; border-radius: 2px; }}"
         )
-        layout.addLayout(charts)
+        tgm_body = QVBoxLayout(tgm_card)
+        tgm_body.setContentsMargins(10, 10, 10, 10)
+        tgm_body.setSpacing(6)
+        tgm_caption = QLabel("TEMPORAL GENERALIZATION (TRAIN × TEST)")
+        tgm_caption.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-size: 10px; font-weight: 700; "
+            "letter-spacing: 0.6px;"
+        )
+        tgm_body.addWidget(tgm_caption)
+        tgm = TGMChart()
+        tgm.setMinimumHeight(360)
+        tgm.timepoint_clicked.connect(self._set_selected_timepoint)
+        self._decoder_tgm_charts[task_name] = tgm
+        tgm_body.addWidget(tgm, 1)
+        charts_row.addWidget(tgm_card, 1)
+
+        layout.addLayout(charts_row, 1)
+
+        # ── Row 2: full-width horizontal stats strip ──────────────────
+        layout.addWidget(self._build_decoder_stats_card(task_name))
+
         return tab
+
+    def _build_decoder_stats_card(self, task_name: str) -> QWidget:
+        """Horizontal stats strip for the per-decoder tab.
+
+        Lays out four cells across the full-width card — SELECTED
+        TIMEPOINT spinbox + AUC@selected + Peak AUC + Peak time. Each
+        cell mirrors the same small-caps label / value pair used in the
+        Summary stats panel. The spinbox edits the *global*
+        ``_selected_timepoint`` (no per-decoder override).
+        """
+        card = QFrame()
+        card.setObjectName("decoder_stats_card")
+        card.setStyleSheet(
+            f"QFrame#decoder_stats_card {{ background: {CARD_WHITE}; "
+            f"border: 1px solid {BORDER_GRAY}; border-radius: 2px; }}"
+            "QFrame#decoder_stats_card QLabel { background: transparent; }"
+        )
+
+        row = QHBoxLayout(card)
+        row.setContentsMargins(16, 12, 16, 12)
+        row.setSpacing(24)
+
+        # ── SELECTED TIMEPOINT cell (with the spinbox) ───────────────
+        tp_cell = QVBoxLayout()
+        tp_cell.setSpacing(4)
+        tp_cap = QLabel("SELECTED TIMEPOINT")
+        tp_cap.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-size: 10px; font-weight: 700; "
+            "letter-spacing: 0.6px;"
+        )
+        tp_cell.addWidget(tp_cap)
+
+        spin = QSpinBox()
+        f = spin.font()
+        f.setPointSize(14)
+        f.setWeight(QFont.Weight.Bold)
+        spin.setFont(f)
+        spin.setRange(-9999, 9999)
+        spin.setSingleStep(10)
+        spin.setKeyboardTracking(False)
+        spin.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        spin.setCursor(Qt.CursorShape.IBeamCursor)
+        self._apply_spinbox_input_style(spin, PRIMARY_BLUE)
+        spin.editingFinished.connect(
+            lambda _n=task_name: self._on_decoder_input_committed(_n)
+        )
+        spin.valueChanged.connect(
+            lambda _v, _n=task_name: self._on_decoder_input_committed(_n)
+        )
+        spin_row = QHBoxLayout()
+        spin_row.setContentsMargins(0, 0, 0, 0)
+        spin_row.setSpacing(6)
+        spin_row.addWidget(spin)
+        ms_lbl = QLabel("ms")
+        ms_lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px; font-weight: 600;")
+        spin_row.addWidget(ms_lbl)
+        spin_row.addStretch()
+        tp_cell.addLayout(spin_row)
+        row.addLayout(tp_cell, 0)
+
+        # ── stat cells (filled on result arrival) ─────────────────────
+        auc_at_t = self._build_stat_cell(row, "AUC @ SELECTED")
+        peak_auc = self._build_stat_cell(row, "PEAK AUC")
+        peak_ms = self._build_stat_cell(row, "PEAK TIME", suffix=" ms")
+
+        row.addStretch()
+
+        self._decoder_stats[task_name] = {
+            "timepoint": spin,
+            "auc_at_t": auc_at_t,
+            "peak_auc": peak_auc,
+            "peak_ms": peak_ms,
+        }
+        return card
+
+    def _build_stat_cell(
+        self, row: QHBoxLayout, caption_text: str, *, suffix: str = ""
+    ) -> QLabel:
+        """A two-line stat cell: small-caps caption above a bold value."""
+        cell = QVBoxLayout()
+        cell.setSpacing(4)
+        cap = QLabel(caption_text)
+        cap.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-size: 10px; font-weight: 700; "
+            "letter-spacing: 0.6px;"
+        )
+        cell.addWidget(cap)
+        value = QLabel("—")
+        f = value.font()
+        f.setPointSize(14)
+        f.setWeight(QFont.Weight.Bold)
+        value.setFont(f)
+        value.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        value.setProperty("suffix", suffix)
+        cell.addWidget(value)
+        cell.addStretch()
+        row.addLayout(cell, 0)
+        return value
 
     # ── populate helpers (called by _populate_results) ───────────────────────
 
@@ -887,16 +1071,29 @@ class EvaluationView(QWidget):
             # Always rendered (avoids layout shifts) — disabled at suggested.
             self._stats_reset_btn.setEnabled(dev_ms > 1e-6)
 
+        # Mirror the new value into every per-decoder timepoint spinbox.
+        # ``blockSignals`` prevents the setValue from re-entering
+        # ``_on_decoder_input_committed`` → ``_set_selected_timepoint``.
+        for spin in self._all_timepoint_spinboxes():
+            if spin is self._stats_selected_input:
+                continue  # already updated above
+            spin.blockSignals(True)
+            spin.setValue(int(round(sel_ms)))
+            spin.blockSignals(False)
+            self._apply_spinbox_input_style(spin, AMBER if warn else PRIMARY_BLUE)
+
         self._update_per_decoder_aucs(t_seconds)
         self._sync_chart_markers(t_seconds)
         self._refresh_confirm_button()
         self._update_ready_state()
 
     def _sync_chart_markers(self, t_seconds: float) -> None:
-        """Move the vertical marker on every AUC chart to ``t_seconds``."""
+        """Move the selected-timepoint marker / crosshair on every chart."""
         if self._summary_auc_chart is not None:
             self._summary_auc_chart.set_selected_timepoint(t_seconds)
         for chart in self._decoder_auc_charts.values():
+            chart.set_selected_timepoint(t_seconds)
+        for chart in self._decoder_tgm_charts.values():
             chart.set_selected_timepoint(t_seconds)
 
     def _update_per_decoder_aucs(self, t_seconds: float) -> None:
@@ -935,9 +1132,45 @@ class EvaluationView(QWidget):
                     "font-family: monospace; font-size: 11px; "
                     f"font-weight: 600; color: {colour};"
                 )
+            # Per-decoder tab's stats card — same value as the Summary
+            # mini-table's row for this decoder.
+            decoder_stats = self._decoder_stats.get(name)
+            if decoder_stats is not None:
+                self._set_stat_value(decoder_stats["auc_at_t"], text)
 
         if self._stats_avg_lbl is not None and aucs_at_t:
             self._stats_avg_lbl.setText(f"{sum(aucs_at_t) / len(aucs_at_t):.2f}")
+
+    def _on_decoder_input_committed(self, task_name: str) -> None:
+        """Per-decoder SELECTED TIMEPOINT spinbox edit handler.
+
+        Same snap rule as ``_on_selected_input_committed`` but reads
+        the typed value off the per-decoder spinbox, then routes through
+        the shared ``_set_selected_timepoint`` so everything (Summary
+        spinbox, chart marker, sibling decoder tabs) stays in sync.
+        """
+        if self._result is None:
+            return
+        stats = self._decoder_stats.get(task_name)
+        if stats is None:
+            return
+        spin = stats.get("timepoint")
+        if not isinstance(spin, QSpinBox):
+            return
+        times = self._result.get("times")
+        if times is None or len(times) == 0:
+            return
+        import numpy as np
+        typed_s = spin.value() / 1000.0
+        idx = int(np.argmin(np.abs(np.asarray(times) - typed_s)))
+        snapped = float(times[idx])
+        if abs(snapped - (self._selected_timepoint or 0.0)) < 1e-9:
+            # No-op: just snap the displayed value (e.g. 205 → 200).
+            spin.blockSignals(True)
+            spin.setValue(int(round(snapped * 1000.0)))
+            spin.blockSignals(False)
+            return
+        self._set_selected_timepoint(snapped)
 
     def _toggle_confirm(self) -> None:
         """Lock / unlock the currently selected timepoint locally.
@@ -960,16 +1193,21 @@ class EvaluationView(QWidget):
         self._update_ready_state()
 
     def _apply_selected_input_style(self, text_color: str) -> None:
-        """Style the SELECTED TIMEPOINT spinbox as a visible input field.
+        """Re-style the Summary tab's SELECTED TIMEPOINT spinbox."""
+        if self._stats_selected_input is None:
+            return
+        self._apply_spinbox_input_style(self._stats_selected_input, text_color)
+
+    @staticmethod
+    def _apply_spinbox_input_style(spin: QSpinBox, text_color: str) -> None:
+        """Style any SELECTED TIMEPOINT spinbox as a visible input field.
 
         Light border + padded background so the operator can tell the
         value is editable, plus a focused-state highlight + visible
         up/down arrows. ``text_color`` flips between PRIMARY_BLUE
         (within suggested) and AMBER (deviating > _DEVIATION_WARN_MS).
         """
-        if self._stats_selected_input is None:
-            return
-        self._stats_selected_input.setStyleSheet(
+        spin.setStyleSheet(
             "QSpinBox { "
             f"color: {text_color}; "
             f"background: {CARD_WHITE}; "
