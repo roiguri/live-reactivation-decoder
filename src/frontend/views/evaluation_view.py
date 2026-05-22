@@ -188,8 +188,13 @@ class EvaluationView(QWidget):
         self._start_btn.setFixedSize(96, 96)
         self._start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._start_btn.setStyleSheet(
+            # padding-left compensates for the ▶ glyph's intrinsic
+            # left-bias inside its character cell — without it the
+            # triangle looks shifted left of centre, especially against
+            # the more-saturated hover/press background.
             f"QPushButton {{ background: #EFF6FF; color: {PRIMARY_BLUE}; "
-            f"border: none; border-radius: 48px; font-size: 36px; }}"
+            f"border: none; border-radius: 48px; font-size: 36px; "
+            f"padding: 0 0 0 6px; }}"
             f"QPushButton:hover {{ background: #DBEAFE; }}"
             f"QPushButton:pressed {{ background: #BFDBFE; }}"
         )
