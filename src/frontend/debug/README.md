@@ -60,16 +60,32 @@ PYTHONPATH=src python -m frontend.debug.main
 The workspace header shows `[DEBUG] {node title}` so the mode is
 always visible.
 
-## Keyboard map
+## Walkthrough
 
-| Shortcut       | Jumps to                  | Loads from                     |
-|----------------|---------------------------|--------------------------------|
-| Ctrl+Shift+3   | Preprocessing — Ready page | nothing (live run from there) |
-| Ctrl+Shift+4   | Evaluation — Results       | `eval_done.joblib`             |
-| Ctrl+Shift+5   | Train view                 | `train_done.joblib`            |
+The app boots on an empty Settings screen. A toolbar at the top of
+the workspace card shows `Step N/10: <name>  [Next →] [Reset]`.
 
-Jumps bypass the journey-panel node-by-node animation; the trail UI
-on the right may stay on Node 1 visually — harmless.
+Press **Next** (or **Ctrl+Right**) to fire the next user action.
+Each press is instant — slow compute (data load, preprocessing,
+evaluation, training) is faked by emitting completion signals
+directly or loading on-disk snapshots.
+
+| # | Step                       | What it does                                                  |
+|---|----------------------------|----------------------------------------------------------------|
+| 1 | Load config                | Build `AppSession(experiment_config.yaml)`; populate Settings  |
+| 2 | Pick output directory      | Point at `debug_snapshots/`                                    |
+| 3 | Continue → Load Data       | Fire Settings' Continue (emits `session_ready`)                |
+| 4 | Pick demo data folder      | Default: `../data/new_experiment/test_set/subject_102_quarter` |
+| 5 | Skip data load             | Emit `data_loaded` directly — no `LoadWorker`, no real load    |
+| 6 | Skip preprocessing         | Load `preproc_done.joblib`; jump to complete page              |
+| 7 | Continue → Evaluation      | Fire `preprocessing_complete`                                  |
+| 8 | Skip evaluation            | Load `eval_done.joblib`; populate Evaluation tabs              |
+| 9 | Continue → Train           | Fire `evaluation_complete(timepoint)`                          |
+| 10 | Skip training             | Load `train_done.joblib`; show the Train view                  |
+
+**Reset** rewinds the step counter to 0 + clears the file-picker
+visuals. There is no Prev — irreversible signal emissions can't be
+cleanly undone; relaunch the app for a fully clean state.
 
 ## Troubleshooting
 
