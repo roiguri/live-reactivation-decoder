@@ -4,12 +4,13 @@ Dev-only. Production ``frontend.main`` does **not** import this module.
 
 A snapshot is a small joblib pickle holding a subset of the
 orchestrator's stateful attributes (``_data_dir``, optionally ``_raw``,
-``_epochs``, ``_eval_results``, ``online_state``) — enough to let the
-debug screen drop the operator straight into a downstream view as if
-the upstream pipeline had just finished. The bulky ``_preprocessor``
-instance is intentionally **not** snapshotted: it pickles awkwardly
-across MNE versions and the screens we care about only need
-``_epochs`` and the result dicts.
+``_preprocessor``, ``_epochs``, ``_eval_results``, ``online_state``) —
+enough to let the debug screen drop the operator straight into a
+downstream view as if the upstream pipeline had just finished. The
+``_preprocessor``'s ``.raw`` attribute (a potentially multi-MB MNE
+``Raw``) is **stripped before pickling**: downstream views only need
+its ``.ica`` and ``_bad_channels`` / ``_interp_weights`` /
+``_post_hygiene_eeg_names``, not the original signal.
 
 The seeder script (``scripts/demo_seed_debug_snapshots.py``) runs the
 real pipeline once and writes snapshots; the debug screen reads them.
@@ -18,6 +19,7 @@ they never end up in source control.
 """
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -32,6 +34,7 @@ if TYPE_CHECKING:  # pragma: no cover — type-check only
 _ATTRS: tuple[str, ...] = (
     "_data_dir",
     "_raw",
+    "_preprocessor",
     "_epochs",
     "_eval_results",
     "online_state",
@@ -73,6 +76,16 @@ def save_snapshot(
             continue
         if isinstance(value, dict) and not value:
             continue
+        if name == "_preprocessor":
+            # Shallow-copy the preprocessor and drop its `.raw` before
+            # pickling. The full-rate Raw can be hundreds of MB; the
+            # downstream debug views only need the cheap fields (ica,
+            # _bad_channels, _interp_weights, _post_hygiene_eeg_names,
+            # epochs). orchestrator._epochs is the same object as
+            # preprocessor.epochs so we don't lose it either way.
+            stripped = copy.copy(value)
+            stripped.raw = None
+            value = stripped
         payload[name] = value
 
     payload["_phase"] = _infer_phase(payload)
@@ -104,7 +117,7 @@ def _infer_phase(payload: dict[str, Any]) -> str:
         return "train_done"
     if "_eval_results" in payload:
         return "eval_done"
-    if "_epochs" in payload:
+    if "_preprocessor" in payload or "_epochs" in payload:
         return "preproc_done"
     if "_raw" in payload:
         return "load_done"

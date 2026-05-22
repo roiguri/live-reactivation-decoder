@@ -21,15 +21,29 @@ class _FakeOrchestrator:
     """Minimal stand-in matching the attributes ``snapshots._ATTRS`` touches.
 
     A real ``OfflineOrchestrator`` would expose the same surface plus
-    a lot more; the snapshot module only reads/writes these five names.
+    a lot more; the snapshot module only reads/writes these six names.
     """
 
     def __init__(self) -> None:
         self._data_dir: Path | None = None
         self._raw = None
+        self._preprocessor = None
         self._epochs = None
         self._eval_results: dict | None = None
         self.online_state: dict = {}
+
+
+class _FakePreprocessor:
+    """Stand-in for ``OfflinePreprocessor``: just the fields we expect
+    save_snapshot to preserve, plus a ``raw`` we expect it to strip."""
+
+    def __init__(self) -> None:
+        self.raw = "RAW_TO_BE_STRIPPED"
+        self.epochs = "EPOCHS_SENTINEL"
+        self.ica = "ICA_SENTINEL"
+        self._bad_channels = ["F4", "C3"]
+        self._interp_weights = np.array([[1.0, 2.0]])
+        self._post_hygiene_eeg_names = ["Fp1", "Fp2"]
 
 
 # ── save / load contract ──────────────────────────────────────────────────────
@@ -59,6 +73,35 @@ def test_round_trip_eval_done_phase(tmp_path: Path) -> None:
         restored._eval_results["tasks"]["red"]["diagonal_auc"],
         np.array([0.5, 0.6, 0.71]),
     )
+
+
+def test_round_trip_preproc_done_phase(tmp_path: Path) -> None:
+    """A populated preprocessor + epochs (no eval results yet) tags as
+    ``preproc_done`` and round-trips the preprocessor fields the
+    debug walkthrough needs."""
+    orig = _FakeOrchestrator()
+    orig._data_dir = Path("/tmp/sub_001")
+    orig._preprocessor = _FakePreprocessor()
+    orig._epochs = "EPOCHS_SENTINEL"
+
+    out = save_snapshot(orig, tmp_path / "preproc_done.joblib")
+    restored = _FakeOrchestrator()
+    payload = load_snapshot(restored, out)
+
+    assert payload["_phase"] == "preproc_done"
+    assert restored._preprocessor is not None
+    # ``.raw`` is the only field stripped before pickling.
+    assert restored._preprocessor.raw is None
+    # Everything else round-trips verbatim.
+    assert restored._preprocessor.ica == "ICA_SENTINEL"
+    assert restored._preprocessor._bad_channels == ["F4", "C3"]
+    np.testing.assert_array_equal(
+        restored._preprocessor._interp_weights, np.array([[1.0, 2.0]])
+    )
+    assert restored._preprocessor._post_hygiene_eeg_names == ["Fp1", "Fp2"]
+    # The original instance is **not** mutated by save_snapshot; we
+    # shallow-copied before stripping `.raw`.
+    assert orig._preprocessor.raw == "RAW_TO_BE_STRIPPED"
 
 
 def test_round_trip_train_done_phase(tmp_path: Path) -> None:

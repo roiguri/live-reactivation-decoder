@@ -12,24 +12,16 @@ Usage::
         --data   ../data/new_experiment/test_set/subject_102_quarter \\
         --output debug_snapshots
 
-Writes two joblib files in ``--output``::
+Writes three joblib files in ``--output``::
 
-    eval_done.joblib    state right after orchestrator.run_evaluation()
-    train_done.joblib   state right after orchestrator.run_training()
+    preproc_done.joblib  state right after orchestrator.run_step2_apply_and_save()
+    eval_done.joblib     state right after orchestrator.run_evaluation()
+    train_done.joblib    state right after orchestrator.run_training()
 
 The pipeline runs non-interactively: ``set_bad_channels([])`` (no
 operator-marked bads) and ``run_step2_apply_and_save(suggested)``
 (accepts whatever ICLabel flagged). The chosen training timepoint is
 ``eval_result["suggested_timepoint"]``.
-
-TODO(debug): a third ``preproc_done.joblib`` snapshot — captured
-between ``run_step1b_fit_ica`` and ``run_step2_apply_and_save`` — is
-deferred. It would let the debug screen drop the operator straight
-into the ICA-review window with pre-baked components. Doing it
-needs us to also pickle the ``OfflinePreprocessor`` (or just its
-``ica`` / ``_bad_channels`` / ``epochs`` so the ICA review window
-can re-open). See ``src/frontend/debug/README.md`` "Out of scope" /
-the plan doc for the deferred design.
 """
 from __future__ import annotations
 
@@ -102,6 +94,8 @@ def main() -> None:
     logger.info("Step 2 — apply ICA + save epochs")
     step2_result = orch.run_step2_apply_and_save(suggested)
     logger.info("Epochs retained: %d", step2_result.get("n_epochs", -1))
+    preproc_path = save_snapshot(orch, args.output / "preproc_done.joblib")
+    logger.info("Wrote preproc snapshot → %s", preproc_path)
 
     logger.info("Evaluation — temporal generalization CV")
     eval_result = orch.run_evaluation()
@@ -114,7 +108,7 @@ def main() -> None:
     train_path = save_snapshot(orch, args.output / "train_done.joblib")
     logger.info("Wrote train snapshot → %s", train_path)
 
-    print(f"Saved 2 snapshots → {args.output}/")
+    print(f"Saved 3 snapshots → {args.output}/")
 
 
 if __name__ == "__main__":

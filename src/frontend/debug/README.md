@@ -36,6 +36,7 @@ Writes:
 
 ```
 debug_snapshots/
+├── preproc_done.joblib — orchestrator state after run_step2_apply_and_save()
 ├── eval_done.joblib    — orchestrator state after run_evaluation()
 └── train_done.joblib   — orchestrator state after run_training()
 ```
@@ -43,12 +44,11 @@ debug_snapshots/
 `debug_snapshots/` is **git-ignored**; regenerate after any
 pipeline/schema change.
 
-> **Note** — there is no `preproc_done.joblib` yet. The
-> Preprocessing-done state (between Step 1B's ICA fit and Step 2's
-> apply) would let debug mode drop the operator straight into the
-> ICA-review window with pre-baked components, but it requires
-> pickling the `OfflinePreprocessor` instance (or the ICA + bads
-> separately). Deferred — see the "Out of scope" section below.
+The `preproc_done.joblib` snapshot lets the walkthrough skip
+preprocessing entirely (including the bad-channel + ICA-review MNE
+windows). It carries the full `OfflinePreprocessor` instance with
+`.raw` stripped (we don't need the full-rate signal downstream;
+keeping it would inflate the snapshot to hundreds of MB).
 
 ## Daily use
 
@@ -83,14 +83,11 @@ on the right may stay on Node 1 visually — harmless.
 
 ## Out of scope (deferred)
 
-- **`preproc_done.joblib` snapshot** — would capture state between
-  ICA fit (Step 1B) and ICA apply (Step 2), letting debug mode drop
-  the operator straight into the ICA-review window with pre-baked
-  components. Requires pickling the `OfflinePreprocessor` or its
-  `ica` / `_bad_channels` separately so the review window can
-  re-open. Currently the Preprocessing jump (Ctrl+Shift+3) only
-  reaches the Ready page; live-run preprocessing from there if you
-  need the loaded ICA-review state.
+- **`_raw` in snapshots** — needed if we ever want to skip the
+  ~1-2 min data-load step. A full-rate raw is large (~400 MB at
+  5 kHz × 5 min × 64 ch float32); a smaller post-resample variant
+  (~8 MB) would need to be captured after Step 1A. Skipped until the
+  load wait proves annoying in daily use.
 - **"Save current state" affordance inside debug mode** — a button
   in the running app that captures a snapshot at the current node
   rather than requiring a fresh seeder run.
