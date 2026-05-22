@@ -7,7 +7,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal as Signal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QSizePolicy,
-    QStackedWidget, QTabWidget, QVBoxLayout, QWidget,
+    QSpinBox, QStackedWidget, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from frontend.styles.theme import (
@@ -69,7 +69,7 @@ class EvaluationView(QWidget):
         self._tabs: Optional[QTabWidget] = None
         self._per_decoder_tabs: dict[str, QWidget] = {}
         # Summary-tab live widgets (built up-front, populated on result arrival).
-        self._stats_selected_lbl: Optional[QLabel] = None
+        self._stats_selected_input: Optional[QSpinBox] = None
         self._stats_dev_lbl: Optional[QLabel] = None
         self._stats_decoder_rows_layout: Optional[QVBoxLayout] = None
         self._stats_avg_row: Optional[QFrame] = None
@@ -234,6 +234,17 @@ class EvaluationView(QWidget):
             self._stats_suggested_hint_lbl.setText(
                 f"Suggested: {suggested_ms:.0f} ms (avg peak)"
             )
+        # Constrain the SELECTED TIMEPOINT input to the evaluator's
+        # time range, with a step matching the sample spacing — so the
+        # spinbox arrows walk one sample at a time.
+        times = result.get("times")
+        if self._stats_selected_input is not None and times is not None and len(times) > 1:
+            step_ms = int(round((times[1] - times[0]) * 1000.0))
+            self._stats_selected_input.setRange(
+                int(round(times[0] * 1000.0)),
+                int(round(times[-1] * 1000.0)),
+            )
+            self._stats_selected_input.setSingleStep(max(1, step_ms))
         self._set_selected_timepoint(suggested_s)
 
     def _populate_auc_charts(self, times, tasks_result: dict[str, dict]) -> None:
@@ -477,13 +488,44 @@ class EvaluationView(QWidget):
         )
         body.addWidget(sel_cap)
 
-        self._stats_selected_lbl = QLabel("—")
-        f = self._stats_selected_lbl.font()
-        f.setPointSize(16)
+        # Typed adjustment is allowed — operator can edit the integer ms
+        # value directly. ``editingFinished`` snaps to the nearest sample
+        # in ``self._result["times"]`` so the displayed AUC always
+        # matches a real backend score. Range + step are filled in when
+        # the eval result arrives.
+        self._stats_selected_input = QSpinBox()
+        f = self._stats_selected_input.font()
+        f.setPointSize(14)
         f.setWeight(QFont.Weight.Bold)
-        self._stats_selected_lbl.setFont(f)
-        self._stats_selected_lbl.setStyleSheet(f"color: {PRIMARY_BLUE};")
-        body.addWidget(self._stats_selected_lbl)
+        self._stats_selected_input.setFont(f)
+        # The "ms" suffix lives outside the box (a separate QLabel) since
+        # it's a static unit, not editable text.
+        self._stats_selected_input.setRange(-9999, 9999)  # widened later
+        self._stats_selected_input.setSingleStep(10)
+        self._stats_selected_input.setKeyboardTracking(False)
+        self._stats_selected_input.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self._stats_selected_input.setCursor(Qt.CursorShape.IBeamCursor)
+        self._apply_selected_input_style(PRIMARY_BLUE)
+        self._stats_selected_input.editingFinished.connect(
+            self._on_selected_input_committed
+        )
+        # editingFinished only fires on Enter / focus-loss, but the
+        # arrow buttons emit valueChanged immediately — pick that up too.
+        self._stats_selected_input.valueChanged.connect(
+            lambda _v: self._on_selected_input_committed()
+        )
+
+        selected_row = QHBoxLayout()
+        selected_row.setContentsMargins(0, 0, 0, 0)
+        selected_row.setSpacing(6)
+        selected_row.addWidget(self._stats_selected_input)
+        ms_lbl = QLabel("ms")
+        ms_lbl.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-size: 12px; font-weight: 600;"
+        )
+        selected_row.addWidget(ms_lbl)
+        selected_row.addStretch()
+        body.addLayout(selected_row)
 
         self._stats_dev_lbl = QLabel("")
         self._stats_dev_lbl.setStyleSheet(f"color: {AMBER}; font-size: 10px;")
@@ -824,13 +866,15 @@ class EvaluationView(QWidget):
         sel_ms = t_seconds * 1000.0
         dev_ms = abs(sel_ms - suggested * 1000.0)
 
-        if self._stats_selected_lbl is not None:
-            self._stats_selected_lbl.setText(f"{sel_ms:.0f} ms")
+        if self._stats_selected_input is not None:
             warn = dev_ms > _DEVIATION_WARN_MS
-            self._stats_selected_lbl.setStyleSheet(
-                f"color: {AMBER if warn else PRIMARY_BLUE}; "
-                "background: transparent;"
-            )
+            # Block signals around the programmatic setValue to avoid
+            # bouncing back through ``_on_selected_input_committed``
+            # (which would re-enter ``_set_selected_timepoint``).
+            self._stats_selected_input.blockSignals(True)
+            self._stats_selected_input.setValue(int(round(sel_ms)))
+            self._stats_selected_input.blockSignals(False)
+            self._apply_selected_input_style(AMBER if warn else PRIMARY_BLUE)
 
         if self._stats_dev_lbl is not None:
             if dev_ms > _DEVIATION_WARN_MS:
@@ -915,6 +959,49 @@ class EvaluationView(QWidget):
         self._refresh_confirm_button()
         self._update_ready_state()
 
+    def _apply_selected_input_style(self, text_color: str) -> None:
+        """Style the SELECTED TIMEPOINT spinbox as a visible input field.
+
+        Light border + padded background so the operator can tell the
+        value is editable, plus a focused-state highlight + visible
+        up/down arrows. ``text_color`` flips between PRIMARY_BLUE
+        (within suggested) and AMBER (deviating > _DEVIATION_WARN_MS).
+        """
+        if self._stats_selected_input is None:
+            return
+        self._stats_selected_input.setStyleSheet(
+            "QSpinBox { "
+            f"color: {text_color}; "
+            f"background: {CARD_WHITE}; "
+            f"border: 1px solid {BORDER_GRAY}; "
+            "border-radius: 4px; "
+            "padding: 4px 6px; "
+            "} "
+            "QSpinBox:focus { "
+            f"border: 1.5px solid {PRIMARY_BLUE}; "
+            "} "
+            "QSpinBox::up-button, QSpinBox::down-button { "
+            "subcontrol-origin: border; "
+            "width: 16px; "
+            "background: transparent; "
+            "border: none; "
+            "} "
+            "QSpinBox::up-button { subcontrol-position: top right; } "
+            "QSpinBox::down-button { subcontrol-position: bottom right; } "
+            "QSpinBox::up-arrow { "
+            f"image: none; width: 0; height: 0; "
+            f"border-left: 4px solid transparent; "
+            f"border-right: 4px solid transparent; "
+            f"border-bottom: 5px solid {TEXT_MUTED}; "
+            "} "
+            "QSpinBox::down-arrow { "
+            f"image: none; width: 0; height: 0; "
+            f"border-left: 4px solid transparent; "
+            f"border-right: 4px solid transparent; "
+            f"border-top: 5px solid {TEXT_MUTED}; "
+            "} "
+        )
+
     def _refresh_confirm_button(self) -> None:
         """Flip Confirm Timepoint between primary-blue and success-green.
 
@@ -955,6 +1042,34 @@ class EvaluationView(QWidget):
         if self._result is None:
             return
         self._set_selected_timepoint(float(self._result["suggested_timepoint"]))
+
+    def _on_selected_input_committed(self) -> None:
+        """Handle a typed/spinned change to the SELECTED TIMEPOINT input.
+
+        Snaps the entered ms to the nearest sample in ``times`` (same
+        rule chart-click uses) so the displayed AUC always matches a
+        real backend score. Programmatic ``setValue`` calls go through
+        ``blockSignals`` to keep this from re-entering when the chart
+        click drives a change.
+        """
+        if self._result is None or self._stats_selected_input is None:
+            return
+        times = self._result.get("times")
+        if times is None or len(times) == 0:
+            return
+        typed_s = self._stats_selected_input.value() / 1000.0
+        import numpy as np
+        idx = int(np.argmin(np.abs(np.asarray(times) - typed_s)))
+        snapped = float(times[idx])
+        # Avoid a no-op feedback loop if the spinbox value already
+        # matches the snapped sample.
+        if abs(snapped - (self._selected_timepoint or 0.0)) < 1e-9:
+            # Still snap the displayed value so e.g. "205" → "200".
+            self._stats_selected_input.blockSignals(True)
+            self._stats_selected_input.setValue(int(round(snapped * 1000.0)))
+            self._stats_selected_input.blockSignals(False)
+            return
+        self._set_selected_timepoint(snapped)
 
     def _jump_to_decoder_tab(self, task_name: str) -> None:
         tab = self._per_decoder_tabs.get(task_name)
