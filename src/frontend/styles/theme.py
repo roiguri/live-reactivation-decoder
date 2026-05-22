@@ -56,4 +56,41 @@ QPushButton[class="secondary"]:disabled {{
     background-color: #D1D5DB;
     color: {TEXT_MUTED};
 }}
+
+/* Flat underline-style tabs (matches the React design demo). */
+QTabWidget::pane {{
+    border: none;
+    background: transparent;
+}}
+QTabBar {{
+    /* Removes the 1-px baseline Qt draws under the tab strip in
+       document-mode — otherwise a faint line floats above the
+       Summary/decoder tab content. */
+    qproperty-drawBase: 0;
+    background: transparent;
+    border: none;
+}}
+QTabBar::tab {{
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 8px 16px;
+    color: {TEXT_MUTED};
+    font-size: 12px;
+    font-weight: 600;
+}}
+QTabBar::tab:selected {{
+    color: {PRIMARY_BLUE};
+    border-bottom: 2px solid {PRIMARY_BLUE};
+}}
+QTabBar::tab:!selected:hover {{
+    color: {TEXT_PRIMARY};
+}}
+/* Visually divide the Summary tab from the per-decoder tabs. The
+   Summary tab is always first; uppercasing it + adding a right border
+   makes it read as a section heading rather than a sibling decoder. */
+QTabBar::tab:first {{
+    border-right: 1px solid {BORDER_GRAY};
+    letter-spacing: 0.6px;
+}}
 """
