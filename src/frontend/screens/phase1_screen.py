@@ -89,11 +89,12 @@ class Phase1Screen(QWidget):
         self._workspace = QStackedWidget()
         self._workspace.setObjectName("workspace_stack")
         self._workspace.setStyleSheet(f"background: {CARD_WHITE};")
+        self._train_view = TrainView()
         self._workspace.addWidget(self._settings_view)
         self._workspace.addWidget(self._load_data_view)
         self._workspace.addWidget(self._preprocessing_view)
         self._workspace.addWidget(self._evaluation_view)
-        self._workspace.addWidget(TrainView())
+        self._workspace.addWidget(self._train_view)
         card_layout.addWidget(self._workspace, 1)
 
         outer_layout.addWidget(card, 1)
@@ -164,6 +165,18 @@ class Phase1Screen(QWidget):
             self._on_evaluation_confirmed
         )
 
+        # Node 5: Train & Save
+        self._journey_panel.set_node_action(4, self._train_view.trigger_run)
+        self._journey_panel.set_node_ready(4, False)
+        self._train_view.ready_changed.connect(
+            lambda ready: self._journey_panel.set_node_ready(4, ready)
+        )
+        self._train_view.loading_requested.connect(self.show_loading)
+        self._train_view.loading_done.connect(self.hide_loading)
+        self._train_view.results_displayed.connect(
+            self._on_train_results_displayed
+        )
+
         self._journey_panel.node_changed.connect(self._on_node_changed)
 
     # ── public ────────────────────────────────────────────────────────────────
@@ -179,6 +192,7 @@ class Phase1Screen(QWidget):
         self._load_data_view.set_session(session)
         self._preprocessing_view.set_session(session)
         self._evaluation_view.set_session(session)
+        self._train_view.set_session(session)
         self._journey_panel.advance(1)
 
     def _on_preprocessing_complete_displayed(self) -> None:
@@ -196,7 +210,13 @@ class Phase1Screen(QWidget):
     def _on_evaluation_confirmed(self, timepoint: float) -> None:
         # Stash for Node 5's training worker, then advance the trail.
         self._selected_timepoint = timepoint
+        self._train_view.set_timepoint(timepoint)
         self._journey_panel.advance(4)
+
+    def _on_train_results_displayed(self) -> None:
+        # Topomaps are showing; relabel Node 5's button. "Go Live" wiring
+        # to Phase 2 lands when the live-stream screen ships.
+        self._journey_panel.set_node_action_label(4, "Go Live")
 
     def _on_node_changed(self, completed_node: int) -> None:
         next_idx = completed_node  # node_changed emits 1-indexed completed node

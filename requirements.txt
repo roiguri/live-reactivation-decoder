@@ -10,3 +10,4 @@ onnxruntime>=1.16
 pylsl>=1.16
 pyqt6>=6.6
 pyqtgraph>=0.13
+matplotlib>=3.8

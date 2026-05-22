@@ -322,16 +322,33 @@ class DebugPhase1Screen(Phase1Screen):
         self._evaluation_view.evaluation_complete.emit(t)
 
     def _step_skip_train(self) -> bool | None:
-        """11: load train snapshot + show the Train view (still a stub).
-
-        TODO(node5): once train_view.py is wired, feed the snapshot's
-        online_state into the equivalent of train_view._on_train_done(...).
+        """11: load train snapshot + drive ``TrainView._on_train_done``
+        with a fake result dict shaped exactly like ``run_training``
+        returns.
         """
         if not self._require_snapshot(_TRAIN_SNAPSHOT):
             return False
         load_snapshot(self.session.offline, _TRAIN_SNAPSHOT)
+        state = self.session.offline.online_state or {}
+        # In a real run the file is written before _on_train_done; the
+        # walkthrough fakes the same string so the path field has
+        # something to show.
+        fake_path = _DEFAULT_OUTPUT / "models" / "decoder_pipeline.joblib"
+        result = {
+            "model_filepath": fake_path,
+            "spatial_patterns": state.get("spatial_patterns", {}),
+            "mne_info": state.get("mne_info"),
+        }
         self._workspace.setCurrentIndex(4)
         self._header_title.setText(_DEBUG_PREFIX + _NODE_TITLES[4])
+        self._train_view.set_session(self.session)
+        # Eval step earlier already locked the timepoint; the snapshot
+        # also carries it. Set it explicitly here so set_timepoint's
+        # validation doesn't block.
+        timepoint = state.get("decoding_timepoint")
+        if timepoint is not None:
+            self._train_view.set_timepoint(float(timepoint))
+        self._train_view._on_train_done(result)  # noqa: SLF001 — dev tooling
         return None
 
     # ── helpers ──────────────────────────────────────────────────────────────
