@@ -6,12 +6,12 @@ from typing import Any, Optional
 from PyQt6.QtCore import Qt, QThread, pyqtSignal as Signal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
-    QFrame, QLabel, QMessageBox, QPushButton, QStackedWidget, QVBoxLayout,
-    QWidget,
+    QHBoxLayout, QLabel, QMessageBox, QPushButton, QStackedWidget,
+    QTabWidget, QVBoxLayout, QWidget,
 )
 
 from frontend.styles.theme import (
-    BORDER_GRAY, CARD_WHITE, PRIMARY_BLUE, TEXT_MUTED, TEXT_PRIMARY,
+    BORDER_GRAY, PRIMARY_BLUE, TEXT_MUTED, TEXT_PRIMARY,
 )
 from frontend.workers.evaluation_worker import EvaluationWorker
 
@@ -56,6 +56,10 @@ class EvaluationView(QWidget):
         self._selected_timepoint: Optional[float] = None
         self._thread: QThread | None = None
         self._worker = None
+        # Populated when results land. Tabs are built once per eval run.
+        self._tabs: Optional[QTabWidget] = None
+        self._per_decoder_tabs: dict[str, QWidget] = {}
+        self._suggested_lbl: Optional[QLabel] = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -150,26 +154,42 @@ class EvaluationView(QWidget):
         self.loading_done.emit()
         self._result = result
         self._selected_timepoint = float(result["suggested_timepoint"])
-        self._render_placeholder(result)
+        self._populate_results(result)
         self._pages.setCurrentIndex(1)
         self._running = False
         self._done = True
         self._update_ready_state()
         self.results_displayed.emit()
 
-    def _render_placeholder(self, result: dict) -> None:
-        """Step 1: surface enough numbers to confirm the worker ran.
+    def _populate_results(self, result: dict) -> None:
+        """Update the suggested-time header and (re)build per-decoder tabs.
 
-        Replaced in Step 2 with a real QTabWidget + chart slots.
+        Step 2: tabs hold dashed-border placeholders in the chart/stats/
+        table slots. Steps 3–6 replace each placeholder with its widget.
         """
-        n_tasks = len(result.get("tasks", {}))
         suggested_ms = float(result["suggested_timepoint"]) * 1000.0
         avg_peak = float(result.get("average_peak_auc", float("nan")))
-        self._summary_value.setText(
-            f"{n_tasks} task(s) evaluated\n"
-            f"Suggested timepoint: {suggested_ms:.0f} ms\n"
-            f"Average peak AUC: {avg_peak:.3f}"
-        )
+        n_tasks = len(result.get("tasks", {}))
+        if self._suggested_lbl is not None:
+            self._suggested_lbl.setText(
+                f"{n_tasks} decoder(s) evaluated · suggested timepoint = "
+                f"{suggested_ms:.0f} ms · average peak AUC = {avg_peak:.3f}"
+            )
+
+        # Drop any per-decoder tabs left over from a previous run; the
+        # Summary tab (index 0) stays put.
+        assert self._tabs is not None
+        for name, tab in list(self._per_decoder_tabs.items()):
+            idx = self._tabs.indexOf(tab)
+            if idx >= 0:
+                self._tabs.removeTab(idx)
+            tab.deleteLater()
+        self._per_decoder_tabs.clear()
+
+        for task_name in result.get("tasks", {}):
+            tab = self._build_decoder_tab(task_name)
+            self._per_decoder_tabs[task_name] = tab
+            self._tabs.addTab(tab, task_name)
 
     # ── page builders ────────────────────────────────────────────────────────
 
@@ -230,59 +250,116 @@ class EvaluationView(QWidget):
         return page
 
     def _build_results_page(self) -> QWidget:
-        """Step 1 placeholder — replaced in Step 2 with the QTabWidget."""
+        """Step 2: QTabWidget skeleton with Summary tab in place.
+
+        The per-decoder tabs are added dynamically in ``_populate_results``
+        once we know the task names from the eval result. Each placeholder
+        is a dashed-border QLabel sitting in the slot its real widget
+        (AUCChart / TGMChart / stats panel / decoder table) will occupy
+        in subsequent plan steps.
+        """
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(48, 32, 48, 32)
-        layout.setSpacing(0)
-        layout.addStretch()
+        layout.setContentsMargins(24, 18, 24, 18)
+        layout.setSpacing(10)
 
-        center = QVBoxLayout()
-        center.setSpacing(0)
-        center.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        title = QLabel("Evaluation Complete")
-        f = title.font()
-        f.setPointSize(18)
-        f.setWeight(QFont.Weight.Medium)
-        title.setFont(f)
-        title.setStyleSheet(f"color: {TEXT_PRIMARY};")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        center.addWidget(title)
-        center.addSpacing(16)
-
-        card = QFrame()
-        card.setFixedWidth(480)
-        card.setStyleSheet(
-            f"QFrame {{ background: {CARD_WHITE}; border: 1px solid {BORDER_GRAY}; "
-            f"border-radius: 6px; }}"
+        # One-line header above the tabs — populated in _populate_results.
+        self._suggested_lbl = QLabel("—")
+        self._suggested_lbl.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-size: 12px;"
         )
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(24, 18, 24, 18)
-        self._summary_value = QLabel("—")
-        self._summary_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._summary_value.setStyleSheet(
-            f"color: {TEXT_PRIMARY}; font-size: 13px; background: transparent; "
-            f"border: none;"
-        )
-        card_layout.addWidget(self._summary_value)
-        center.addWidget(card, 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(self._suggested_lbl)
 
-        center.addSpacing(16)
-        hint = QLabel(
-            "Charts + timepoint selector arrive in the next plan steps. "
-            "For now, click \"Approve && Continue\" to advance with the "
-            "suggested timepoint."
-        )
-        hint.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
-        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hint.setWordWrap(True)
-        hint.setFixedWidth(440)
-        center.addWidget(hint, 0, Qt.AlignmentFlag.AlignHCenter)
-
-        layout.addLayout(center)
-        layout.addStretch()
+        self._tabs = QTabWidget()
+        self._tabs.setDocumentMode(True)
+        self._tabs.addTab(self._build_summary_tab(), "Summary")
+        layout.addWidget(self._tabs, 1)
         return page
+
+    def _build_summary_tab(self) -> QWidget:
+        """Summary tab skeleton: chart slot + stats slot on top, table below."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        top = QHBoxLayout()
+        top.setSpacing(12)
+        top.addWidget(
+            self._make_placeholder(
+                "AUC chart goes here\n(one coloured line per decoder; "
+                "click a timepoint to select)",
+                min_h=320,
+            ),
+            1,
+        )
+        stats = self._make_placeholder(
+            "Stats panel\n· selected time\n· per-decoder AUC\n"
+            "· average AUC\n· Reset to suggested",
+            min_h=320,
+        )
+        stats.setFixedWidth(220)
+        top.addWidget(stats, 0)
+        layout.addLayout(top)
+
+        layout.addWidget(
+            self._make_placeholder(
+                "Decoder summary table goes here\n"
+                "(Decoder · Positive · Negative · Peak AUC · Peak (ms) "
+                "— click a row to jump to that decoder's tab)",
+                min_h=160,
+            )
+        )
+        return tab
+
+    def _build_decoder_tab(self, task_name: str) -> QWidget:
+        """Per-decoder tab skeleton: header chip row + AUC + TGM slots."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        header = QLabel(f"Decoder: {task_name}")
+        f = header.font()
+        f.setPointSize(12)
+        f.setWeight(QFont.Weight.DemiBold)
+        header.setFont(f)
+        header.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        layout.addWidget(header)
+
+        charts = QHBoxLayout()
+        charts.setSpacing(12)
+        charts.addWidget(
+            self._make_placeholder(
+                "AUC chart goes here\n(single decoder)",
+                min_h=320,
+            ),
+            1,
+        )
+        charts.addWidget(
+            self._make_placeholder(
+                "TGM heatmap goes here\n(Train time × Test time, "
+                "crosshair at selected timepoint)",
+                min_h=320,
+            ),
+            1,
+        )
+        layout.addLayout(charts)
+        return tab
+
+    @staticmethod
+    def _make_placeholder(text: str, min_h: int = 200) -> QLabel:
+        """Dashed-border slot label. Replaced by real widgets in Steps 3–6."""
+        lbl = QLabel(text)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl.setWordWrap(True)
+        lbl.setMinimumHeight(min_h)
+        lbl.setStyleSheet(
+            f"QLabel {{ border: 1px dashed {BORDER_GRAY}; "
+            f"background: #FAFAFA; color: {TEXT_MUTED}; "
+            f"padding: 18px; font-size: 12px; }}"
+        )
+        return lbl
 
     # ── ready gating ─────────────────────────────────────────────────────────
 
