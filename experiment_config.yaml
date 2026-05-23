@@ -4,25 +4,47 @@ experiment_info:
 random_state: 42
 
 preprocessing:
-  bandpass:
+  # Where to place LPF + decimation in the pipeline.
+  #   "early" → on raw before ICA (faster ICA, paper-aligned)
+  #   "late"  → on epochs after ICA (reference order, ICA on full-rate data)
+  resample_filter_stage: early   # the A/B comparison toggles this
+
+  channel_hygiene:
+    drop_emg: true
+    rename_hegoc_to_heog: true
+    montage_name: easycap-M1
+    afz_case_fix: true
+
+  highpass:
     l_freq: 0.1
-    h_freq: 40.0
-    method: iir
-    notch: 50.0
-  resample:
-    target_rate: 256
-  reject_criteria:
-    hard_amplitude: 1.5e-4   # hard pre-filter before AutoReject (V)
-    flat_threshold: 0.5e-6   # channel std below this → flat (V)
-    noisy_z_score: 3.0       # channel std z-score above this → noisy
+    method: iir          # IIR keeps offline/online causal parity
+
+  notch:
+    freq: 50.0           # null disables the notch filter
+
   ica:
-    n_components: 25
-    method: fastica
-    fit_l_freq: 1.0
+    method: infomax
+    extended: true
+    n_components: null    # let MNE/infomax decide (rank = n_electrodes - 1 after avg ref)
+    fit_l_freq: 1.0       # HP-only ICA fit copy; no LPF on the fit copy
+    iclabel:
+      enabled: true
+      # Canonical mne-icalabel strings (with spaces). "other" is the
+      # low-confidence catch-all — deliberately omitted so the operator
+      # decides on those manually in the topomap review window.
+      drop_labels: ["muscle artifact", "eye blink", "heart beat", "line noise", "channel noise"]
+
   epochs:
     tmin: -0.2
     tmax: 1.0
-    baseline: [null, 0]   # null = start of epoch
+    baseline: null        # paper-aligned; set to [null, 0] to re-enable pre-stim mean subtraction
+
+  lowpass:
+    h_freq: 40.0          # paper-aligned LP for 100 Hz target sfreq
+    method: iir
+
+  final_resample:
+    target_rate: 100      # paper-aligned training rate
 
 decoders:
   model: LDA          # LDA | Logistic | SVM

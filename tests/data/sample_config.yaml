@@ -4,25 +4,41 @@ experiment_info:
 random_state: 42
 
 preprocessing:
-  bandpass:
+  resample_filter_stage: early
+
+  channel_hygiene:
+    drop_emg: true
+    rename_hegoc_to_heog: true
+    montage_name: easycap-M1
+    afz_case_fix: true
+
+  highpass:
     l_freq: 1.0
-    h_freq: 40.0
     method: iir
-    notch: 50.0
-  resample:
-    target_rate: 250
-  reject_criteria:
-    hard_amplitude: 1.5e-4
-    flat_threshold: 0.5e-6
-    noisy_z_score: 3.0
+
+  notch:
+    freq: 50.0
+
   ica:
+    method: infomax
+    extended: true
     n_components: 20
-    method: fastica
     fit_l_freq: 1.0
+    iclabel:
+      enabled: true
+      drop_labels: ["muscle artifact", "eye blink", "heart beat", "line noise", "channel noise"]
+
   epochs:
     tmin: -0.2
     tmax: 1.0
     baseline: [null, 0]
+
+  lowpass:
+    h_freq: 40.0
+    method: iir
+
+  final_resample:
+    target_rate: 100
 
 decoders:
   model: LDA

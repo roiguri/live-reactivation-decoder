@@ -110,6 +110,7 @@ class ModelEvaluator:
         scores = cross_val_multiscore(estimator, X, y, cv=cv, n_jobs=1)
         return np.mean(scores, axis=0)
 
+    # Consider correct way of computing suggested - should probably be average peak.
     def _compute_suggested_idx(self, task_results: dict[str, Any]) -> int:
         """Return the time index where the mean diagonal AUC across tasks peaks."""
         diagonals = np.stack([v["diagonal_auc"] for v in task_results.values()])

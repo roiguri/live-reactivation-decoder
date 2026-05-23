@@ -30,7 +30,7 @@ class FakePreprocessor:
     def __init__(self, preprocessing_settings, online_state) -> None:
         self.preprocessing_settings = preprocessing_settings
         self.online_state = online_state
-        self.target_sfreq = preprocessing_settings["resample"]["target_rate"]
+        self.target_sfreq = preprocessing_settings["final_resample"]["target_rate"]
         FakePreprocessor.instances.append(self)
 
 

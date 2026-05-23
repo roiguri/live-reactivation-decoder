@@ -142,49 +142,74 @@ class SettingsView(QWidget):
         rs_row.addStretch()
         card.body.addLayout(rs_row)
 
-        # Bandpass: header row + indented sub-rows (Method, Notch)
-        bp_row = QHBoxLayout()
-        bp_row.setSpacing(6)
-        bp_row.addWidget(self._field_label("Bandpass"))
-        self._l_freq = ReadOnlyField("", field_width=72)
-        self._h_freq = ReadOnlyField("", field_width=72)
-        bp_row.addWidget(self._l_freq)
-        bp_row.addWidget(QLabel("to"))
-        bp_row.addWidget(self._h_freq)
-        bp_row.addWidget(self._dim_label("Hz"))
-        bp_row.addStretch()
-        card.body.addLayout(bp_row)
+        # Resample/filter stage (early | late)
+        stage_row = QHBoxLayout()
+        stage_row.setSpacing(6)
+        stage_row.addWidget(self._field_label("Filter Stage"))
+        self._stage_field = ReadOnlyField("", field_width=96)
+        stage_row.addWidget(self._stage_field)
+        stage_row.addStretch()
+        card.body.addLayout(stage_row)
 
-        bp_method_row = QHBoxLayout()
-        bp_method_row.setSpacing(6)
-        bp_method_row.addSpacing(110)
-        bp_method_row.addWidget(self._sub_label("Method:"))
-        self._bp_method_field = ReadOnlyField("", field_width=96)
-        bp_method_row.addWidget(self._bp_method_field)
-        bp_method_row.addStretch()
-        card.body.addLayout(bp_method_row)
+        # Highpass: l_freq Hz + Method sub-row
+        hp_row = QHBoxLayout()
+        hp_row.setSpacing(6)
+        hp_row.addWidget(self._field_label("Highpass"))
+        self._hp_l_freq = ReadOnlyField("", field_width=72)
+        hp_row.addWidget(self._hp_l_freq)
+        hp_row.addWidget(self._dim_label("Hz"))
+        hp_row.addStretch()
+        card.body.addLayout(hp_row)
 
+        hp_method_row = QHBoxLayout()
+        hp_method_row.setSpacing(6)
+        hp_method_row.addSpacing(110)
+        hp_method_row.addWidget(self._sub_label("Method:"))
+        self._hp_method_field = ReadOnlyField("", field_width=96)
+        hp_method_row.addWidget(self._hp_method_field)
+        hp_method_row.addStretch()
+        card.body.addLayout(hp_method_row)
+
+        # Lowpass: h_freq Hz + Method sub-row
+        lp_row = QHBoxLayout()
+        lp_row.setSpacing(6)
+        lp_row.addWidget(self._field_label("Lowpass"))
+        self._lp_h_freq = ReadOnlyField("", field_width=72)
+        lp_row.addWidget(self._lp_h_freq)
+        lp_row.addWidget(self._dim_label("Hz"))
+        lp_row.addStretch()
+        card.body.addLayout(lp_row)
+
+        lp_method_row = QHBoxLayout()
+        lp_method_row.setSpacing(6)
+        lp_method_row.addSpacing(110)
+        lp_method_row.addWidget(self._sub_label("Method:"))
+        self._lp_method_field = ReadOnlyField("", field_width=96)
+        lp_method_row.addWidget(self._lp_method_field)
+        lp_method_row.addStretch()
+        card.body.addLayout(lp_method_row)
+
+        # Notch: freq Hz
         notch_row = QHBoxLayout()
         notch_row.setSpacing(6)
-        notch_row.addSpacing(110)
-        notch_row.addWidget(self._sub_label("Notch:"))
+        notch_row.addWidget(self._field_label("Notch"))
         self._notch_field = ReadOnlyField("", field_width=96)
         notch_row.addWidget(self._notch_field)
         notch_row.addWidget(self._dim_label("Hz"))
         notch_row.addStretch()
         card.body.addLayout(notch_row)
 
-        # Resample: [target_rate] Hz
+        # Final resample: target_rate Hz
         r2 = QHBoxLayout()
         r2.setSpacing(6)
-        r2.addWidget(self._field_label("Resample"))
-        self._resample = ReadOnlyField("", field_width=88)
-        r2.addWidget(self._resample)
+        r2.addWidget(self._field_label("Final Resample"))
+        self._final_rate_field = ReadOnlyField("", field_width=88)
+        r2.addWidget(self._final_rate_field)
         r2.addWidget(self._dim_label("Hz"))
         r2.addStretch()
         card.body.addLayout(r2)
 
-        # ICA: header row + indented sub-rows (Method, Fit L Freq) — no seed
+        # ICA: components header + Method / Extended / Fit L Freq / ICLabel
         ica_row = QHBoxLayout()
         ica_row.setSpacing(6)
         ica_row.addWidget(self._field_label("ICA"))
@@ -203,6 +228,15 @@ class SettingsView(QWidget):
         ica_method_row.addStretch()
         card.body.addLayout(ica_method_row)
 
+        ica_ext_row = QHBoxLayout()
+        ica_ext_row.setSpacing(6)
+        ica_ext_row.addSpacing(110)
+        ica_ext_row.addWidget(self._sub_label("Extended:"))
+        self._ica_extended_field = ReadOnlyField("", field_width=96)
+        ica_ext_row.addWidget(self._ica_extended_field)
+        ica_ext_row.addStretch()
+        card.body.addLayout(ica_ext_row)
+
         ica_fit_row = QHBoxLayout()
         ica_fit_row.setSpacing(6)
         ica_fit_row.addSpacing(110)
@@ -213,34 +247,23 @@ class SettingsView(QWidget):
         ica_fit_row.addStretch()
         card.body.addLayout(ica_fit_row)
 
-        # Reject Criteria: header (hard_amplitude) + indented sub-rows
-        rc_row = QHBoxLayout()
-        rc_row.setSpacing(6)
-        rc_row.addWidget(self._field_label("Reject Criteria"))
-        self._reject_hard_amp_field = ReadOnlyField("", field_width=110)
-        rc_row.addWidget(self._reject_hard_amp_field)
-        rc_row.addWidget(self._dim_label("V"))
-        rc_row.addStretch()
-        card.body.addLayout(rc_row)
+        iclabel_row = QHBoxLayout()
+        iclabel_row.setSpacing(6)
+        iclabel_row.addSpacing(110)
+        iclabel_row.addWidget(self._sub_label("ICLabel:"))
+        self._iclabel_field = ReadOnlyField("", field_width=240)
+        iclabel_row.addWidget(self._iclabel_field)
+        iclabel_row.addStretch()
+        card.body.addLayout(iclabel_row)
 
-        flat_row = QHBoxLayout()
-        flat_row.setSpacing(6)
-        flat_row.addSpacing(110)
-        flat_row.addWidget(self._sub_label("Flat Threshold:"))
-        self._reject_flat_field = ReadOnlyField("", field_width=110)
-        flat_row.addWidget(self._reject_flat_field)
-        flat_row.addWidget(self._dim_label("V"))
-        flat_row.addStretch()
-        card.body.addLayout(flat_row)
-
-        noisy_row = QHBoxLayout()
-        noisy_row.setSpacing(6)
-        noisy_row.addSpacing(110)
-        noisy_row.addWidget(self._sub_label("Noisy Z-Score:"))
-        self._reject_noisy_field = ReadOnlyField("", field_width=80)
-        noisy_row.addWidget(self._reject_noisy_field)
-        noisy_row.addStretch()
-        card.body.addLayout(noisy_row)
+        # Channel hygiene summary
+        hyg_row = QHBoxLayout()
+        hyg_row.setSpacing(6)
+        hyg_row.addWidget(self._field_label("Channel Hygiene"))
+        self._hygiene_field = ReadOnlyField("", field_width=300)
+        hyg_row.addWidget(self._hygiene_field)
+        hyg_row.addStretch()
+        card.body.addLayout(hyg_row)
 
         # Epoch Size: header (tmin → tmax) + Baseline sub-row
         ep_row = QHBoxLayout()
@@ -427,17 +450,19 @@ class SettingsView(QWidget):
         if settings is None:
             self._preproc_seed_field.set_value(None)
             self._decoder_seed_field.set_value(None)
-            self._l_freq.set_value(None)
-            self._h_freq.set_value(None)
-            self._bp_method_field.set_value(None)
+            self._stage_field.set_value(None)
+            self._hp_l_freq.set_value(None)
+            self._hp_method_field.set_value(None)
+            self._lp_h_freq.set_value(None)
+            self._lp_method_field.set_value(None)
             self._notch_field.set_value(None)
-            self._resample.set_value(None)
+            self._final_rate_field.set_value(None)
             self._ica_n.set_value(None)
             self._ica_method_field.set_value(None)
+            self._ica_extended_field.set_value(None)
             self._ica_fit_l_freq_field.set_value(None)
-            self._reject_hard_amp_field.set_value(None)
-            self._reject_flat_field.set_value(None)
-            self._reject_noisy_field.set_value(None)
+            self._iclabel_field.set_value(None)
+            self._hygiene_field.set_value(None)
             self._tmin.set_value(None)
             self._tmax.set_value(None)
             self._baseline_lo_field.set_value(None)
@@ -461,35 +486,60 @@ class SettingsView(QWidget):
         self._preproc_seed_field.set_value(pre["random_state"])
         self._decoder_seed_field.set_value(dec["random_state"])
 
-        bp = pre["bandpass"]
-        self._l_freq.set_value(bp["l_freq"])
-        self._h_freq.set_value(bp["h_freq"])
-        self._bp_method_field.set_value(bp["method"])
-        notch_val = bp.get("notch")
-        self._notch_field.set_value(notch_val)  # None → "—"
+        self._stage_field.set_value(pre["resample_filter_stage"])
 
-        self._resample.set_value(pre["resample"]["target_rate"])
+        hp = pre["highpass"]
+        self._hp_l_freq.set_value(hp["l_freq"])
+        self._hp_method_field.set_value(hp["method"])
+
+        lp = pre["lowpass"]
+        self._lp_h_freq.set_value(lp["h_freq"])
+        self._lp_method_field.set_value(lp["method"])
+
+        self._notch_field.set_value(pre["notch"].get("freq"))  # None → "—"
+        self._final_rate_field.set_value(pre["final_resample"]["target_rate"])
 
         ica = pre["ica"]
-        self._ica_n.set_value(ica["n_components"])
+        self._ica_n.set_value(
+            "auto" if ica.get("n_components") is None else ica["n_components"]
+        )
         self._ica_method_field.set_value(ica["method"])
+        self._ica_extended_field.set_value("yes" if ica.get("extended") else "no")
         self._ica_fit_l_freq_field.set_value(ica["fit_l_freq"])
+        iclabel = ica.get("iclabel", {})
+        if iclabel.get("enabled"):
+            self._iclabel_field.set_value(
+                ", ".join(iclabel.get("drop_labels", [])) or "—"
+            )
+        else:
+            self._iclabel_field.set_value("disabled")
 
-        rc = pre["reject_criteria"]
-        self._reject_hard_amp_field.set_value(f"{rc['hard_amplitude']:.2e}")
-        self._reject_flat_field.set_value(f"{rc['flat_threshold']:.2e}")
-        self._reject_noisy_field.set_value(rc["noisy_z_score"])
+        ch = pre["channel_hygiene"]
+        hyg_parts = []
+        if ch.get("drop_emg"):
+            hyg_parts.append("drop EMG")
+        if ch.get("rename_hegoc_to_heog"):
+            hyg_parts.append("HEGOC→HEOG")
+        hyg_parts.append(f"montage {ch.get('montage_name')}")
+        if ch.get("afz_case_fix"):
+            hyg_parts.append("AFz fix")
+        self._hygiene_field.set_value(", ".join(hyg_parts))
 
         ep = pre["epochs"]
         self._tmin.set_value(ep["tmin"])
         self._tmax.set_value(ep["tmax"])
         baseline = ep["baseline"]
-        self._baseline_lo_field.set_value(
-            "start" if baseline[0] is None else baseline[0]
-        )
-        self._baseline_hi_field.set_value(
-            "end" if baseline[1] is None else baseline[1]
-        )
+        if baseline is None:
+            # Paper-aligned: baseline correction omitted entirely.
+            self._baseline_lo_field.set_value("off")
+            self._baseline_hi_field.set_value("off")
+        else:
+            self._baseline_lo_field.set_value(
+                "start" if baseline[0] is None else baseline[0]
+            )
+            self._baseline_hi_field.set_value(
+                "end" if baseline[1] is None else baseline[1]
+            )
 
         # Annotations table
         _clear_layout(self._annot_layout)

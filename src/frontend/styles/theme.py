@@ -9,6 +9,25 @@ ALERT_RED          = "#C41E3A"
 AMBER              = "#B45309"
 BORDER_GRAY        = "#E5E7EB"
 
+# AUC-chart line palette. Chosen to avoid the obvious red/green/blue/yellow
+# tones so a decoder named ``red decoder`` doesn't get a red line and confuse
+# the colour ↔ name mapping (the legend explicitly bridges the two). No
+# blues — those are reserved for the suggested/selected vertical markers
+# (PRIMARY_BLUE) so the operator's chosen timepoint stays unambiguous.
+CHART_LINE_COLORS = [
+    "#7C3AED",  # purple
+    "#F97316",  # orange
+    "#10B981",  # emerald
+    "#DB2777",  # magenta
+    "#A855F7",  # violet
+    "#A16207",  # bronze
+]
+
+
+def chart_line_color(index: int) -> str:
+    """Cycle the chart palette so >6 decoders still get distinct lines."""
+    return CHART_LINE_COLORS[index % len(CHART_LINE_COLORS)]
+
 def build_app_palette():
     from PyQt6.QtGui import QPalette, QColor
     p = QPalette()
@@ -55,5 +74,42 @@ QPushButton[class="secondary"]:hover {{
 QPushButton[class="secondary"]:disabled {{
     background-color: #D1D5DB;
     color: {TEXT_MUTED};
+}}
+
+/* Flat underline-style tabs (matches the React design demo). */
+QTabWidget::pane {{
+    border: none;
+    background: transparent;
+}}
+QTabBar {{
+    /* Removes the 1-px baseline Qt draws under the tab strip in
+       document-mode — otherwise a faint line floats above the
+       Summary/decoder tab content. */
+    qproperty-drawBase: 0;
+    background: transparent;
+    border: none;
+}}
+QTabBar::tab {{
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 8px 16px;
+    color: {TEXT_MUTED};
+    font-size: 12px;
+    font-weight: 600;
+}}
+QTabBar::tab:selected {{
+    color: {PRIMARY_BLUE};
+    border-bottom: 2px solid {PRIMARY_BLUE};
+}}
+QTabBar::tab:!selected:hover {{
+    color: {TEXT_PRIMARY};
+}}
+/* Visually divide the Summary tab from the per-decoder tabs. The
+   Summary tab is always first; uppercasing it + adding a right border
+   makes it read as a section heading rather than a sibling decoder. */
+QTabBar::tab:first {{
+    border-right: 1px solid {BORDER_GRAY};
+    letter-spacing: 0.6px;
 }}
 """

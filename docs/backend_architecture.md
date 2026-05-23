@@ -18,7 +18,7 @@ Last reconciled with code on **2026-05-10**.
 
 **Offline phase implementation status (as of last reconciliation):**
 - ✅ `SettingsManager` + Pydantic config models (`src/backend/core/`)
-- ✅ `OfflinePreprocessor` (`src/backend/offline_phase/preprocessor.py`) — accepts a pre-loaded `mne.io.Raw` via constructor; two-step pipeline: `run_step1_prepare_ica()` and `run_step2_finish_pipeline()`
+- ✅ `OfflinePreprocessor` (`src/backend/offline_phase/preprocessor.py`) — accepts a pre-loaded `mne.io.Raw` via constructor; **new reference pipeline** (see `docs/Preprocessing_Migration_Plan.md`): four operator-gated steps `run_step1a_filter()` / `set_bad_channels()` / `run_step1b_fit_ica()` / `run_step2_apply_and_save()`. Channel hygiene → HP → notch → (early: LP+resample) → interpolate bads → epoch → average ref → ICA (infomax+extended, HP-only fit copy) → ICLabel suggest → apply → (late: LP+resample) → save. No AutoReject. `export_online_state()` is fully positional (`eeg_chunk_indices`, `bad_indices`; no channel names) and is consumed directly by the migrated `OnlinePreprocessor`.
 - ✅ `ModelEvaluator` (`src/backend/offline_phase/evaluator.py`)
 - ✅ `ModelTrainer` (`src/backend/offline_phase/trainer.py`)
 - ✅ Shared utilities (`src/backend/offline_phase/utils.py`) — `build_classifier`, `get_task_data`
@@ -43,9 +43,9 @@ Because EEG processing and live inference are computationally demanding, mixing 
 
 1. UI initializes `SettingsManager` and `OfflineOrchestrator`.
 2. UI calls `orchestrator.set_file_path(data_dir)` then `orchestrator.load_raw_data()` to load the EEG file from disk.
-3. UI calls `orchestrator.run_step1_prepare_ica()`. Internally creates `OfflinePreprocessor` (with raw injected) and delegates. Returns ICA object and auto-suggested artifact components.
-4. UI presents ICA components. The researcher selects which to drop.
-5. UI calls `orchestrator.run_step2_finish_pipeline(exclude_components)`. Preprocessor finishes; orchestrator stores `epochs` internally.
+3. UI calls `orchestrator.run_step1a_filter()` (creates `OfflinePreprocessor` with raw injected). Returns the filtered `Raw`; the UI pops `raw.plot(block=True)` on the main thread for manual bad-channel marking.
+4. UI calls `orchestrator.set_bad_channels(raw.info["bads"])`, then `orchestrator.run_step1b_fit_ica()`. Returns `(ica, epochs, suggested)`; the UI pops `ica.plot_sources(epochs, block=True)` (suggestions pre-filled by ICLabel).
+5. UI calls `orchestrator.run_step2_apply_and_save(exclude_components)`. Preprocessor applies ICA, finishes, and saves; orchestrator stores `epochs` internally.
 6. UI calls `orchestrator.run_evaluation()`. Internally calls `ModelEvaluator`. Returns AUC/TGM arrays for plotting.
 7. The researcher clicks a specific timepoint on the graph.
 8. UI calls `orchestrator.run_training(timepoint)`. Internally calls `ModelTrainer`, bundles models with preprocessor's `online_state`, and saves `decoder_pipeline.joblib`. Returns spatial patterns and `mne.Info` for topomap display.
@@ -69,11 +69,11 @@ Because EEG processing and live inference are computationally demanding, mixing 
 
 #### **3. OfflinePreprocessor**
 
-* **Role:** The Heavy Cleaner. Loads continuous data, applies zero-phase filters, calculates ICA, and epochs the data. Crucially, it records exactly what it did (the online_state) so Phase 2 can replicate the spatial transforms.
+* **Role:** The Heavy Cleaner. Channel hygiene, causal IIR filters, ICA on cleaned epochs, and the two manual selections (bad channels, ICA components) gated for MNE's interactive windows. Records the fitted spatial state positionally so Phase 2 can replicate it.
 
-* **Inputs:** Pre-loaded `mne.io.Raw` object (via constructor), preprocessing settings. File I/O is the caller's responsibility (`OfflineOrchestrator._load_eeg_raw()`).
+* **Inputs:** Pre-loaded `mne.io.Raw` object (via constructor), preprocessing settings. File I/O is the caller's responsibility (`OfflineOrchestrator._load_eeg_raw()` — read BrainVision with native `.vmrk` markers + keep EEG only; montage/EMG hygiene is the preprocessor's job).
 
-* **Outputs:** Cleaned mne.Epochs and online_state (ICA weights, dropped channels).
+* **Outputs:** Cleaned `mne.Epochs` at the configured `final_resample.target_rate`, and a positional `online_state` (`eeg_chunk_indices`, `bad_indices`, ICA matrices, `pre_whitener` — no channel names).
 
 #### **4. ModelEvaluator**
 
@@ -106,40 +106,33 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-class BandpassSettings(BaseModel):
-    """
-    Validated bandpass/notch configuration for preprocessing.
-    Contract: l_freq must remain below h_freq.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    l_freq: float = Field(default=0.1, gt=0)
-    h_freq: float = 40.0
-    method: Literal["iir", "fir"] = "iir"
-    notch: Optional[float] = 50.0
-
-
-class ResampleSettings(BaseModel):
-    """
-    Target sample rate for Phase 1 outputs and Phase 2 model-facing features.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    target_rate: int = Field(default=256, ge=1)
+# NOTE: src/backend/core/config_models.py is the source of truth. The
+# preprocessing schema was migrated to the new reference (see
+# docs/Preprocessing_Migration_Plan.md). PreprocessingSettings now holds:
+#   resample_filter_stage: Literal["early", "late"] = "early"
+#   channel_hygiene: ChannelHygieneSettings   # drop_emg, rename_hegoc_to_heog,
+#                                              # montage_name, afz_case_fix
+#   highpass: HighpassSettings                # l_freq, method
+#   notch:    NotchSettings                   # freq (Optional → null disables)
+#   ica:      ICASettings                     # method=infomax, extended=True,
+#                                              # n_components: Optional[int]=None,
+#                                              # fit_l_freq, iclabel{enabled,drop_labels}
+#   epochs:   EpochSettings                   # tmin, tmax,
+#                                              # baseline: Optional[(lo,hi)]=None
+#   lowpass:  LowpassSettings                 # h_freq, method
+#   final_resample: FinalResampleSettings     # target_rate (default 100)
+# BandpassSettings / ResampleSettings / RejectCriteriaSettings were removed.
 
 
 class ICASettings(BaseModel):
-    """
-    ICA fitting configuration used during Phase 1 preprocessing.
-    """
+    """ICA fitting configuration used during Phase 1 preprocessing."""
 
     model_config = ConfigDict(extra="forbid")
 
-    n_components: int = Field(default=25, ge=1)
-    method: Literal["fastica", "infomax", "picard"] = "fastica"
-    fit_l_freq: float = Field(default=1.0, gt=0)  # HP freq for the ICA fitting copy
+    method: Literal["infomax", "picard", "fastica"] = "infomax"
+    extended: bool = True
+    n_components: Optional[int] = Field(default=None, ge=1)  # None → MNE decides
+    fit_l_freq: float = Field(default=1.0, gt=0)  # HP-only ICA fit copy
 
 
 class EpochSettings(BaseModel):
@@ -412,10 +405,8 @@ class OfflinePreprocessor:
     def _epoch(self, event_mapping: Dict[int, str]) -> mne.Epochs:
         """
         Extracts events from ``raw.annotations`` (BrainVision-style
-        ``Stimulus/S<code>`` descriptions). For BindingDecoding recordings,
-        those annotations are injected by ``trigger_decoder.decode_parallel_port_channel``
-        during ``OfflineOrchestrator._load_eeg_raw`` rather than parsed from
-        ``.vmrk`` — see ``knowledge_base/02_reference/parallel_port_trigger_decoding.md``.
+        ``Stimulus/S<code>`` descriptions) loaded natively from the ``.vmrk``
+        by ``mne.io.read_raw_brainvision``.
 
         Inverts the shared ID→name mapping into the form required by MNE if needed.
         Slices the data around the triggers defined in the shared settings,
@@ -569,17 +560,43 @@ class OfflineOrchestrator:
 
     def load_raw_data(self) -> None:
         """
-        Load the raw EEG file from disk. Also decodes parallel-port triggers
-        from the analog "EMG" channel into ``raw.annotations`` and drops the
-        trigger channel (and other non-EEG/EOG/ECG channels) before returning.
-        See ``knowledge_base/02_reference/parallel_port_trigger_decoding.md``
-        for the rationale and the decoder algorithm.
+        Load the raw EEG file from disk. Stimulus markers are read natively
+        from the ``.vmrk`` by ``mne.io.read_raw_brainvision``; non-EEG
+        channels (EOG/ECG/stim/misc) are dropped before returning.
 
         Raises:
             ValueError: if set_file_path() has not been called.
             FileNotFoundError: if no .vhdr file exists in the data directory.
         """
         pass
+```
+
+#### Consideration: BrainVision header filename mismatch (data-side)
+
+Some BrainVision recordings in `data/new_experiment/` were observed with a
+`.vhdr` whose `DataFile=` / `MarkerFile=` (and the `.vmrk`'s `DataFile=`)
+reference a stem that no longer matches the on-disk filenames — for example
+`Bindingdecoding102.vhdr` internally points at `subject102.eeg` /
+`subject102.vmrk`, which do not exist (the real companions are
+`Bindingdecoding102.*`). `mne.io.read_raw_brainvision` follows those internal
+pointers and raises `FileNotFoundError`.
+
+**This is a data defect, not a pipeline bug.** The pipeline intentionally does
+not paper over it — `_load_eeg_raw` calls `mne.io.read_raw_brainvision`
+directly and surfaces the error.
+
+**Mitigation:** development and testing use the `test_set/` recordings, whose
+headers are consistent with their filenames; running the offline pipeline on
+those works as-is. Production recordings should be delivered with matching
+filenames/headers, or fixed up at the data source before being loaded (rename
+the triplet so the on-disk stem matches `DataFile=` / `MarkerFile=`, or edit
+those two lines in the `.vhdr` and the `DataFile=` line in the `.vmrk`).
+
+If this defect reappears at scale, revisit hardening `_load_eeg_raw` to
+tolerate it (e.g. load through a temp directory with corrected header copies
+and an `.eeg` symlink).
+
+```python
 
     def run_step1_prepare_ica(self) -> tuple[mne.preprocessing.ICA, list[int]]:
         """
@@ -758,8 +775,6 @@ the full artifact if the frontend needs an in-memory Phase 1 to Phase 2 handoff.
 * **Outputs:** `features` `(n_out, n_eeg_post_hygiene)` plus aligned output timestamps at `target_sfreq = 100 Hz`. `n_eeg_post_hygiene = len(eeg_chunk_indices)`.
 * **Pipeline:** see Data Flow above — variant-flagged (`resample_filter_stage: "early" | "late"`).
 * **Status:** ✅ Implemented in `src/backend/online_phase/online_preprocessor.py`.
-
-> **Note:** the detailed signature/docstring code block further down (line ~1100) is stale and tracks the pre-migration design (bandpass schema, `ch_names`/`bad_channels`, 256 Hz target). It will be rewritten as a follow-up. The current source of truth is the code itself.
 
 #### **3. LiveInferenceEngine (The Brain)**
 
@@ -1111,15 +1126,13 @@ class OnlinePreprocessor:
     """
     Stateful causal EEG preprocessor for the online phase.
 
-    Replicates the offline pipeline's spatial transforms using matrices
-    exported from Phase 1, applied to streaming micro-batches.
+    Consumes the positional online_state exported by Phase 1's
+    OfflinePreprocessor and applies the same spatial transforms to
+    streaming micro-batches. Pipeline order is variant-flagged by
+    settings["preprocessing"]["resample_filter_stage"]:
 
-    Pipeline order (mirrors offline):
-        1. Bandpass + notch filter (causal IIR, persistent zi)
-        2. Decimate to target rate (FIR anti-alias + phase tracking)
-        3. Interpolate bad channels (fixed weight matrix)
-        4. Average reference
-        5. Apply ICA (fixed unmixing/mixing matrices)
+      "early":  filter → lowpass → decimate → interp → avg_ref → ica
+      "late":   filter → interp → avg_ref → ica → lowpass → decimate
 
     Status: ✅ Implemented in src/backend/online_phase/online_preprocessor.py
     """
@@ -1133,20 +1146,23 @@ class OnlinePreprocessor:
         """
         Args:
             preprocessing_settings: Settings from YAML, unwrapped from PreprocessingSettings.
-                Required keys: bandpass.l_freq, bandpass.h_freq, bandpass.method,
-                bandpass.notch (may be None), resample.target_rate.
-            online_state: Exported Phase 1 state dict. Required keys:
-                bad_channels, interp_weights, ch_names, ica_unmixing, ica_mixing,
-                ica_pca_components, ica_pca_mean, ica_exclude, pre_whitener, sfreq_offline.
+                Required keys: highpass.l_freq, highpass.method, notch.freq
+                (may be None), lowpass.h_freq, lowpass.method,
+                final_resample.target_rate, resample_filter_stage.
+            online_state: Phase 1 positional state dict. Required keys:
+                eeg_chunk_indices, bad_indices, interp_weights, ica_unmixing,
+                ica_mixing, ica_pca_components, ica_pca_mean, ica_exclude,
+                pre_whitener. No channel names cross the LSL boundary.
             input_sfreq: LSL stream sample rate (default: 1000.0 Hz).
 
         Raises:
-            ValueError: If sfreq_offline does not match target_rate, or if
-                        ch_names and ICA matrix dimensions are inconsistent.
+            ValueError: If input_sfreq % target_rate != 0, if
+                eeg_chunk_indices is malformed, or if ICA matrix
+                dimensions are inconsistent with len(eeg_chunk_indices).
         """
 
     @property
-    def n_channels(self) -> int: ...
+    def n_channels(self) -> int: ...   # = len(online_state["eeg_chunk_indices"])
 
     @property
     def input_sfreq(self) -> float: ...
@@ -1163,15 +1179,21 @@ class OnlinePreprocessor:
         Apply the full online preprocessing pipeline to one micro-batch.
 
         Args:
-            eeg_batch: (n_samples, n_channels) at input_sfreq.
+            eeg_batch: (n_samples, raw_n_channels) straight from
+                LSLReceiver — post-trigger-split, pre-hygiene. The
+                eeg_chunk_indices slice picks the post-hygiene EEG
+                positions inside _apply_filter.
             timestamps: (n_samples,) LSL timestamps.
 
         Returns:
             Tuple of (features, output_timestamps) at target_sfreq.
-            features shape: (n_out, n_channels). n_out = 0 for very small batches.
+            features shape: (n_out, n_eeg_post_hygiene), where
+            n_eeg_post_hygiene == len(eeg_chunk_indices). n_out = 0
+            for very small batches.
 
         Raises:
             ValueError: If eeg_batch shape or timestamps length is wrong.
+            IndexError: If raw_n_channels <= max(eeg_chunk_indices).
         """
 
     def reset_state(self) -> None:

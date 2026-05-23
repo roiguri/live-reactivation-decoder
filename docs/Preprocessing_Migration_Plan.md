@@ -1,5 +1,21 @@
 # Migrate preprocessing to `tomer_preprocessing_new.py` reference
 
+> **Status (2026-05-23).** Both phases **done**.
+>
+> Offline scope: config schema (`config_models.py` + `experiment_config.yaml`),
+> `OfflinePreprocessor` (four-step API + new pipeline order), `OfflineOrchestrator`,
+> and the frontend (settings + preprocessing screens, MNE interactive windows,
+> `ica_component_card.py` deleted) are migrated, with `mne-icalabel` added and
+> `autoreject` removed.
+>
+> Online scope: `OnlinePreprocessor` consumes the positional online_state
+> (`eeg_chunk_indices`, `bad_indices`, ICA matrices, interp weights, pre_whitener
+> — no channel names) directly, with filter/lowpass/decimate stages variant-flagged
+> by `resample_filter_stage`. The offline↔online numerical-parity tests in
+> `tests/online_phase/test_online_preprocessor.py::TestApplyICA` and
+> `::TestIntegration` are active. The 10 `test_stream_worker.py` errors remain a
+> pre-existing missing-`qtbot` environment issue, unrelated.
+
 ## Context
 
 The pipeline in [../src/backend/offline_phase/preprocessor.py](../src/backend/offline_phase/preprocessor.py) and its causal mirror in [../src/backend/online_phase/online_preprocessor.py](../src/backend/online_phase/online_preprocessor.py) were modelled on an **outdated** reference. The current reference of record is [../../knowledge_base/02_reference/tomer_preprocessing_new.py](../../knowledge_base/02_reference/tomer_preprocessing_new.py), with its ICA helper [../../knowledge_base/02_reference/ica_handler.py](../../knowledge_base/02_reference/ica_handler.py).
@@ -129,7 +145,7 @@ preprocessing:
     # No fit_h_freq — ICA fit copy is HP-only per instructor.
     iclabel:
       enabled: true
-      drop_labels: [muscle, eye, heart, line_noise, channel_noise, other]
+      drop_labels: ["muscle artifact", "eye blink", "heart beat", "line noise", "channel noise"]
 
   epochs:
     tmin: -0.2
