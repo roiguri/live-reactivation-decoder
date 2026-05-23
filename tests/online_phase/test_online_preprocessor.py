@@ -79,44 +79,27 @@ def _make_settings(
     }
 
 
-def _adapt_offline_state_to_positional(state: dict) -> dict:
-    """Translate Roi's current name-based offline export into the new positional
-    schema OnlinePreprocessor now expects.
-
-    Temporary bridge until Roi's offline-side migration lands. Once Roi's
-    export_online_state() emits eeg_chunk_indices + bad_indices directly,
-    this helper goes away.
-    """
-    ch_names = list(state["ch_names"])
-    bad_indices = [ch_names.index(name) for name in state.get("bad_channels", [])]
-    new_state = {
-        "eeg_chunk_indices": list(range(len(ch_names))),
-        "bad_indices": bad_indices,
-        "interp_weights": state["interp_weights"],
-        "ica_unmixing": state["ica_unmixing"],
-        "ica_mixing": state["ica_mixing"],
-        "ica_pca_components": state["ica_pca_components"],
-        "ica_pca_mean": state["ica_pca_mean"],
-        "ica_exclude": state["ica_exclude"],
-        "pre_whitener": state["pre_whitener"],
-    }
-    return new_state
-
-
 def _make_offline_settings(target_rate: int = TARGET_SFREQ) -> dict:
-    """Build preprocessing settings with the fields OfflinePreprocessor needs."""
-    return {
+    """Build preprocessing settings matching the new PreprocessingSettings schema.
+
+    Mirrors tests/offline_phase/conftest.py — fastica + 4 components, ICLabel
+    disabled, "early" resample/filter stage so epochs stay small.
+    """
+    from backend.core.config_models import PreprocessingSettings
+
+    overrides = {
         "random_state": 42,
-        "bandpass": {"l_freq": 1.0, "h_freq": 40.0, "method": "iir", "notch": 50.0},
-        "resample": {"target_rate": target_rate},
-        "reject_criteria": {
-            "hard_amplitude": 1e-3,
-            "flat_threshold": 0.5e-6,
-            "noisy_z_score": 3.0,
+        "resample_filter_stage": "early",
+        "ica": {
+            "method": "fastica",
+            "n_components": 4,
+            "fit_l_freq": 1.0,
+            "iclabel": {"enabled": False},
         },
-        "ica": {"n_components": 4, "method": "fastica", "fit_l_freq": 1.0},
         "epochs": {"tmin": -0.1, "tmax": 0.5, "baseline": [None, 0]},
+        "final_resample": {"target_rate": int(target_rate)},
     }
+    return PreprocessingSettings(**overrides).model_dump()
 
 
 @pytest.fixture
@@ -790,27 +773,38 @@ class TestApplyICA:
 
         np.testing.assert_allclose(data, expected, atol=1e-8)
 
-    @pytest.mark.skip(
-        reason="Offline↔online parity pending online-phase migration to the "
-        "new positional schema (see docs/Preprocessing_Migration_Plan.md). "
-        "OfflinePreprocessor now exports eeg_chunk_indices/bad_indices and "
-        "fits ICA on epochs; OnlinePreprocessor still expects the old "
-        "ch_names/bad_channels/sfreq_offline schema."
-    )
     def test_exported_offline_state_matches_mne_apply(self, tmp_path):
-        """Offline export_online_state() must contain enough ICA state for online parity."""
+        """Offline export_online_state() must contain enough ICA state for online parity.
+
+        Drives OfflinePreprocessor through to a fitted ICA, exports the
+        online_state via the production export path, then asserts that
+        OnlinePreprocessor._apply_ica matches mne.ICA.apply() to 1e-8.
+        Mirrors tests/offline_phase/test_preprocessor.py::TestStage8ExportOnlineState._full.
+        """
         from backend.offline_phase.preprocessor import OfflinePreprocessor
 
         raw = self._make_raw_for_ica()
+
         offline = OfflinePreprocessor(
             data_dir=tmp_path / "Sub_001",
             preprocessing_settings=_make_offline_settings(),
         )
         offline.raw = raw.copy()
+        offline._original_ch_names = list(offline.raw.ch_names)
+        offline._post_hygiene_eeg_names = [
+            offline.raw.ch_names[i]
+            for i in mne.pick_types(offline.raw.info, eeg=True)
+        ]
+        # Bypass the event-driven epocher — fixed-length epochs give ICA
+        # plenty of samples without needing annotations on the synthetic raw.
+        offline.epochs = mne.make_fixed_length_epochs(
+            offline.raw, duration=1.0, preload=True, verbose=False
+        )
+        offline._reference()
         offline._fit_ica()
         offline.ica.exclude = [0, 2]
 
-        state = _adapt_offline_state_to_positional(offline.export_online_state())
+        state = offline.export_online_state()
         online = OnlinePreprocessor(
             preprocessing_settings=_make_settings(),
             online_state=state,
@@ -1027,17 +1021,17 @@ class TestPublicAPI:
 
 # ── Commit 8: integration tests with real offline-exported state ───────────────
 
-@pytest.mark.skip(
-    reason="Offline↔online parity pending online-phase migration to the new "
-    "positional schema (see docs/Preprocessing_Migration_Plan.md). These "
-    "integration tests drive the real OfflinePreprocessor through removed "
-    "internals (_detect_bad_channels) and the old export schema."
-)
 class TestIntegration:
     """process_batch() called with state from OfflinePreprocessor.export_online_state()."""
 
-    def _build_offline_with_ica(self, tmp_path):
-        """Return (offline, raw) with ICA fitted on synthetic non-Gaussian data."""
+    def _build_offline_with_ica(self, tmp_path, bad_channels: list[str] | None = None):
+        """Return (offline, raw) with ICA fitted on synthetic non-Gaussian data.
+
+        Mirrors test_exported_offline_state_matches_mne_apply — drives the
+        offline preprocessor through enough of the new 4-step pipeline to
+        get a fitted ICA + valid online_state, without needing event
+        annotations on the synthetic raw.
+        """
         from backend.offline_phase.preprocessor import OfflinePreprocessor
 
         rng = np.random.default_rng(42)
@@ -1063,6 +1057,18 @@ class TestIntegration:
             preprocessing_settings=_make_offline_settings(),
         )
         offline.raw = raw.copy()
+        offline._original_ch_names = list(offline.raw.ch_names)
+        offline._post_hygiene_eeg_names = [
+            offline.raw.ch_names[i]
+            for i in mne.pick_types(offline.raw.info, eeg=True)
+        ]
+        if bad_channels:
+            offline.set_bad_channels(bad_channels)
+            offline._interpolate_bads()
+        offline.epochs = mne.make_fixed_length_epochs(
+            offline.raw, duration=1.0, preload=True, verbose=False
+        )
+        offline._reference()
         offline._fit_ica()
         offline.ica.exclude = [0]
         return offline, raw
@@ -1070,7 +1076,7 @@ class TestIntegration:
     def test_process_batch_smoke_with_real_offline_state(self, tmp_path):
         """process_batch() must run without error using state from export_online_state()."""
         offline, _ = self._build_offline_with_ica(tmp_path)
-        state = _adapt_offline_state_to_positional(offline.export_online_state())
+        state = offline.export_online_state()
 
         online = OnlinePreprocessor(
             preprocessing_settings=_make_settings(),
@@ -1090,32 +1096,24 @@ class TestIntegration:
         assert out.dtype == float
 
     def test_process_batch_bad_channel_is_overwritten_by_interpolation(self, tmp_path):
-        """Bad channel is overwritten by interpolation: different input values → same output."""
-        from backend.offline_phase.preprocessor import OfflinePreprocessor
+        """Bad channel is overwritten by interpolation: different input values → same output.
 
-        offline, _ = self._build_offline_with_ica(tmp_path)
-
-        # Zero out Fp1 to force it to be detected as flat/bad
-        eeg_picks = mne.pick_types(offline.raw.info, eeg=True)
-        fp1_local = 0
-        fp1_name = offline.raw.ch_names[eeg_picks[fp1_local]]
-        offline.raw._data[eeg_picks[fp1_local], :] = 0.0
-        offline._detect_bad_channels()
-        assert fp1_name in offline._bad_channels
-
-        offline._fit_ica()
-        offline.ica.exclude = [0]
+        Drives offline through the operator-driven set_bad_channels() flow,
+        then verifies the full process_batch() chain overwrites the bad slot
+        via interpolation regardless of its input value.
+        """
+        offline, _ = self._build_offline_with_ica(tmp_path, bad_channels=["Fp1"])
         offline_state = offline.export_online_state()
         assert offline_state["interp_weights"] is not None
-        state = _adapt_offline_state_to_positional(offline_state)
+        assert offline_state["bad_indices"] == [0]  # Fp1 is at position 0 in EEG_CH_NAMES
 
         online = OnlinePreprocessor(
             preprocessing_settings=_make_settings(),
-            online_state=state,
+            online_state=offline_state,
             input_sfreq=INPUT_SFREQ,
         )
 
-        bad_ch_idx = offline_state["ch_names"].index(fp1_name)
+        bad_ch_idx = offline_state["bad_indices"][0]
         rng = np.random.default_rng(21)
         base = rng.standard_normal((400, N_CHANNELS)) * 1e-5
         timestamps = np.arange(400, dtype=float) / INPUT_SFREQ
