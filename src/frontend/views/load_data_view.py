@@ -29,6 +29,7 @@ class LoadDataView(QWidget):
         self._session = None
         self._data_dir: str | None = None
         self._was_ready: bool = False
+        self._loading: bool = False
         self._load_thread: QThread | None = None
         self._load_worker: LoadWorker | None = None
 
@@ -99,6 +100,8 @@ class LoadDataView(QWidget):
         """
         if not self._data_dir or self._session is None or self._session.offline is None:
             return
+        if self._loading:
+            return  # guard re-entry while a load is in flight
 
         try:
             self._session.offline.set_file_path(self._data_dir)
@@ -107,6 +110,8 @@ class LoadDataView(QWidget):
             return
 
         self._picker.setEnabled(False)
+        self._loading = True
+        self._update_ready_state()
         self.loading_requested.emit("Loading data…")
 
         self._load_thread = QThread()
@@ -130,13 +135,19 @@ class LoadDataView(QWidget):
         self._update_ready_state()
 
     def _on_load_done(self, _payload) -> None:
+        self._loading = False
         self.loading_done.emit()
         self.data_loaded.emit()
+        # Node 2 advances to "complete" via data_loaded; ready state on
+        # the now-inactive node is moot but keep the flag consistent.
+        self._update_ready_state()
 
     def _on_load_error(self, message: str) -> None:
+        self._loading = False
         self.loading_done.emit()
         QMessageBox.critical(self, "Load Error", message)
         self._picker.setEnabled(True)
+        self._update_ready_state()
 
     def _on_load_thread_finished(self) -> None:
         """Drop Python refs only after the QThread is fully stopped."""
@@ -144,7 +155,7 @@ class LoadDataView(QWidget):
         self._load_worker = None
 
     def _update_ready_state(self) -> None:
-        ready = bool(self._data_dir)
+        ready = bool(self._data_dir) and not self._loading
         if ready != self._was_ready:
             self._was_ready = ready
             self.ready_changed.emit(ready)
