@@ -1,4 +1,5 @@
 import copy
+import re
 
 import pytest
 from pydantic import ValidationError
@@ -37,7 +38,9 @@ class TestLoad:
     def test_error_message_contains_filepath(self, tmp_config_file):
         data = {"experiment_info": {"name": "test"}}
         path = tmp_config_file(data)
-        with pytest.raises(ValueError, match=str(path)):
+        # re.escape so Windows paths (containing \) don't get treated as
+        # regex escape sequences in pytest.raises(match=...).
+        with pytest.raises(ValueError, match=re.escape(str(path))):
             SettingsManager(path)
 
 
