@@ -286,7 +286,7 @@ class TestRunTraining:
         assert expected_path.exists()
         assert result["model_filepath"] == expected_path
 
-    def test_assembles_online_state(
+    def test_assembles_live_artifact_spec_and_ui_state(
         self, tmp_path: Path, synthetic_epochs: mne.EpochsArray, evaluator_settings: dict
     ) -> None:
         sm = MagicMock()
@@ -298,15 +298,19 @@ class TestRunTraining:
         timepoint = float(synthetic_epochs.times[10])
         orc.run_training(timepoint)
 
-        state = orc.online_state
-        assert "models" in state
-        assert "spatial_patterns" in state
-        assert "mne_info" in state
-        assert state["decoding_timepoint"] == timepoint
-        assert "ica_unmixing" in state
-        assert "eeg_chunk_indices" in state
-        assert "bad_indices" in state
-        assert "ch_names" not in state
+        spec = orc._live_artifact_spec
+        assert spec is not None
+        assert spec.models
+        assert "ica_unmixing" in spec.online_state
+        assert "eeg_chunk_indices" in spec.online_state
+        assert "bad_indices" in spec.online_state
+        assert "ch_names" not in spec.online_state
+        assert spec.metadata.decoding_timepoint == timepoint
+
+        ui = orc._ui_state
+        assert ui is not None
+        assert "spatial_patterns" in ui
+        assert "mne_info" in ui
 
     def test_returns_spatial_patterns_and_info(
         self, tmp_path: Path, synthetic_epochs: mne.EpochsArray, evaluator_settings: dict
@@ -324,16 +328,16 @@ class TestRunTraining:
         assert "mne_info" in result
 
 
-# ── TestGetOnlineState ────────────────────────────────────────────────────────
+# ── TestGetLiveArtifactSpec ───────────────────────────────────────────────────
 
 
-class TestGetOnlineState:
+class TestGetLiveArtifactSpec:
     def test_raises_if_training_not_done(self, tmp_path: Path) -> None:
         orc = _make_orchestrator(tmp_path)
         with pytest.raises(RuntimeError, match="run_training"):
-            orc.get_online_state_for_live_phase()
+            orc.get_live_artifact_spec()
 
-    def test_returns_same_dict_as_online_state(
+    def test_returns_live_artifact_spec(
         self, tmp_path: Path, synthetic_epochs: mne.EpochsArray, evaluator_settings: dict
     ) -> None:
         sm = MagicMock()
@@ -345,8 +349,8 @@ class TestGetOnlineState:
         timepoint = float(synthetic_epochs.times[10])
         orc.run_training(timepoint)
 
-        state = orc.get_online_state_for_live_phase()
-        assert state is orc.online_state
+        spec = orc.get_live_artifact_spec()
+        assert spec is orc._live_artifact_spec
 
 
 # ── TestStateOrdering ─────────────────────────────────────────────────────────
