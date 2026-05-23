@@ -42,7 +42,9 @@ This plan covers **Milestone 1**: a POC of live decoding — handoff from Phase 
 - Clean lifecycle: idempotent start/stop, screen-close stops the stream.
 
 **Out of scope for M1 (queued for M2):**
-Decision history strip · trigger log (terminal-style) · decoder visibility toggles + color picker · decision settings write-back (threshold, sustained activation, conflict resolution) · exit confirmation modal · full 3-pane mockup layout · frozen probability graph + event navigation · modular graph layouts · xdf replay UI · subject-folder-aware log paths.
+Decision history strip · trigger log (terminal-style) · per-decoder colour picker · decision settings write-back (threshold, sustained activation, conflict resolution) · exit confirmation modal · full 3-pane mockup layout · frozen probability graph + event navigation · modular graph layouts · xdf replay UI · subject-folder-aware log paths.
+
+Decoder visibility toggles landed early in Commit 4 (chart-side: `set_task_visible(name, visible)`); the Phase 2 screen wires checkboxes to them in Commit 5.
 
 ---
 
@@ -181,7 +183,8 @@ You may open one PR per commit or bundle multiple commits per PR; the boundary t
 - `online_decoder/src/frontend/widgets/live_probability_chart.py` (new) — `LiveProbabilityChart(QWidget)`:
   - Constructor: `(task_names: list[str], window_seconds: float = 10.0, target_sfreq: float = 100.0, threshold: float = 0.85)`.
   - Internals: numpy ring buffer per task, shared timestamp ring, one `pg.PlotDataItem` per task, chance line at 0.5, threshold line at `threshold`. Y axis fixed to `[0, 1.05]`.
-  - Public API: `append_predictions(predictions: dict[str, np.ndarray], timestamps: np.ndarray)`, `clear()`.
+  - Public API: `append_predictions(predictions, timestamps)`, `reset_buffers()`, `set_task_visible(name, visible)`, and a read-only `task_colors` property (decoder name → hex colour, in insertion order). The chart deliberately omits an in-plot legend so the parent owns layout — Phase 2 builds a small swatch+checkbox row in Commit 5 driven by `task_colors` + `set_task_visible`.
+  - Naming note: not `clear()` — pyqtgraph's `PlotWidget.__init__` installs an instance-attribute `clear` that removes plot items, so a subclass `clear` would be shadowed.
   - Internal `QTimer` (30 Hz) drives `_refresh()` → `setData` on each curve.
 - `online_decoder/scripts/test_live_chart.py` (new) — feeds synthetic predictions at 25 Hz for 30 s then exits.
 
