@@ -127,7 +127,7 @@ You may open one PR per commit or bundle multiple commits per PR; the boundary t
 **Commit subject:** `refactor(frontend): generalize MainWindow to host multiple screens`
 
 **Changes:**
-- `online_decoder/src/frontend/main_window.py` — add `show_screen(widget: QWidget)` that registers the widget in the central `QStackedWidget` (if not already present) and switches to it. Keep `add_screen` as a backward-compat alias.
+- `online_decoder/src/frontend/main_window.py` — replace `add_screen` with `show_screen(widget: QWidget)`: registers the widget in the central `QStackedWidget` if not already present, then switches to it. Update the two in-repo callers (`frontend/main.py`, `frontend/debug/main.py`) to use the new name in the same commit.
 
 **Acceptance:**
 - `python -m frontend.main` opens Phase 1 unchanged — no behavior change.

@@ -46,7 +46,7 @@ def main() -> None:
     app.setStyleSheet(GLOBAL_QSS)
 
     window = MainWindow()
-    window.add_screen(DebugPhase1Screen())
+    window.show_screen(DebugPhase1Screen())
     window.show()
 
     sys.exit(app.exec())

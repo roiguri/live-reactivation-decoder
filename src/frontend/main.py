@@ -49,7 +49,7 @@ def main():
 
     window = MainWindow()
     screen = Phase1Screen()
-    window.add_screen(screen)
+    window.show_screen(screen)
     window.show()
 
     sys.exit(app.exec())
