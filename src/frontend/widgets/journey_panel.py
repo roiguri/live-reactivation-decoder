@@ -44,6 +44,8 @@ class JourneyNode(QWidget):
         self._state = "inactive"
         self._filling = False
         self.__node_fill = 0.0
+        self._description = description
+        self._complete_summary: str | None = None
 
         self.setFixedHeight(_NODE_H)
 
@@ -111,6 +113,18 @@ class JourneyNode(QWidget):
         """Update the action button label (e.g. when the node's pending action changes)."""
         self._btn.setText(label)
 
+    def set_complete_summary(self, summary: str | None) -> None:
+        """Replace the description shown after this node completes.
+
+        Pass ``None`` to revert to the original description. The new text
+        is shown once the node enters the ``complete`` state; while the
+        node is still ``active`` the original description is preserved so
+        the operator sees the stage's instructions until it finishes.
+        """
+        self._complete_summary = summary
+        if self._state == "complete":
+            self._desc_lbl.setText(summary if summary is not None else self._description)
+
     def start_fill_animation(self) -> None:
         """Play a top-to-bottom circle fill, then transition to active."""
         self._filling = True
@@ -153,9 +167,15 @@ class JourneyNode(QWidget):
         if active:
             self._title_lbl.setStyleSheet(f"color: {PRIMARY_BLUE}; font-weight: 600;")
             self._desc_lbl.setStyleSheet(f"color: {TEXT_PRIMARY};")
+            self._desc_lbl.setText(self._description)
         elif complete:
             self._title_lbl.setStyleSheet(f"color: {TEXT_PRIMARY};")
             self._desc_lbl.setStyleSheet(f"color: {TEXT_MUTED};")
+            self._desc_lbl.setText(
+                self._complete_summary
+                if self._complete_summary is not None
+                else self._description
+            )
         else:
             self._title_lbl.setStyleSheet(f"color: {TEXT_MUTED};")
 
@@ -313,6 +333,16 @@ class JourneyPanel(QWidget):
         """Update the action button label for the node at node_index (0-based)."""
         if 0 <= node_index < len(self._nodes):
             self._nodes[node_index].set_action_label(label)
+
+    def set_node_summary(self, node_index: int, summary: str | None) -> None:
+        """Set the post-completion description for the node at node_index (0-based).
+
+        The summary replaces the default stage description shown after the
+        node enters the ``complete`` state. Passing ``None`` restores the
+        default description.
+        """
+        if 0 <= node_index < len(self._nodes):
+            self._nodes[node_index].set_complete_summary(summary)
 
     def set_node_ready(self, node_index: int, ready: bool) -> None:
         """Gate the action button on node_index (0-based).
