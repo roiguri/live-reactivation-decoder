@@ -165,7 +165,8 @@ You may open one PR per commit or bundle multiple commits per PR; the boundary t
 
 **Acceptance:**
 - `python -m frontend.debug.main --phase2` opens the Phase 2 screen in < 5 s with a valid session.
-- Clicking Back returns to a working Phase 1 screen (proves the session is reusable, not a stub).
+- `python -m frontend.debug.main` (no flag) still opens the Phase 1 debug walkthrough — unchanged.
+- The debug session is real, not a stub: `phase2.session.settings` resolves to the loaded config (`preprocessing`, `decoders`, `event_mapping` sections).
 
 **Out of scope:** still no chart, no live data.
 
