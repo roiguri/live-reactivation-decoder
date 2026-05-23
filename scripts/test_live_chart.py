@@ -126,9 +126,9 @@ def _build_legend(chart: LiveProbabilityChart) -> QWidget:
     """Build a horizontal swatch+name+checkbox row from the chart's
     ``task_colors``. Each checkbox drives ``chart.set_task_visible``.
 
-    Mirrors the pattern Phase2Screen will follow in Commit 5 — the chart
-    deliberately omits an in-plot legend so the screen owns layout and
-    can wire visibility (M1) and per-decoder colour pickers (M2).
+    Mirrors the pattern parent screens use — the chart deliberately
+    omits an in-plot legend so the parent owns layout and can wire
+    visibility toggles and per-decoder controls.
     """
     container = QWidget()
     layout = QHBoxLayout(container)

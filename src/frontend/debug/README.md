@@ -119,7 +119,7 @@ Defaults (in `phase2_screen_debug.py`):
 The pipeline file is written by Phase 1's train snapshot path
 (`scripts/demo_seed_debug_snapshots.py`). If the file is missing, the
 shell still opens — the artifact is loaded later by
-`build_live_stream_session(...)`, which lands in Commit 6.
+`build_live_stream_session(...)` when live inference starts.
 
 ## Troubleshooting
 

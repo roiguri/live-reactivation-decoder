@@ -30,9 +30,9 @@ def build_debug_phase2(
     embed in :class:`MainWindow`.
 
     The session is real (config is loaded and validated). The decoder
-    pipeline path is stored on the screen but not yet read in Commit 2's
-    shell — later commits load the artifact via
-    ``session.build_live_stream_session(...)``.
+    pipeline path is stored on the screen; the artifact itself is
+    loaded later by ``session.build_live_stream_session(...)`` when
+    live inference starts.
     """
     session = AppSession(config_path)
     return Phase2Screen(

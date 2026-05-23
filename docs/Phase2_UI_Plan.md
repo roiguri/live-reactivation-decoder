@@ -201,14 +201,16 @@ You may open one PR per commit or bundle multiple commits per PR; the boundary t
 **Commit subject:** `feat(phase2-ui): embed LiveProbabilityChart in Phase 2 screen`
 
 **Changes:**
-- `online_decoder/src/frontend/screens/phase2_screen.py` — read `task_names` from `self.session.settings["decoders"]["tasks"]` and instantiate `LiveProbabilityChart(...)`. Embed below the header with a `"Decoder Probabilities"` title.
+- `online_decoder/src/frontend/screens/phase2_screen.py` — slim layout glue: read `task_names` from `session.settings["decoders"]["tasks"]` and `target_sfreq` from `session.settings["preprocessing"]["final_resample"]["target_rate"]`; build the chart with a hardcoded threshold of 0.85; lay out `[settings_panel | chart_panel]` under the header. Chart card is capped to 420 px high so it reads as its intended size.
+- `online_decoder/src/frontend/widgets/phase2/header.py` (new) — `Phase2Header(QWidget)` with status label + target hardware label; exposes `set_status(text)` for the live-stream wiring step.
+- `online_decoder/src/frontend/widgets/phase2/settings_panel.py` (new) — `Phase2SettingsPanel(task_colors)`: single sidebar with **Decoders** section (one row per task — checkbox + name + colour swatch) and **Decision Settings** section (header reserved; inputs not yet exposed). Emits `task_visibility_toggled(name, visible)`. Footer slot exposed via `footer_layout` property for the action button.
 
 **Acceptance:**
-- Open Phase 2 (via Go Live or `--phase2`). Chart renders with empty curves and the correct number of legend entries (one per configured task).
-- Threshold and chance lines visible at expected y positions.
+- Open Phase 2 (via Go Live or `--phase2`). Chart renders with empty curves at a fixed max height (~420 px); the sidebar lists one row per configured task with a working visibility checkbox.
+- Threshold (dashed red), chance (dashed grey), and NOW (solid blue vertical) reference lines visible at expected positions.
 - Status stays `INFERENCE HALTED`; no live data yet.
 
-**Out of scope:** no Start/Halt button, no LSL.
+**Out of scope:** no Start/Halt button, no LSL. Decision History strip, Trigger Log terminal, Decision Settings inputs, colour picker, and exit modal are deferred — see Open Questions #4–6.
 
 ---
 
@@ -337,3 +339,12 @@ When implementation completes, verify end-to-end:
 2. **Stream-source UI.** M1 assumes `LSLReceiver` discovers the live stream via its defaults. xdf-replay-as-LSL is M2. If the operator needs to choose between sources before clicking Start, an M2 stream-source picker lands in the header.
 3. **Subject-folder-aware log path.** `PredictionLogger` exists but `log_path=None` for M1. Once Phase 2 sessions need to write per-subject CSVs, the directory layout in PRD §5 must be wired (`phase2_live/live_stream_logs.csv` under the subject folder).
 4. **Back-flow semantics.** Phase 2 has no Back button in Commit 2; the TODO sits in `phase2_screen.py`. Unresolved: should Back land on Node 5's results page (preserving the journey trail) or restart the journey from Node 1? What happens to a live stream that's running — auto-halt with a confirm? Commit 6's spec assumes Back calls `live.stop()` before switching; resolve this before Commit 6 lands.
+
+5. **Demo-layout placeholders pulled forward in Commit 5.** Commit 5 lands the demo's layout but with a single unified sidebar (Decoders + Decision Settings as sections in one left panel) instead of the React mockup's two narrow sidebars, so the chart gets the full centre width. Remaining placeholder slots to fill later:
+   - **Decision History strip** — above the chart in the centre panel. Not drawn yet; will sit between the chart's title and the chart card.
+   - **Trigger Log terminal** — below the chart in the centre panel. Not drawn yet.
+   - **Decision Settings inputs** — section header exists in the sidebar; body currently shows a neutral placeholder line. Replace with threshold slider, sustained-activation input, conflict-resolution select (per the demo). Wire the threshold to the chart's threshold line.
+   - **Exit confirmation modal** — fires on Back; depends on resolving Open Question #4 (back-flow semantics) first.
+   - **Per-decoder colour picker** — sidebar swatches are non-interactive for now. Make them clickable (the React mockup uses a `<input type="color">` overlaid on a circular swatch).
+
+6. **Start/Halt button placement.** Commit 5 exposes `Phase2SettingsPanel.footer_layout` so Commit 6 can drop the action button into the sidebar's footer slot without restructuring the panel. The styled green/red button (full width inside the footer) lands when the live wiring does.

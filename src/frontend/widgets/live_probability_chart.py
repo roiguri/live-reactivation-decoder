@@ -63,8 +63,8 @@ class LiveProbabilityChart(pg.PlotWidget):
         Sample rate of the prediction stream (after Phase 2 decimation).
         Used to size the ring buffer: ``capacity = window_seconds * target_sfreq``.
     threshold
-        y-position of the dashed red threshold guide. Operator-tunable
-        threshold semantics land in M2; this is purely visual for M1.
+        y-position of the dashed red threshold guide. Purely visual for
+        now; operator-tunable threshold semantics are a follow-up.
     """
 
     def __init__(
@@ -133,9 +133,8 @@ class LiveProbabilityChart(pg.PlotWidget):
     def task_colors(self) -> dict[str, str]:
         """Decoder name → hex colour, in the order passed to the constructor.
 
-        The parent widget uses this to build an external legend (or a
-        decoder-controls panel in M2) that keeps colours in sync with the
-        plotted curves.
+        Parents use this to build an external legend or controls panel
+        that stays in sync with the plotted curves.
         """
         return dict(self._task_colors)
 
