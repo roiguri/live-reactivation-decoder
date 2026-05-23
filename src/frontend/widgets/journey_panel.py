@@ -30,7 +30,7 @@ _ACTION_LABELS = [
     "Load && Continue",
     "Confirm && Continue",
     "Run Evaluation",
-    "Go Live",
+    "Run Training",
 ]
 
 

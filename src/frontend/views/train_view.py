@@ -340,10 +340,11 @@ class TrainView(QWidget):
             and not self._running
             and not self._done
         )
-        # Page 1 has no "Go Live" wiring yet — Phase 2 will rebind the
-        # journey-panel button. Leave the gate open so the button shows
-        # as actionable once results render.
-        page1_ready = self._done
+        # TODO: Page 1 ("Go Live") is not yet wired — Phase 2 will rebind the
+        # journey-panel button to the live-stream transition. Keep the
+        # button disabled after training completes so the relabeled
+        # "Go Live" text isn't misleadingly clickable.
+        page1_ready = False
         ready = page0_ready or page1_ready
         if ready != self._was_ready:
             self._was_ready = ready
