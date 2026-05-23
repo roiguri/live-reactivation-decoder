@@ -53,8 +53,15 @@ class Phase2SettingsPanel(QWidget):
     ) -> None:
         super().__init__(parent)
         self.setFixedWidth(_PANEL_WIDTH)
+        self.setObjectName("phase2_settings_panel")
+        # WA_StyledBackground is required for a plain QWidget to actually
+        # paint the border/background from its stylesheet (QFrame paints
+        # by default; QWidget does not).
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(
-            f"background: #FAFAFA; border-right: 1px solid {BORDER_GRAY};"
+            f"QWidget#phase2_settings_panel {{"
+            f"  background: #FAFAFA; border-right: 1px solid {BORDER_GRAY};"
+            f"}}"
         )
 
         root = QVBoxLayout(self)
