@@ -10,16 +10,19 @@ This is the **active implementation contract** for the Phase 2 PyQt6 live-infere
 
 **Progress:** Not started. Phase 2 backend is fully implemented (`LiveStreamSession`, `StreamWorker`, `OnlinePreprocessor`, `LiveInferenceEngine`, `LSLReceiver`, `PredictionLogger`) and exposed via `AppSession.build_live_stream_session(...)`.
 
-| Step | Description | Status |
+Each step below is one commit, self-contained, and independently verifiable. Tick the box when the commit is merged.
+
+| # | Commit subject | Status |
 |---|---|---|
-| 1 | Phase 2 screen shell + entry from Node 5 "Go Live" | — |
-| 2 | Phase 2 debug entry (quick-jump for dev iteration) | — |
-| 3 | pyqtgraph dep + `LiveProbabilityChart` widget (isolated) | — |
-| 4 | `Phase2Screen` layout scaffold + chart embedded | — |
-| 5 | `LiveStreamSession` lifecycle wired (start/stop) | — |
-| 6 | `prediction_ready` → `LiveProbabilityChart` | — |
-| 7 | Latency display + performance hardening (5-min soak) | — |
-| 8 | Verification checklist + docs updates | — |
+| 1 | `refactor(frontend): generalize MainWindow to host multiple screens` | ☐ |
+| 2 | `feat(phase2-ui): add Phase 2 screen shell and Go-Live handoff` | ☐ |
+| 3 | `feat(phase2-ui): add debug-mode quick-jump to Phase 2 screen` | ☐ |
+| 4 | `feat(phase2-ui): add LiveProbabilityChart widget (isolated)` | ☐ |
+| 5 | `feat(phase2-ui): embed LiveProbabilityChart in Phase 2 screen` | ☐ |
+| 6 | `feat(phase2-ui): wire LiveStreamSession start/halt to Phase 2 header` | ☐ |
+| 7 | `feat(phase2-ui): connect prediction_ready to LiveProbabilityChart` | ☐ |
+| 8 | `feat(phase2-ui): add rolling latency display and buffer-health indicator` | ☐ |
+| 9 | `docs(phase2-ui): mark Phase 2 UI M1 complete + soak results` | ☐ |
 
 Design reference: React mockup at [`knowledge_base/02_reference/ui_demo/Phase2Screen.jsx`](../../knowledge_base/02_reference/ui_demo/Phase2Screen.jsx) (in sync with [github.com/roiguri/decoder_gui](https://github.com/roiguri/decoder_gui) HEAD `64f08de` as of 2026-05-23).
 
@@ -111,149 +114,172 @@ The frontend imports only `AppSession` (`src/backend/session.py`). The live scre
 
 ---
 
-## Serial Build Plan
+## Commit-by-Commit Build Plan
 
-Each step is **independently runnable and visibly testable** — no step requires any future step to work.
+Each step below is **one commit** on a feature branch off `online-decoder`. Commits land in order: every commit assumes its predecessors are merged. Each step's **Acceptance** is the contract that proves the commit can land — if you can't reproduce it, the commit isn't done.
 
----
-
-### Step 1 — Phase 2 screen shell + entry from Phase 1
-
-**Create:**
-- `screens/phase2_screen.py` — empty `Phase2Screen(QWidget)` with a header bar only: "Back" button (returns to Phase 1 screen), status label "INFERENCE HALTED", target hardware label. Mirrors the mockup's Stream Header structure but with no live state yet.
-
-**Update:**
-- `MainWindow` — extend to host multiple screens cleanly. Add a `show_screen(widget)` helper that swaps the central `QStackedWidget` index.
-- `Phase1Screen._on_train_results_displayed` — re-wire the Node 5 action button so "Go Live" constructs `Phase2Screen(session=self.session, decoder_pipeline_path=...)`, registers it on `MainWindow`, and switches the stack.
-- Back button calls `MainWindow.show_screen(phase1_screen)`.
-
-`Phase2Screen.__init__` accepts `session` (the live `AppSession`) and `decoder_pipeline_path` and stores them. No backend wiring yet.
-
-**Test:** run end-to-end through Phase 1 (or via the debug walkthrough) → click "Go Live" → blank Phase 2 screen with header + back. Back → returns to Node 5.
-
-**Success metrics:** navigation in both directions works; header text correct; no resource leaks on repeated switching.
+You may open one PR per commit or bundle multiple commits per PR; the boundary that matters is the commit itself.
 
 ---
 
-### Step 2 — Phase 2 debug entry
+### Commit 1 — Generalize `MainWindow` to host multiple screens
 
-**Create:** `frontend/debug/phase2_screen_debug.py` modeled on `phase1_screen_debug.py`. It loads `experiment_config.yaml` + a known `decoder_pipeline.joblib` snapshot path, builds `AppSession`, and shows `Phase2Screen` directly.
+**Commit subject:** `refactor(frontend): generalize MainWindow to host multiple screens`
 
-**Update:** `frontend/debug/main.py` (or add a new entry) to accept a `--phase2` flag (or equivalent) that opens Phase 2 immediately.
+**Changes:**
+- `online_decoder/src/frontend/main_window.py` — add `show_screen(widget: QWidget)` that registers the widget in the central `QStackedWidget` (if not already present) and switches to it. Keep `add_screen` as a backward-compat alias.
 
-**Test:** `python -m frontend.debug.main --phase2` opens Phase 2 with a session ready in < 5 s.
+**Acceptance:**
+- `python -m frontend.main` opens Phase 1 unchanged — no behavior change.
+- `pytest tests/` passes (no new tests; no regressions).
+- Walk through Phase 1 via `python -m frontend.debug.main` end-to-end — no visual or behavioral change.
 
-**Success metric:** dev iteration loop from code change to seeing the live screen is < 5 s. This step exists because every subsequent step is faster to validate with this shortcut.
-
----
-
-### Step 3 — pyqtgraph dependency + `LiveProbabilityChart` widget (isolated)
-
-**Add:** `pyqtgraph>=0.13` to `requirements.txt`. Document in `online_decoder/CLAUDE.md` that Phase 2 live plots use pyqtgraph (vs Phase 1 matplotlib).
-
-**Create:** `widgets/live_probability_chart.py` — `LiveProbabilityChart(QWidget)`:
-
-- **Constructor:** `(task_names: list[str], window_seconds: float = 10.0, target_sfreq: float = 100.0, threshold: float = 0.85)`.
-- **Internals:**
-  - One numpy ring buffer per task, preallocated to `int(window_seconds * target_sfreq) + safety_margin` rows.
-  - Shared timestamp ring buffer (same size).
-  - One `pg.PlotDataItem` per task with a deterministic color from a fixed palette.
-  - Horizontal `pg.InfiniteLine` at 0.5 (chance, dashed gray).
-  - Horizontal `pg.InfiniteLine` at `threshold` (solid blue, semi-transparent).
-- **Public API:**
-  - `append_predictions(predictions: dict[str, np.ndarray], timestamps: np.ndarray)` — pure data ingestion, no repaint. Writes into the ring buffer and advances the write index.
-  - `clear()` — resets buffers and write index.
-- **Repaint:** a `QTimer` at 30 Hz drives `_refresh()`, which calls `setData` on each curve with the current rolling window slice.
-- **Axes:** X axis rolls so the right edge is "now"; Y axis fixed to [0, 1.05].
-
-**Test in isolation:** `scripts/test_live_chart.py` — feeds the widget synthetic predictions at 25 Hz for 30 s. Watch for smooth scroll, no flicker, CPU < 5% on a typical dev machine. Delete the script after confirming.
-
-**Success metrics:** scrolls at the 30 fps target with 3 curves; no growing memory; no event-loop stalls; threshold and chance lines render correctly.
+**Out of scope:** no Phase 2 screen yet, no Go-Live wiring.
 
 ---
 
-### Step 4 — `Phase2Screen` layout scaffold + chart embedded
+### Commit 2 — Phase 2 screen shell + Go-Live handoff from Node 5
 
-**Update:** `screens/phase2_screen.py` to add a body region under the header. For M1 the simplest possible layout: the probability graph centered with a small title "Decoder Probabilities" above it. The 3-pane structure (decoder controls L, decision settings R) is M2 work — do **not** scaffold empty panes here.
+**Commit subject:** `feat(phase2-ui): add Phase 2 screen shell and Go-Live handoff`
 
-**Wire:** instantiate `LiveProbabilityChart(task_names=...)` reading task names from `self.session.settings["decoders"]["tasks"]`. Embed it in the screen.
+**Changes:**
+- `online_decoder/src/frontend/screens/phase2_screen.py` (new) — `Phase2Screen(QWidget)` with a header bar only: "Back" button, status label `INFERENCE HALTED`, target hardware label. Constructor takes `(session: AppSession, decoder_pipeline_path: Path)` and stores them. Back button calls `MainWindow.show_screen(phase1_screen)`.
+- `online_decoder/src/frontend/screens/phase1_screen.py` — in `_on_train_results_displayed`, re-wire the Node 5 action button so it constructs `Phase2Screen(session=self.session, decoder_pipeline_path=...)` and registers it via `MainWindow.show_screen(...)`.
 
-**Test:** open Phase 2 → chart renders with empty curves and correct legend/title. No live data yet.
+**Acceptance:**
+- Run Phase 1 end-to-end (real or via the debug walkthrough). After Node 5 displays results, the "Go Live" button is enabled. Clicking it shows a blank Phase 2 screen with header + Back. Clicking Back returns to Node 5.
+- No background threads remain after Back (verify with a short `threading.enumerate()` log on screen-close).
 
-**Success metric:** chart paints at 30 Hz idle (verify via logging) without rising memory.
-
----
-
-### Step 5 — `LiveStreamSession` lifecycle wired (start / stop) — no chart data yet
-
-**Update:** `Phase2Screen`:
-- On `__init__`, lazily call `self._live = session.build_live_stream_session(decoder_pipeline_path)`. Pipeline construction is fast — no overlay needed.
-- Add a "Start Inference" / "Halt Inference" button (right-aligned in header for M1 — no separate right panel yet).
-- Start → `self._live.start()`, button label flips to "Halt Inference", status dot turns green-pulsing, label flips to "LIVE INFERENCE".
-- Halt → `self._live.stop()`, button flips back, dot turns gray, label flips to "INFERENCE HALTED".
-- Connect `self._live.error_occurred` → `QMessageBox.critical`, then auto-halt and reset header.
-- Back button calls `self._live.stop()` **before** switching screens.
-
-**Test (with replay LSL stream from `scripts/smoke_stream_worker.py` infrastructure or `LSLProxy.exe`):**
-- Start → header reads LIVE, console logs show LSL pulls.
-- Halt → header reads HALTED, LSL stops.
-- Rapid start/stop 5 times leaves no orphan threads.
-
-**Success metrics:** lifecycle is clean; no zombie threads; header reflects state correctly; back-during-streaming halts cleanly.
+**Out of scope:** no chart, no Start/Halt button, no `LiveStreamSession` construction.
 
 ---
 
-### Step 6 — Connect `prediction_ready` to `LiveProbabilityChart`
+### Commit 3 — Debug-mode quick-jump to Phase 2
 
-**Wire:** `self._live.prediction_ready.connect(self._on_predictions, Qt.ConnectionType.QueuedConnection)`. Slot reshapes the payload and calls `chart.append_predictions(...)`.
+**Commit subject:** `feat(phase2-ui): add debug-mode quick-jump to Phase 2 screen`
 
-The `prediction_ready` payload is `(predictions: dict, out_ts: np.ndarray, markers: list)`. **Ignore `markers`** for M1 — the terminal trigger log is M2 work.
+**Changes:**
+- `online_decoder/src/frontend/debug/phase2_screen_debug.py` (new) — modeled on `phase1_screen_debug.py`. Loads `experiment_config.yaml` + a known `decoder_pipeline.joblib` path, builds `AppSession`, and shows `Phase2Screen` via `MainWindow.show_screen(...)`.
+- `online_decoder/src/frontend/debug/main.py` — accept a `--phase2` CLI flag (or equivalent entry) that opens the Phase 2 debug screen directly.
 
-**Threshold value:** read from `session.settings["decoders"]` if a `threshold` key exists; otherwise default to 0.85. Pass it to the chart on construction (Step 4) so the dashed line sits at the configured value.
+**Acceptance:**
+- `python -m frontend.debug.main --phase2` opens the Phase 2 screen in < 5 s with a valid session.
+- Clicking Back returns to a working Phase 1 screen (proves the session is reusable, not a stub).
 
-**Test (end-to-end with real or replayed LSL stream):**
-- Graph scrolls smoothly with decoder probabilities for ≥ 60 s.
-- On a high-probability segment of replay data, the curve climbs above the threshold line.
-- Latency counts from `latency_ready` (sampled manually) stay healthy.
-
-**Success metrics:** per-decoder curves visible and labeled; scrolling smooth at 30 fps; no dropped batches; no UI freeze.
-
----
-
-### Step 7 — Latency display + performance hardening
-
-**Add to `Phase2Screen` header:**
-- `collections.deque(maxlen=100)` ingests `latency_ready` `total_ms` values.
-- A separate `QTimer` (5 Hz) reads the deque, computes p50 / p95, updates the latency label.
-- Buffer-health indicator: green if `pending_samples` from the most recent latency dict < `batch_size_samples * 2`, amber otherwise.
-
-**5-minute soak test** with replay LSL. Confirm:
-- Scrolling stays smooth.
-- Memory plateaus (no leak from ring buffer or pyqtgraph).
-- p95 `total_ms` stays below 40 ms (one batch interval at 1000 Hz / 40 samples).
-- Closing the screen mid-stream is clean (no segfault, no leaked thread, no exception in console).
-
-**Success metrics:**
-- p95 ≤ 40 ms.
-- Memory delta < 50 MB over 5 min.
-- Zero unhandled exceptions in console.
-- Buffer-health indicator stays green throughout.
+**Out of scope:** still no chart, no live data.
 
 ---
 
-### Step 8 — Verification checklist + docs
+### Commit 4 — `LiveProbabilityChart` widget (isolated, no integration)
 
-**Update:**
-- `online_decoder/docs/README.md` — add the Phase 2 UI plan to the index.
-- `online_decoder/CLAUDE.md` — mention `Phase2Screen` surface and the pyqtgraph dependency for live plots.
-- This plan — update the status table as steps complete.
+**Commit subject:** `feat(phase2-ui): add LiveProbabilityChart widget (isolated)`
 
-**End-to-end verification:**
-1. `python -m frontend.main` → Phase 1 walkthrough → "Go Live" → graph runs.
-2. `python -m frontend.debug.main --phase2` → graph runs directly.
-3. Halt → restart in the same session → works.
-4. Receiver error simulated (kill replay subprocess mid-stream) → `QMessageBox.critical`, screen auto-halts.
-5. Back to Phase 1 → live stream cleanly stopped, no orphan thread.
+**Changes:**
+- `online_decoder/requirements.txt` — add `pyqtgraph>=0.13`.
+- `online_decoder/src/frontend/widgets/live_probability_chart.py` (new) — `LiveProbabilityChart(QWidget)`:
+  - Constructor: `(task_names: list[str], window_seconds: float = 10.0, target_sfreq: float = 100.0, threshold: float = 0.85)`.
+  - Internals: numpy ring buffer per task, shared timestamp ring, one `pg.PlotDataItem` per task, chance line at 0.5, threshold line at `threshold`. Y axis fixed to `[0, 1.05]`.
+  - Public API: `append_predictions(predictions: dict[str, np.ndarray], timestamps: np.ndarray)`, `clear()`.
+  - Internal `QTimer` (30 Hz) drives `_refresh()` → `setData` on each curve.
+- `online_decoder/scripts/test_live_chart.py` (new) — feeds synthetic predictions at 25 Hz for 30 s then exits.
+
+**Acceptance:**
+- `pip install -r online_decoder/requirements.txt` succeeds.
+- `python online_decoder/scripts/test_live_chart.py` shows three smoothly scrolling curves for 30 s with threshold and chance lines visible. Window closes cleanly; no exceptions on exit.
+
+**Out of scope:** widget not yet embedded in `Phase2Screen`.
+
+---
+
+### Commit 5 — Embed `LiveProbabilityChart` in Phase 2 screen
+
+**Commit subject:** `feat(phase2-ui): embed LiveProbabilityChart in Phase 2 screen`
+
+**Changes:**
+- `online_decoder/src/frontend/screens/phase2_screen.py` — read `task_names` from `self.session.settings["decoders"]["tasks"]` and instantiate `LiveProbabilityChart(...)`. Embed below the header with a `"Decoder Probabilities"` title.
+
+**Acceptance:**
+- Open Phase 2 (via Go Live or `--phase2`). Chart renders with empty curves and the correct number of legend entries (one per configured task).
+- Threshold and chance lines visible at expected y positions.
+- Status stays `INFERENCE HALTED`; no live data yet.
+
+**Out of scope:** no Start/Halt button, no LSL.
+
+---
+
+### Commit 6 — Wire `LiveStreamSession` start/halt to the header
+
+**Commit subject:** `feat(phase2-ui): wire LiveStreamSession start/halt to Phase 2 header`
+
+**Changes:**
+- `online_decoder/src/frontend/screens/phase2_screen.py`:
+  - In `__init__`: `self._live = session.build_live_stream_session(decoder_pipeline_path)`.
+  - Add a "Start Inference" / "Halt Inference" button in the header (right-aligned for M1; no separate right panel yet).
+  - Start → `self._live.start()`, flip status to LIVE, swap button label.
+  - Halt → `self._live.stop()`, flip status back to HALTED, swap button label.
+  - Connect `self._live.error_occurred` → `QMessageBox.critical`, then auto-halt.
+  - Back button calls `self._live.stop()` **before** switching screens.
+
+**Acceptance:**
+- With replay LSL (or live `LSLProxy.exe` if available): click Start → status flips to LIVE; console shows LSL pulls. Click Halt → flips back; LSL stops.
+- Rapid start/stop ×5 leaves no orphan threads (verify with `threading.enumerate()` log).
+- Back during streaming halts cleanly with no exception.
+
+**Out of scope:** chart still doesn't receive data — that's Commit 7.
+
+---
+
+### Commit 7 — Connect `prediction_ready` to the chart
+
+**Commit subject:** `feat(phase2-ui): connect prediction_ready to LiveProbabilityChart`
+
+**Changes:**
+- `online_decoder/src/frontend/screens/phase2_screen.py`:
+  - `self._live.prediction_ready.connect(self._on_predictions, Qt.ConnectionType.QueuedConnection)`.
+  - `_on_predictions(predictions, out_ts, markers)` calls `chart.append_predictions(predictions, out_ts)`. `markers` is ignored for M1.
+  - On construction, read the threshold from `session.settings["decoders"]` if a `threshold` key exists; default 0.85; pass to the chart.
+
+**Acceptance:**
+- With replay LSL: click Start → graph scrolls with real decoder probabilities for ≥ 60 s.
+- On a known high-probability segment, the curve crosses the threshold line visibly.
+- Halt → curves freeze (last data retained); no exception in console.
+
+**Out of scope:** no latency display, no buffer-health pill.
+
+---
+
+### Commit 8 — Rolling latency display + buffer-health pill
+
+**Commit subject:** `feat(phase2-ui): add rolling latency display and buffer-health indicator`
+
+**Changes:**
+- `online_decoder/src/frontend/screens/phase2_screen.py`:
+  - `collections.deque(maxlen=100)` ingests `latency_ready` `total_ms` values.
+  - A 5 Hz `QTimer` reads the deque, computes `p50` / `p95`, updates a header label like `Latency: 22 / 38 ms`.
+  - Buffer-health pill in the header: green when latest `pending_samples < batch_size_samples * 2`, amber otherwise.
+
+**Acceptance:**
+- During live streaming, latency label updates ~5×/sec with non-zero p50/p95.
+- 5-minute soak with replay LSL: scroll stays smooth; memory delta `< 50 MB`; p95 `total_ms ≤ 40 ms`; no unhandled exceptions; buffer-health pill stays green.
+
+**Out of scope:** no decision settings UI, no decoder toggles, no terminal trigger log — all M2.
+
+---
+
+### Commit 9 — Docs update + M1 sign-off
+
+**Commit subject:** `docs(phase2-ui): mark Phase 2 UI M1 complete + soak results`
+
+**Changes:**
+- `online_decoder/docs/Phase2_UI_Plan.md` — flip every `☐` to `☑` in the Status table; append a `## M1 Soak Results` section with the actual numbers from Commit 8's 5-minute run (p50, p95, memory delta, exit notes).
+- `online_decoder/docs/README.md` — add the Phase 2 UI plan to the doc index.
+- `online_decoder/CLAUDE.md` — note the `Phase2Screen` surface and the pyqtgraph dependency for live plots.
+
+**Acceptance:**
+- Verification Checklist (below) walked end-to-end and every item ticks.
+- `git log --oneline online-decoder..HEAD` lists exactly the 9 commit subjects above, in order.
+
+**Out of scope:** M2 work — see "Out of scope (M1)" at the top of this plan.
 
 ---
 
