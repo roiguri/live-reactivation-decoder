@@ -32,6 +32,9 @@ class Phase1Screen(QWidget):
         # Timepoint chosen by the operator on Node 4; Node 5's Training
         # worker reads this when it fires. None until eval is confirmed.
         self._selected_timepoint: float | None = None
+        # Path to the decoder_pipeline.joblib emitted by Node 5; consumed
+        # by the Go-Live handoff to Phase 2. None until training succeeds.
+        self._decoder_pipeline_path: Path | None = None
         self.setObjectName("phase1_screen")
 
         root = QHBoxLayout(self)
@@ -226,14 +229,31 @@ class Phase1Screen(QWidget):
         self._journey_panel.advance(4)
 
     def _on_training_complete(self, result: dict) -> None:
+        path = result.get("model_filepath")
+        if path is not None:
+            self._decoder_pipeline_path = Path(path)
         self._journey_panel.set_node_summary(
             4, self._format_training_summary(result)
         )
 
     def _on_train_results_displayed(self) -> None:
-        # Topomaps are showing; relabel Node 5's button. "Go Live" wiring
-        # to Phase 2 lands when the live-stream screen ships.
+        # Topomaps are showing; relabel Node 5's button and swap its
+        # action from "run training" to "go live to Phase 2".
+        self._journey_panel.set_node_action(4, self._on_go_live)
         self._journey_panel.set_node_action_label(4, "Go Live")
+
+    def _on_go_live(self) -> None:
+        if self.session is None or self._decoder_pipeline_path is None:
+            return
+        mw = self.window()
+        if mw is None or not hasattr(mw, "show_screen"):
+            return
+        from frontend.screens.phase2_screen import Phase2Screen
+        phase2 = Phase2Screen(
+            session=self.session,
+            decoder_pipeline_path=self._decoder_pipeline_path,
+        )
+        mw.show_screen(phase2)
 
     def _on_node_changed(self, completed_node: int) -> None:
         next_idx = completed_node  # node_changed emits 1-indexed completed node

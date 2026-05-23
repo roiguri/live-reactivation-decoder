@@ -143,14 +143,15 @@ You may open one PR per commit or bundle multiple commits per PR; the boundary t
 **Commit subject:** `feat(phase2-ui): add Phase 2 screen shell and Go-Live handoff`
 
 **Changes:**
-- `online_decoder/src/frontend/screens/phase2_screen.py` (new) — `Phase2Screen(QWidget)` with a header bar only: "Back" button, status label `INFERENCE HALTED`, target hardware label. Constructor takes `(session: AppSession, decoder_pipeline_path: Path)` and stores them. Back button calls `MainWindow.show_screen(phase1_screen)`.
+- `online_decoder/src/frontend/screens/phase2_screen.py` (new) — `Phase2Screen(QWidget)` with a header bar only: status label `INFERENCE HALTED`, target hardware label. Constructor takes `(session: AppSession, decoder_pipeline_path: Path)` and stores them. No Back button yet — back-flow semantics (Node 5 vs. journey reset; what to do with a live stream) are unresolved and tracked by a TODO in the screen file; Phase 2 is one-way for now (restart the app to leave).
 - `online_decoder/src/frontend/screens/phase1_screen.py` — in `_on_train_results_displayed`, re-wire the Node 5 action button so it constructs `Phase2Screen(session=self.session, decoder_pipeline_path=...)` and registers it via `MainWindow.show_screen(...)`.
+- `online_decoder/src/frontend/views/train_view.py` — flip `page1_ready` so the journey-panel Node 5 button is enabled after training completes (it was hardcoded to `False` with a "Phase 2 will wire this" TODO).
 
 **Acceptance:**
-- Run Phase 1 end-to-end (real or via the debug walkthrough). After Node 5 displays results, the "Go Live" button is enabled. Clicking it shows a blank Phase 2 screen with header + Back. Clicking Back returns to Node 5.
-- No background threads remain after Back (verify with a short `threading.enumerate()` log on screen-close).
+- Run Phase 1 end-to-end (real or via the debug walkthrough). After Node 5 displays results, the "Go Live" button is enabled. Clicking it shows a blank Phase 2 screen with header.
+- No background threads remain on screen entry/exit (verify with a short `threading.enumerate()` log).
 
-**Out of scope:** no chart, no Start/Halt button, no `LiveStreamSession` construction.
+**Out of scope:** no Back button (deferred until back-flow semantics are decided), no chart, no Start/Halt button, no `LiveStreamSession` construction.
 
 ---
 
@@ -331,3 +332,4 @@ When implementation completes, verify end-to-end:
 1. **Threshold source.** `session.settings["decoders"]` does not yet have a `threshold` field. Either add it to the config schema (`config_models.py`) or hardcode 0.85 for M1 and surface it in M2 along with the decision-settings panel.
 2. **Stream-source UI.** M1 assumes `LSLReceiver` discovers the live stream via its defaults. xdf-replay-as-LSL is M2. If the operator needs to choose between sources before clicking Start, an M2 stream-source picker lands in the header.
 3. **Subject-folder-aware log path.** `PredictionLogger` exists but `log_path=None` for M1. Once Phase 2 sessions need to write per-subject CSVs, the directory layout in PRD §5 must be wired (`phase2_live/live_stream_logs.csv` under the subject folder).
+4. **Back-flow semantics.** Phase 2 has no Back button in Commit 2; the TODO sits in `phase2_screen.py`. Unresolved: should Back land on Node 5's results page (preserving the journey trail) or restart the journey from Node 1? What happens to a live stream that's running — auto-halt with a confirm? Commit 6's spec assumes Back calls `live.stop()` before switching; resolve this before Commit 6 lands.
