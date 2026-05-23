@@ -159,6 +159,10 @@ class OfflinePreprocessor:
             self._resample(self.epochs)
 
         self._save(Path(output_dir))
+        # Raw has done its job (filtered/resampled in place, epoched into
+        # self.epochs). Nothing past Step 2 reads it — release the reference
+        # so it doesn't masquerade as live state through training/export.
+        self.raw = None
         return {"n_epochs": len(self.epochs), "n_excluded": len(self.ica.exclude)}
 
     def export_online_state(self) -> dict[str, Any]:
@@ -172,9 +176,9 @@ class OfflinePreprocessor:
         Raises:
             RuntimeError: if called before the pipeline has produced an ICA.
         """
-        if self.ica is None or self.raw is None:
+        if self.ica is None:
             raise RuntimeError(
-                "Both pipeline steps must complete before exporting online state."
+                "Fit ICA before exporting online state."
             )
 
         n_comp = self.ica.n_components_
