@@ -158,6 +158,9 @@ class OfflineOrchestrator:
             output_dir=self._output_dir / "epochs",
         )
         self._epochs = self._preprocessor.epochs
+        # Preprocessor already dropped its raw handle; drop ours too so the
+        # Raw object's refcount reaches zero and the buffer is freed.
+        self._raw = None
         logger.info("Preprocessing complete. %d epochs retained.", len(self._epochs))
         return result
 
