@@ -682,45 +682,28 @@ LSL connection is attempted. Use
 `python online_decoder/scripts/smoke_stream_worker.py --preflight-only --pipeline <path>`
 to validate this handoff before replay or lab runs.
 
-#### Current Phase 1 Artifact Handoff Issue
+#### Phase 1 Artifact Handoff
 
-Phase 2 intentionally treats the saved decoder artifact as a boundary between
-three responsibilities:
+Phase 2 treats the saved decoder artifact as a boundary between three
+responsibilities:
 
 - `models`: fitted decoder models for `LiveInferenceEngine`
 - `online_state`: preprocessing state for `OnlinePreprocessor`
 - `metadata`: model-facing runtime metadata such as `feature_width` and
   `decoding_timepoint`
 
-The current Phase 1 export path appears to save a flatter mixed dictionary from
-`OfflineOrchestrator.run_training()`: preprocessing state keys are stored beside
-model/training keys such as `models`, `spatial_patterns`, `mne_info`, and
-`decoding_timepoint`. That shape is not the Phase 2 envelope because it lacks
-top-level `online_state` and `metadata` keys. `load_decoder_pipeline_artifact()`
-therefore rejects it before `AppSession.build_live_stream_session(...)` can
-construct the live runtime.
+`OfflineOrchestrator.run_training()` constructs the artifact via
+`DecoderPipelineArtifactSpec` (`backend/core/artifact_models.py`), which
+validates shape + cross-field consistency (`metadata.feature_width` matches
+`len(online_state["eeg_chunk_indices"])`) at training-end. `_save_to_disk`
+calls `spec.model_dump()` so the on-disk envelope matches what
+`load_decoder_pipeline_artifact()` validates against. The in-memory handoff
+accessor is `OfflineOrchestrator.get_live_artifact_spec()` (returns the same
+validated spec).
 
-When Phase 1 is updated, the saved artifact should preserve the separation:
-
-```python
-online_state = preprocessor.export_online_state()
-
-{
-    "models": training_results["models"],
-    "online_state": online_state,
-    "metadata": {
-        # TODO(open): Revisit which fields belong in runtime metadata.
-        # Keep this minimal unless the live runtime, UI, or reporting has a
-        # concrete consumer for an additional field.
-        "feature_width": len(online_state["eeg_chunk_indices"]),
-        "decoding_timepoint": timepoint,
-    },
-}
-```
-
-If `get_online_state_for_live_phase()` keeps its current name, it should keep
-returning only the preprocessing `online_state`; a separate accessor can expose
-the full artifact if the frontend needs an in-memory Phase 1 to Phase 2 handoff.
+UI-facing artifacts that the live runtime does not need (`spatial_patterns`,
+`mne_info`) live on `orchestrator._ui_state` and are not persisted in
+`decoder_pipeline.joblib`.
 
 1. `StreamWorker` asks `LSLReceiver` for all newly available data.
 2. If data exists, `StreamWorker` appends it to an internal batch accumulator.

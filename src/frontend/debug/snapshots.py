@@ -4,9 +4,10 @@ Dev-only. Production ``frontend.main`` does **not** import this module.
 
 A snapshot is a small joblib pickle holding a subset of the
 orchestrator's stateful attributes (``_data_dir``, optionally ``_raw``,
-``_preprocessor``, ``_epochs``, ``_eval_results``, ``online_state``) —
-enough to let the debug screen drop the operator straight into a
-downstream view as if the upstream pipeline had just finished. The
+``_preprocessor``, ``_epochs``, ``_eval_results``, ``_live_artifact_spec``,
+``_ui_state``) — enough to let the debug screen drop the operator
+straight into a downstream view as if the upstream pipeline had just
+finished. The
 ``_preprocessor``'s ``.raw`` attribute (a potentially multi-MB MNE
 ``Raw``) is **stripped before pickling**: downstream views only need
 its ``.ica`` and ``_bad_channels`` / ``_interp_weights`` /
@@ -37,7 +38,8 @@ _ATTRS: tuple[str, ...] = (
     "_preprocessor",
     "_epochs",
     "_eval_results",
-    "online_state",
+    "_live_artifact_spec",
+    "_ui_state",
 )
 
 
@@ -71,7 +73,7 @@ def save_snapshot(
             continue
         value = getattr(orchestrator, name)
         # Omit unpopulated state so the inferred phase reflects reality
-        # (an empty ``online_state = {}`` shouldn't read as "train_done").
+        # (a missing live artifact shouldn't read as "train_done").
         if value is None:
             continue
         if isinstance(value, dict) and not value:
@@ -113,7 +115,7 @@ def load_snapshot(
 
 def _infer_phase(payload: dict[str, Any]) -> str:
     """Coarse tag describing how far along the pipeline this snapshot is."""
-    if payload.get("online_state"):
+    if payload.get("_live_artifact_spec") is not None:
         return "train_done"
     if "_eval_results" in payload:
         return "eval_done"

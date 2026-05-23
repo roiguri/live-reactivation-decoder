@@ -18,11 +18,7 @@ from frontend.debug.snapshots import load_snapshot, save_snapshot
 
 
 class _FakeOrchestrator:
-    """Minimal stand-in matching the attributes ``snapshots._ATTRS`` touches.
-
-    A real ``OfflineOrchestrator`` would expose the same surface plus
-    a lot more; the snapshot module only reads/writes these six names.
-    """
+    """Minimal stand-in matching the attributes ``snapshots._ATTRS`` touches."""
 
     def __init__(self) -> None:
         self._data_dir: Path | None = None
@@ -30,7 +26,8 @@ class _FakeOrchestrator:
         self._preprocessor = None
         self._epochs = None
         self._eval_results: dict | None = None
-        self.online_state: dict = {}
+        self._live_artifact_spec = None
+        self._ui_state: dict | None = None
 
 
 class _FakePreprocessor:
@@ -109,10 +106,13 @@ def test_round_trip_train_done_phase(tmp_path: Path) -> None:
     orig._data_dir = Path("/tmp/sub_001")
     orig._epochs = "EPOCHS_SENTINEL"
     orig._eval_results = {"suggested_timepoint": 0.42}
-    orig.online_state = {
-        "models": "FAKE_MODELS",
+    # ``_live_artifact_spec`` would normally be a Pydantic model; for the
+    # snapshot round-trip we just need a non-None sentinel (joblib pickles
+    # arbitrary objects).
+    orig._live_artifact_spec = {"sentinel": "FAKE_SPEC"}
+    orig._ui_state = {
         "spatial_patterns": {"red": np.array([1.0, 2.0, 3.0])},
-        "ica_unmixing": np.eye(3),
+        "mne_info": "MNE_INFO_SENTINEL",
     }
 
     out = save_snapshot(orig, tmp_path / "train_done.joblib")
@@ -120,25 +120,26 @@ def test_round_trip_train_done_phase(tmp_path: Path) -> None:
     payload = load_snapshot(restored, out)
 
     assert payload["_phase"] == "train_done"
-    assert restored.online_state["models"] == "FAKE_MODELS"
+    assert restored._live_artifact_spec == {"sentinel": "FAKE_SPEC"}
     np.testing.assert_array_equal(
-        restored.online_state["spatial_patterns"]["red"], np.array([1.0, 2.0, 3.0])
+        restored._ui_state["spatial_patterns"]["red"], np.array([1.0, 2.0, 3.0])
     )
+    assert restored._ui_state["mne_info"] == "MNE_INFO_SENTINEL"
 
 
 # ── empty-state pruning so partial snapshots don't mis-phase ─────────────────
 
 
-def test_empty_online_state_does_not_promote_to_train_done(tmp_path: Path) -> None:
-    """A populated eval result with default-empty online_state must read
-    as ``eval_done`` — not ``train_done``."""
+def test_missing_live_artifact_does_not_promote_to_train_done(tmp_path: Path) -> None:
+    """A populated eval result with no live artifact spec must read as
+    ``eval_done`` — not ``train_done``."""
     orig = _FakeOrchestrator()
     orig._eval_results = {"suggested_timepoint": 0.1, "tasks": {}}
-    # online_state stays at its default {}; should be dropped.
+    # _live_artifact_spec stays at its default None; should be dropped.
 
     payload = load_snapshot(_FakeOrchestrator(), save_snapshot(orig, tmp_path / "e.joblib"))
     assert payload["_phase"] == "eval_done"
-    assert "online_state" not in payload
+    assert "_live_artifact_spec" not in payload
 
 
 def test_none_attrs_are_omitted(tmp_path: Path) -> None:
@@ -146,7 +147,7 @@ def test_none_attrs_are_omitted(tmp_path: Path) -> None:
     orig = _FakeOrchestrator()  # all defaults: nothing populated
     payload = load_snapshot(_FakeOrchestrator(), save_snapshot(orig, tmp_path / "blank.joblib"))
     assert payload["_phase"] == "unknown"
-    for k in ("_data_dir", "_raw", "_epochs", "_eval_results", "online_state"):
+    for k in ("_data_dir", "_raw", "_epochs", "_eval_results", "_live_artifact_spec", "_ui_state"):
         assert k not in payload, f"unpopulated {k} should be omitted"
 
 

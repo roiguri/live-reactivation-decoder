@@ -7,6 +7,10 @@ from typing import Any, Optional
 import joblib
 import mne
 
+from backend.core.artifact_models import (
+    DecoderPipelineArtifactSpec,
+    DecoderPipelineMetadata,
+)
 from backend.core.settings_manager import SettingsManager
 from backend.offline_phase.evaluator import ModelEvaluator
 from backend.offline_phase.preprocessor import OfflinePreprocessor
@@ -37,7 +41,7 @@ class OfflineOrchestrator:
         eval_results = run_evaluation()
         # UI: user clicks timepoint on TGM plot
         result = run_training(timepoint)
-        online_state = get_online_state_for_live_phase()
+        artifact = get_live_artifact_spec()
     """
 
     def __init__(
@@ -53,7 +57,9 @@ class OfflineOrchestrator:
         self._preprocessor: Optional[OfflinePreprocessor] = None
         self._epochs: Optional[mne.Epochs] = None
         self._eval_results: Optional[dict[str, Any]] = None
-        self.online_state: dict[str, Any] = {}
+        self._live_artifact_spec: Optional[DecoderPipelineArtifactSpec] = None
+        # TODO: debug-only consumer today; revisit once Phase 1 needs persisted UI artifacts.
+        self._ui_state: Optional[dict[str, Any]] = None
 
     # ── UI interaction ────────────────────────────────────────────────────────
 
@@ -236,12 +242,19 @@ class OfflineOrchestrator:
 
         trainer = ModelTrainer(self._epochs, self._settings.get_decoder_settings())
         training_results = trainer.run_training(timepoint)
-        self.online_state = {
-            **self._preprocessor.export_online_state(),
-            "models": training_results["models"],
+        preprocessor_state = self._preprocessor.export_online_state()
+
+        self._live_artifact_spec = DecoderPipelineArtifactSpec(
+            models=training_results["models"],
+            online_state=preprocessor_state,
+            metadata=DecoderPipelineMetadata(
+                feature_width=len(preprocessor_state["eeg_chunk_indices"]),
+                decoding_timepoint=timepoint,
+            ),
+        )
+        self._ui_state = {
             "spatial_patterns": training_results["spatial_patterns"],
             "mne_info": training_results["mne_info"],
-            "decoding_timepoint": timepoint,
         }
 
         save_path = self._save_to_disk()
@@ -254,18 +267,13 @@ class OfflineOrchestrator:
 
     # ── Phase 2 handoff ───────────────────────────────────────────────────────
 
-    def get_online_state_for_live_phase(self) -> dict[str, Any]:
-        """
-        Return the bundled online state directly from RAM, bypassing disk I/O.
-
-        Raises:
-            RuntimeError: if run_training() has not been called first.
-        """
-        if not self.online_state:
+    def get_live_artifact_spec(self) -> DecoderPipelineArtifactSpec:
+        """Return the validated live-phase artifact from RAM. Raises if run_training() hasn't completed."""
+        if self._live_artifact_spec is None:
             raise RuntimeError(
                 "Cannot transition to Phase 2: run_training() has not completed."
             )
-        return self.online_state
+        return self._live_artifact_spec
 
     # ── Private: IO ───────────────────────────────────────────────────────────
 
@@ -313,5 +321,5 @@ class OfflineOrchestrator:
     def _save_to_disk(self) -> Path:
         save_path = self._output_dir / "models" / "decoder_pipeline.joblib"
         save_path.parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump(self.online_state, save_path)
+        joblib.dump(self._live_artifact_spec.model_dump(), save_path)
         return save_path
