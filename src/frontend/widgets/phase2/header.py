@@ -53,6 +53,9 @@ class Phase2Header(QWidget):
 
         layout.addStretch(1)
 
-    def set_status(self, text: str) -> None:
-        """Update the status label (e.g. ``LIVE INFERENCE`` / ``INFERENCE HALTED``)."""
+    def set_status(self, text: str, *, color: str = TEXT_PRIMARY) -> None:
+        """Update the status label text and tint."""
         self._status_label.setText(text)
+        self._status_label.setStyleSheet(
+            f"color: {color}; background: transparent;"
+        )

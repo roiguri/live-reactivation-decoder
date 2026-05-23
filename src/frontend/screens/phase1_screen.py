@@ -248,11 +248,22 @@ class Phase1Screen(QWidget):
         mw = self.window()
         if mw is None or not hasattr(mw, "show_screen"):
             return
+        from PyQt6.QtWidgets import QMessageBox
         from frontend.screens.phase2_screen import Phase2Screen
-        phase2 = Phase2Screen(
-            session=self.session,
-            decoder_pipeline_path=self._decoder_pipeline_path,
-        )
+        try:
+            phase2 = Phase2Screen(
+                session=self.session,
+                decoder_pipeline_path=self._decoder_pipeline_path,
+            )
+        except Exception as exc:
+            # Artifact load / live-stream construction failed. Keep the
+            # operator on Phase 1 so they can re-train or pick a different
+            # artifact rather than landing on a half-built screen.
+            QMessageBox.critical(
+                self, "Could not open live inference",
+                f"Failed to load the decoder pipeline:\n{exc}",
+            )
+            return
         mw.show_screen(phase2)
 
     def _on_node_changed(self, completed_node: int) -> None:
