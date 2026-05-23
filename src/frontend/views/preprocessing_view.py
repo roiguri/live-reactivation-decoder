@@ -114,6 +114,8 @@ class PreprocessingView(QWidget):
         self._running: bool = False
         self._done: bool = False
         self._excluded_count: int = 0
+        self._epochs_count: int = 0
+        self._bad_channels: list[str] = []
         self._was_ready: bool = False
         self._thread: QThread | None = None
         self._worker = None
@@ -228,6 +230,7 @@ class PreprocessingView(QWidget):
                 len(bads), bads,
             )
             self._session.offline.set_bad_channels(bads)
+            self._bad_channels = bads
         except Exception as exc:  # pragma: no cover — display/runtime guard
             self._on_error(f"Bad-channel review failed: {exc}")
             return
@@ -319,6 +322,8 @@ class PreprocessingView(QWidget):
             int(payload.get("n_excluded", self._excluded_count))
             if isinstance(payload, dict) else self._excluded_count
         )
+        self._epochs_count = n_epochs
+        self._excluded_count = n_excluded
         self._epochs_value.setText(str(n_epochs))
         self._components_value.setText(str(n_excluded))
         self._pages.setCurrentIndex(1)

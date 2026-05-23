@@ -79,6 +79,32 @@ class OfflineOrchestrator:
         self._raw = self._load_eeg_raw(vhdr)
         logger.info("Raw EEG loaded from %s", vhdr)
 
+    def get_loaded_data_summary(self) -> dict[str, Any] | None:
+        """Return a small summary of the loaded raw recording (or ``None``).
+
+        Used by the UI to surface stage results in the journey panel after
+        load completes. Returns ``None`` until ``load_raw_data()`` has run.
+        """
+        if self._raw is None:
+            return None
+        info = self._raw.info
+        try:
+            n_events = len(self._raw.annotations)
+        except Exception:
+            n_events = 0
+        vhdr_name = None
+        if self._data_dir is not None:
+            vhdrs = list(self._data_dir.glob("*.vhdr"))
+            if vhdrs:
+                vhdr_name = vhdrs[0].name
+        return {
+            "file_name": vhdr_name,
+            "n_channels": int(info["nchan"]),
+            "sfreq": float(info["sfreq"]),
+            "duration_s": float(self._raw.n_times / info["sfreq"]),
+            "n_events": int(n_events),
+        }
+
     def run_step1a_filter(self) -> mne.io.Raw:
         """
         Channel hygiene → high-pass → notch → (early variant) low-pass +

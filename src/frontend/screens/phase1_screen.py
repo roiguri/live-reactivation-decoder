@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
@@ -126,7 +128,7 @@ class Phase1Screen(QWidget):
         )
         self._load_data_view.loading_requested.connect(self.show_loading)
         self._load_data_view.loading_done.connect(self.hide_loading)
-        self._load_data_view.data_loaded.connect(lambda: self._journey_panel.advance(2))
+        self._load_data_view.data_loaded.connect(self._on_data_loaded)
 
         # Node 3: Preprocessing
         self._journey_panel.set_node_action(2, self._preprocessing_view.trigger_start)
@@ -176,6 +178,7 @@ class Phase1Screen(QWidget):
         self._train_view.results_displayed.connect(
             self._on_train_results_displayed
         )
+        self._train_view.training_complete.connect(self._on_training_complete)
 
         self._journey_panel.node_changed.connect(self._on_node_changed)
 
@@ -193,11 +196,17 @@ class Phase1Screen(QWidget):
         self._preprocessing_view.set_session(session)
         self._evaluation_view.set_session(session)
         self._train_view.set_session(session)
+        self._journey_panel.set_node_summary(0, self._format_settings_summary())
         self._journey_panel.advance(1)
+
+    def _on_data_loaded(self) -> None:
+        self._journey_panel.set_node_summary(1, self._format_load_summary())
+        self._journey_panel.advance(2)
 
     def _on_preprocessing_complete_displayed(self) -> None:
         self._journey_panel.set_node_action(2, self._preprocessing_view.trigger_continue)
         self._journey_panel.set_node_action_label(2, "Continue to Evaluation")
+        self._journey_panel.set_node_summary(2, self._format_preprocessing_summary())
 
     def _on_eval_results_displayed(self) -> None:
         # Eval results page is showing; the journey-panel Node 4 button
@@ -211,7 +220,15 @@ class Phase1Screen(QWidget):
         # Stash for Node 5's training worker, then advance the trail.
         self._selected_timepoint = timepoint
         self._train_view.set_timepoint(timepoint)
+        self._journey_panel.set_node_summary(
+            3, self._format_evaluation_summary(timepoint)
+        )
         self._journey_panel.advance(4)
+
+    def _on_training_complete(self, result: dict) -> None:
+        self._journey_panel.set_node_summary(
+            4, self._format_training_summary(result)
+        )
 
     def _on_train_results_displayed(self) -> None:
         # Topomaps are showing; relabel Node 5's button. "Go Live" wiring
@@ -223,3 +240,96 @@ class Phase1Screen(QWidget):
         if next_idx < self._workspace.count():
             self._workspace.setCurrentIndex(next_idx)
             self._header_title.setText(_NODE_TITLES[next_idx])
+
+    # ── summary formatters ────────────────────────────────────────────────────
+
+    def _format_settings_summary(self) -> str:
+        cfg_path = self._settings_view._config_path
+        out_dir = self._settings_view._output_dir
+        cfg_name = Path(cfg_path).name if cfg_path else "—"
+        out_name = Path(out_dir).name if out_dir else "—"
+        try:
+            settings = self.session.settings
+            model = settings["decoders"]["model"]
+            n_decoders = len(settings["decoders"].get("tasks", []))
+        except (AttributeError, KeyError, TypeError):
+            model = "—"
+            n_decoders = 0
+        return (
+            f"Config: {cfg_name}\n"
+            f"Output: {out_name}\n"
+            f"Model: {model} · {n_decoders} decoder(s)"
+        )
+
+    def _format_load_summary(self) -> str:
+        info = None
+        if self.session is not None and self.session.offline is not None:
+            info = self.session.offline.get_loaded_data_summary()
+        if info is None:
+            return "Data loaded"
+        return (
+            f"File: {info['file_name'] or '—'}\n"
+            f"{info['n_channels']} ch · {info['sfreq']:.0f} Hz · "
+            f"{info['duration_s']:.0f} s\n"
+            f"{info['n_events']} event markers"
+        )
+
+    def _format_preprocessing_summary(self) -> str:
+        view = self._preprocessing_view
+        n_epochs = view._epochs_count
+        n_excluded = view._excluded_count
+        bads = view._bad_channels
+        if bads:
+            shown = ", ".join(bads[:3]) + ("…" if len(bads) > 3 else "")
+            bads_line = f"Bads dropped: {len(bads)} ({shown})"
+        else:
+            bads_line = "Bads dropped: 0"
+        return (
+            f"Epochs: {n_epochs}\n"
+            f"{bads_line}\n"
+            f"ICs removed: {n_excluded}"
+        )
+
+    def _format_evaluation_summary(self, timepoint: float) -> str:
+        view = self._evaluation_view
+        result = view._result or {}
+        tasks = result.get("tasks", {}) or {}
+        suggested_ms = float(result.get("suggested_timepoint", timepoint)) * 1000.0
+        sel_ms = timepoint * 1000.0
+
+        times = result.get("times")
+        avg_at_t: float | None = None
+        if times is not None and tasks:
+            import numpy as np
+            arr = np.asarray(times)
+            idx = int(np.argmin(np.abs(arr - timepoint)))
+            vals = []
+            for task in tasks.values():
+                diag = task.get("diagonal_auc")
+                if diag is not None and len(diag) > idx:
+                    vals.append(float(diag[idx]))
+            if vals:
+                avg_at_t = sum(vals) / len(vals)
+
+        avg_str = f"{avg_at_t:.2f}" if avg_at_t is not None else "—"
+        return (
+            f"Decoders: {len(tasks)}\n"
+            f"Selected: {sel_ms:.0f} ms (suggested {suggested_ms:.0f})\n"
+            f"Avg AUC @t: {avg_str}"
+        )
+
+    def _format_training_summary(self, result: dict) -> str:
+        patterns = result.get("spatial_patterns", {}) or {}
+        n_models = len(patterns)
+        t_ms = (
+            self._selected_timepoint * 1000.0
+            if self._selected_timepoint is not None
+            else float("nan")
+        )
+        path = result.get("model_filepath")
+        path_name = Path(path).name if path else "decoder_pipeline.joblib"
+        return (
+            f"Models trained: {n_models}\n"
+            f"Trained @ {t_ms:.0f} ms\n"
+            f"Saved: {path_name}"
+        )
