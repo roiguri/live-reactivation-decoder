@@ -18,7 +18,7 @@ Last reconciled with code on **2026-05-10**.
 
 **Offline phase implementation status (as of last reconciliation):**
 - ✅ `SettingsManager` + Pydantic config models (`src/backend/core/`)
-- ✅ `OfflinePreprocessor` (`src/backend/offline_phase/preprocessor.py`) — accepts a pre-loaded `mne.io.Raw` via constructor; **new reference pipeline** (see `docs/Preprocessing_Migration_Plan.md`): four operator-gated steps `run_step1a_filter()` / `set_bad_channels()` / `run_step1b_fit_ica()` / `run_step2_apply_and_save()`. Channel hygiene → HP → notch → (early: LP+resample) → interpolate bads → epoch → average ref → ICA (infomax+extended, HP-only fit copy) → ICLabel suggest → apply → (late: LP+resample) → save. No AutoReject. `export_online_state()` is fully positional (`eeg_chunk_indices`, `bad_indices`; no channel names). **Online phase still consumes the old schema — its migration is tracked separately and current `decoder_pipeline.joblib` artifacts are invalid until then.**
+- ✅ `OfflinePreprocessor` (`src/backend/offline_phase/preprocessor.py`) — accepts a pre-loaded `mne.io.Raw` via constructor; **new reference pipeline** (see `docs/Preprocessing_Migration_Plan.md`): four operator-gated steps `run_step1a_filter()` / `set_bad_channels()` / `run_step1b_fit_ica()` / `run_step2_apply_and_save()`. Channel hygiene → HP → notch → (early: LP+resample) → interpolate bads → epoch → average ref → ICA (infomax+extended, HP-only fit copy) → ICLabel suggest → apply → (late: LP+resample) → save. No AutoReject. `export_online_state()` is fully positional (`eeg_chunk_indices`, `bad_indices`; no channel names) and is consumed directly by the migrated `OnlinePreprocessor`.
 - ✅ `ModelEvaluator` (`src/backend/offline_phase/evaluator.py`)
 - ✅ `ModelTrainer` (`src/backend/offline_phase/trainer.py`)
 - ✅ Shared utilities (`src/backend/offline_phase/utils.py`) — `build_classifier`, `get_task_data`
@@ -776,8 +776,6 @@ the full artifact if the frontend needs an in-memory Phase 1 to Phase 2 handoff.
 * **Pipeline:** see Data Flow above — variant-flagged (`resample_filter_stage: "early" | "late"`).
 * **Status:** ✅ Implemented in `src/backend/online_phase/online_preprocessor.py`.
 
-> **Note:** the detailed signature/docstring code block further down (line ~1100) is stale and tracks the pre-migration design (bandpass schema, `ch_names`/`bad_channels`, 256 Hz target). It will be rewritten as a follow-up. The current source of truth is the code itself.
-
 #### **3. LiveInferenceEngine (The Brain)**
 
 * **Role:** Holds the trained models and generates real-time probabilities for all outputs produced by a batch.
@@ -1128,15 +1126,13 @@ class OnlinePreprocessor:
     """
     Stateful causal EEG preprocessor for the online phase.
 
-    Replicates the offline pipeline's spatial transforms using matrices
-    exported from Phase 1, applied to streaming micro-batches.
+    Consumes the positional online_state exported by Phase 1's
+    OfflinePreprocessor and applies the same spatial transforms to
+    streaming micro-batches. Pipeline order is variant-flagged by
+    settings["preprocessing"]["resample_filter_stage"]:
 
-    Pipeline order (mirrors offline):
-        1. Bandpass + notch filter (causal IIR, persistent zi)
-        2. Decimate to target rate (FIR anti-alias + phase tracking)
-        3. Interpolate bad channels (fixed weight matrix)
-        4. Average reference
-        5. Apply ICA (fixed unmixing/mixing matrices)
+      "early":  filter → lowpass → decimate → interp → avg_ref → ica
+      "late":   filter → interp → avg_ref → ica → lowpass → decimate
 
     Status: ✅ Implemented in src/backend/online_phase/online_preprocessor.py
     """
@@ -1150,20 +1146,23 @@ class OnlinePreprocessor:
         """
         Args:
             preprocessing_settings: Settings from YAML, unwrapped from PreprocessingSettings.
-                Required keys: bandpass.l_freq, bandpass.h_freq, bandpass.method,
-                bandpass.notch (may be None), resample.target_rate.
-            online_state: Exported Phase 1 state dict. Required keys:
-                bad_channels, interp_weights, ch_names, ica_unmixing, ica_mixing,
-                ica_pca_components, ica_pca_mean, ica_exclude, pre_whitener, sfreq_offline.
+                Required keys: highpass.l_freq, highpass.method, notch.freq
+                (may be None), lowpass.h_freq, lowpass.method,
+                final_resample.target_rate, resample_filter_stage.
+            online_state: Phase 1 positional state dict. Required keys:
+                eeg_chunk_indices, bad_indices, interp_weights, ica_unmixing,
+                ica_mixing, ica_pca_components, ica_pca_mean, ica_exclude,
+                pre_whitener. No channel names cross the LSL boundary.
             input_sfreq: LSL stream sample rate (default: 1000.0 Hz).
 
         Raises:
-            ValueError: If sfreq_offline does not match target_rate, or if
-                        ch_names and ICA matrix dimensions are inconsistent.
+            ValueError: If input_sfreq % target_rate != 0, if
+                eeg_chunk_indices is malformed, or if ICA matrix
+                dimensions are inconsistent with len(eeg_chunk_indices).
         """
 
     @property
-    def n_channels(self) -> int: ...
+    def n_channels(self) -> int: ...   # = len(online_state["eeg_chunk_indices"])
 
     @property
     def input_sfreq(self) -> float: ...
@@ -1180,15 +1179,21 @@ class OnlinePreprocessor:
         Apply the full online preprocessing pipeline to one micro-batch.
 
         Args:
-            eeg_batch: (n_samples, n_channels) at input_sfreq.
+            eeg_batch: (n_samples, raw_n_channels) straight from
+                LSLReceiver — post-trigger-split, pre-hygiene. The
+                eeg_chunk_indices slice picks the post-hygiene EEG
+                positions inside _apply_filter.
             timestamps: (n_samples,) LSL timestamps.
 
         Returns:
             Tuple of (features, output_timestamps) at target_sfreq.
-            features shape: (n_out, n_channels). n_out = 0 for very small batches.
+            features shape: (n_out, n_eeg_post_hygiene), where
+            n_eeg_post_hygiene == len(eeg_chunk_indices). n_out = 0
+            for very small batches.
 
         Raises:
             ValueError: If eeg_batch shape or timestamps length is wrong.
+            IndexError: If raw_n_channels <= max(eeg_chunk_indices).
         """
 
     def reset_state(self) -> None:

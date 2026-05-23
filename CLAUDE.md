@@ -56,7 +56,7 @@ python scripts/smoke_stream_worker.py --pipeline /path/to/decoder_pipeline.jobli
 
 The experiment config lives in `experiment_config.yaml`. Its schema is defined in `src/backend/core/config_models.py` using Pydantic v2. When the YAML schema changes, update the Pydantic models.
 
-The `preprocessing:` block follows the new reference pipeline (see `docs/Preprocessing_Migration_Plan.md`): `resample_filter_stage` (`early`|`late`), `channel_hygiene`, `highpass`, `notch`, `ica` (incl. `iclabel`), `epochs`, `lowpass`, `final_resample`. The old `bandpass`/`resample`/`reject_criteria` sections are gone. The offline phase is fully migrated; the online phase still reads the old name-bearing `online_state` schema and is migrated separately.
+The `preprocessing:` block follows the new reference pipeline (see `docs/Preprocessing_Migration_Plan.md`): `resample_filter_stage` (`early`|`late`), `channel_hygiene`, `highpass`, `notch`, `ica` (incl. `iclabel`), `epochs`, `lowpass`, `final_resample`. The old `bandpass`/`resample`/`reject_criteria` sections are gone. Both offline and online phases now consume the same positional `online_state` schema (`eeg_chunk_indices`, `bad_indices`, ICA matrices, interp weights, pre_whitener — no channel names).
 
 ## When to Update This File
 

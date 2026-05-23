@@ -1,19 +1,20 @@
 # Migrate preprocessing to `tomer_preprocessing_new.py` reference
 
-> **Status (2026-05-17).** Offline scope **done**: config schema
-> (`config_models.py` + `experiment_config.yaml`), `OfflinePreprocessor`
-> (four-step API + new pipeline order), `OfflineOrchestrator`, and the
-> existing frontend (settings + preprocessing screens, MNE interactive
-> windows, `ica_component_card.py` deleted) are migrated, with `mne-icalabel`
-> added and `autoreject` removed. Offline + core test suites green.
+> **Status (2026-05-23).** Both phases **done**.
 >
-> **Online phase deferred** (separate effort): `online_preprocessor.py`,
-> `lsl_receiver.py`, `artifact_loader.py` still consume the old
-> name-bearing schema. Until they are migrated, **all existing
-> `decoder_pipeline.joblib` artifacts are invalid** and the offline↔online
-> numerical-parity tests in `tests/online_phase/test_online_preprocessor.py`
-> are skipped (see their skip reasons). The 10 `test_stream_worker.py`
-> errors are a pre-existing missing-`qtbot` environment issue, unrelated.
+> Offline scope: config schema (`config_models.py` + `experiment_config.yaml`),
+> `OfflinePreprocessor` (four-step API + new pipeline order), `OfflineOrchestrator`,
+> and the frontend (settings + preprocessing screens, MNE interactive windows,
+> `ica_component_card.py` deleted) are migrated, with `mne-icalabel` added and
+> `autoreject` removed.
+>
+> Online scope: `OnlinePreprocessor` consumes the positional online_state
+> (`eeg_chunk_indices`, `bad_indices`, ICA matrices, interp weights, pre_whitener
+> — no channel names) directly, with filter/lowpass/decimate stages variant-flagged
+> by `resample_filter_stage`. The offline↔online numerical-parity tests in
+> `tests/online_phase/test_online_preprocessor.py::TestApplyICA` and
+> `::TestIntegration` are active. The 10 `test_stream_worker.py` errors remain a
+> pre-existing missing-`qtbot` environment issue, unrelated.
 
 ## Context
 
