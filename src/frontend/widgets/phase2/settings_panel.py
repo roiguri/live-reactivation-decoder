@@ -13,6 +13,8 @@ action button is dropped in once the live-stream wiring lands.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from PyQt6.QtCore import Qt, pyqtSignal as Signal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
@@ -28,11 +30,17 @@ from PyQt6.QtWidgets import (
 from frontend.styles.theme import (
     BORDER_GRAY,
     CARD_WHITE,
+    PRIMARY_BLUE,
+    SUCCESS_GREEN,
     TEXT_MUTED,
     TEXT_PRIMARY,
 )
 
 _PANEL_WIDTH = 280
+# Posix path keeps the QSS url() string portable across OSes.
+_CHECKMARK_GREEN_URL = (
+    Path(__file__).resolve().parents[2] / "styles" / "assets" / "checkmark_green.svg"
+).as_posix()
 
 
 class Phase2SettingsPanel(QWidget):
@@ -58,9 +66,30 @@ class Phase2SettingsPanel(QWidget):
         # paint the border/background from its stylesheet (QFrame paints
         # by default; QWidget does not).
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        # The decoder QCheckBoxes need an explicit ::indicator rule: once
+        # any ancestor has a stylesheet, Qt switches QCheckBox from native
+        # rendering to CSS rendering, and an empty CSS leaves the indicator
+        # invisible on some platforms (notably Windows).
         self.setStyleSheet(
             f"QWidget#phase2_settings_panel {{"
             f"  background: #FAFAFA; border-right: 1px solid {BORDER_GRAY};"
+            f"}}"
+            f"QWidget#phase2_settings_panel QCheckBox {{"
+            f"  background: transparent; spacing: 6px;"
+            f"}}"
+            f"QWidget#phase2_settings_panel QCheckBox::indicator {{"
+            f"  width: 14px; height: 14px;"
+            f"  border: 1px solid {BORDER_GRAY};"
+            f"  border-radius: 2px;"
+            f"  background: {CARD_WHITE};"
+            f"}}"
+            f"QWidget#phase2_settings_panel QCheckBox::indicator:hover {{"
+            f"  border-color: {PRIMARY_BLUE};"
+            f"}}"
+            f"QWidget#phase2_settings_panel QCheckBox::indicator:checked {{"
+            f"  background: {CARD_WHITE};"
+            f"  border-color: {SUCCESS_GREEN};"
+            f"  image: url({_CHECKMARK_GREEN_URL});"
             f"}}"
         )
 
