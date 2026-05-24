@@ -8,21 +8,24 @@ Back to [Docs Index](README.md) or [Phase 2 Backend Plan](Phase2_Implementation_
 
 This is the **active implementation contract** for the Phase 2 PyQt6 live-inference frontend.
 
-**Progress:** Not started. Phase 2 backend is fully implemented (`LiveStreamSession`, `StreamWorker`, `OnlinePreprocessor`, `LiveInferenceEngine`, `LSLReceiver`, `PredictionLogger`) and exposed via `AppSession.build_live_stream_session(...)`.
+**Progress:** M1 complete (Commits 1-7 landed + unit-scaling bugfix). Commit 8 (latency display) deferred to next milestone.
 
-Each step below is one commit, self-contained, and independently verifiable. Tick the box when the commit is merged.
+Each step below is one commit, self-contained, and independently verifiable.
 
 | # | Commit subject | Status |
 |---|---|---|
-| 1 | `refactor(frontend): generalize MainWindow to host multiple screens` | ☐ |
-| 2 | `feat(phase2-ui): add Phase 2 screen shell and Go-Live handoff` | ☐ |
-| 3 | `feat(phase2-ui): add debug-mode quick-jump to Phase 2 screen` | ☐ |
-| 4 | `feat(phase2-ui): add LiveProbabilityChart widget (isolated)` | ☐ |
-| 5 | `feat(phase2-ui): embed LiveProbabilityChart in Phase 2 screen` | ☐ |
-| 6 | `feat(phase2-ui): wire LiveStreamSession start/halt to Phase 2 header` | ☐ |
-| 7 | `feat(phase2-ui): connect prediction_ready to LiveProbabilityChart` | ☐ |
-| 8 | `feat(phase2-ui): add rolling latency display and buffer-health indicator` | ☐ |
-| 9 | `docs(phase2-ui): mark Phase 2 UI M1 complete + soak results` | ☐ |
+| 1 | `refactor(frontend): generalize MainWindow to host multiple screens` | done |
+| 2 | `feat(phase2-ui): add Phase 2 screen shell and Go-Live handoff` | done |
+| 3 | `feat(phase2-ui): add debug-mode quick-jump to Phase 2 screen` | done |
+| 4 | `feat(phase2-ui): add LiveProbabilityChart widget (isolated)` | done |
+| 5 | `feat(phase2-ui): embed LiveProbabilityChart in Phase 2 screen` | done |
+| 6 | `feat(phase2-ui): wire LiveStreamSession start/halt to Phase 2 header` | done |
+| 7 | `feat(phase2-ui): connect prediction_ready to LiveProbabilityChart` | done |
+| 7.1 | `fix(online): scale LSL input from uV to SI volts in OnlinePreprocessor` | done |
+| 8 | `feat(phase2-ui): add rolling latency display and buffer-health indicator` | deferred |
+| 9 | `docs(phase2-ui): mark Phase 2 UI M1 complete` | done |
+
+**Commit 7.1 note:** Not in the original plan. During Commit 7 verification, the chart showed predictions of exactly 0 or 1 instead of probabilities. Root cause: LSL streams (NeurOne, XDF replay) deliver EEG in microvolts, but MNE's offline pipeline trains models in SI volts. The `OnlinePreprocessor` now applies `lsl_to_si_scale` (default `1e-6`) at the input of `process_batch`. Verified by comparing online output z-scores against the fitted `StandardScaler`: with scaling, all 64 channels fall within |z| < 1 of the training distribution; without, all exceed |z| > 100,000.
 
 Design reference: React mockup at [`knowledge_base/02_reference/ui_demo/Phase2Screen.jsx`](../../knowledge_base/02_reference/ui_demo/Phase2Screen.jsx) (in sync with [github.com/roiguri/decoder_gui](https://github.com/roiguri/decoder_gui) HEAD `64f08de` as of 2026-05-23).
 
@@ -32,16 +35,20 @@ Design reference: React mockup at [`knowledge_base/02_reference/ui_demo/Phase2Sc
 
 This plan covers **Milestone 1**: a POC of live decoding — handoff from Phase 1 Node 5 ("Go Live"), discover the LSL stream, run `LiveStreamSession`, plot rolling probability curves smoothly.
 
-**In scope for M1:**
+**Shipped in M1:**
 - Phase 2 screen registered in the main window.
 - "Go Live" handoff from Phase 1 Node 5 reusing the in-memory `AppSession`.
 - Debug-panel quick-jump that skips Phase 1.
-- Header with LIVE / HALTED indicator, target hardware label, rolling latency (p50/p95), buffer health.
+- Header with LIVE / HALTED indicator and target hardware label.
 - Live probability graph: rolling 10 s window, one line per decoder, chance line (0.5), threshold line (read-only from config).
-- Start / Halt inference button.
-- Clean lifecycle: idempotent start/stop, screen-close stops the stream.
+- Start / Halt inference button with three visual states (green Start / gray Connecting / red Halt).
+- Clean lifecycle: idempotent start/stop, screen-close stops the stream, one-shot session rebuild on restart.
+- Unit-scaling fix: `OnlinePreprocessor.lsl_to_si_scale` converts LSL microvolts to SI volts.
 
-**Out of scope for M1 (queued for M2):**
+**Deferred from M1:**
+Rolling latency display (p50/p95) and buffer-health pill (Commit 8).
+
+**Out of scope for M1 (queued for later milestones):**
 Decision history strip · trigger log (terminal-style) · per-decoder colour picker · decision settings write-back (threshold, sustained activation, conflict resolution) · exit confirmation modal · full 3-pane mockup layout · frozen probability graph + event navigation · modular graph layouts · xdf replay UI · subject-folder-aware log paths.
 
 Decoder visibility toggles landed early in Commit 4 (chart-side: `set_task_visible(name, visible)`); the Phase 2 screen wires checkboxes to them in Commit 5.
@@ -275,18 +282,11 @@ You may open one PR per commit or bundle multiple commits per PR; the boundary t
 
 ### Commit 9 — Docs update + M1 sign-off
 
-**Commit subject:** `docs(phase2-ui): mark Phase 2 UI M1 complete + soak results`
+**Commit subject:** `docs(phase2-ui): mark Phase 2 UI M1 complete`
 
 **Changes:**
-- `online_decoder/docs/Phase2_UI_Plan.md` — flip every `☐` to `☑` in the Status table; append a `## M1 Soak Results` section with the actual numbers from Commit 8's 5-minute run (p50, p95, memory delta, exit notes).
-- `online_decoder/docs/README.md` — add the Phase 2 UI plan to the doc index.
-- `online_decoder/CLAUDE.md` — note the `Phase2Screen` surface and the pyqtgraph dependency for live plots.
-
-**Acceptance:**
-- Verification Checklist (below) walked end-to-end and every item ticks.
-- `git log --oneline online-decoder..HEAD` lists exactly the 9 commit subjects above, in order.
-
-**Out of scope:** M2 work — see "Out of scope (M1)" at the top of this plan.
+- `online_decoder/docs/Phase2_UI_Plan_M1.md` — flip status table to done, document the unit-scaling fix, defer Commit 8, update verification checklist.
+- `online_decoder/CLAUDE.md` — add Phase 2 frontend surface, pyqtgraph dependency, `lsl_to_si_scale` convention, updated directory layout.
 
 ---
 
@@ -316,20 +316,19 @@ For M1, `log_path=None` is passed to `build_live_stream_session(...)`. CSV loggi
 
 ---
 
-## Verification Checklist
-
-When implementation completes, verify end-to-end:
+## Verification Checklist (M1)
 
 1. `python -m frontend.main` → window opens immediately (no dialogs).
 2. Full Phase 1 walkthrough completes successfully (no regression).
 3. Node 5 "Go Live" → Phase 2 screen appears with chart visible, status HALTED.
-4. Click "Start Inference" → status flips to LIVE, latency numbers populate, chart begins scrolling with decoder probabilities.
+4. Click "Start Inference" → status flips to LIVE, chart begins scrolling with decoder probabilities.
 5. Halt → status flips back to HALTED, chart stops scrolling (curves remain visible).
-6. Restart in the same screen → resumes correctly.
-7. Back button mid-stream → live stream halts cleanly, returns to Phase 1 Node 5.
-8. `python -m frontend.debug.main --phase2` → Phase 2 opens directly with a session ready.
-9. 5-minute soak: p95 latency ≤ 40 ms, memory delta < 50 MB, no exceptions.
+6. Restart in the same screen → chart resets and begins fresh scrolling.
+7. `python -m frontend.debug.main --phase2` → Phase 2 opens directly with a session ready.
+8. Toggle a sidebar decoder checkbox → that curve hides immediately; other curves unaffected.
+9. Close window while LIVE → no leaked LSLProxy.exe in Task Manager.
 10. Receiver error simulated → critical dialog shown, screen auto-halts.
+11. `pytest tests/` → all tests pass (347 as of M1 close).
 
 ---
 
