@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from backend.session import AppSession, LiveStreamSession
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont, QCloseEvent
+from PyQt6.QtGui import QCloseEvent, QFont
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -13,7 +14,6 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from backend.session import AppSession, LiveStreamSession
 from frontend.styles.theme import (
     BG_LIGHT,
     BORDER_GRAY,
@@ -28,7 +28,6 @@ from frontend.widgets.phase2 import (
     Phase2SettingsPanel,
     StartHaltButton,
 )
-
 
 # TODO: wire a Back button. Unresolved: which screen Back lands on
 # (Node 5 results vs. journey reset) and what to do with a running
@@ -65,9 +64,7 @@ class Phase2Screen(QWidget):
 
         settings = session.settings
         task_names = [t["name"] for t in settings["decoders"]["tasks"]]
-        target_sfreq = float(
-            settings["preprocessing"]["final_resample"]["target_rate"]
-        )
+        target_sfreq = float(settings["preprocessing"]["final_resample"]["target_rate"])
 
         self._chart = LiveProbabilityChart(
             task_names=task_names,
@@ -75,9 +72,7 @@ class Phase2Screen(QWidget):
             threshold=_DEFAULT_THRESHOLD,
         )
         self._header = Phase2Header()
-        self._settings_panel = Phase2SettingsPanel(
-            task_colors=self._chart.task_colors
-        )
+        self._settings_panel = Phase2SettingsPanel(task_colors=self._chart.task_colors)
         self._settings_panel.task_visibility_toggled.connect(
             self._chart.set_task_visible
         )
@@ -90,8 +85,8 @@ class Phase2Screen(QWidget):
         # Eager session construction — load_decoder_pipeline_artifact errors
         # surface here, propagate to Phase1Screen._on_go_live, and never
         # show the operator a half-built Phase 2.
-        self._live: LiveStreamSession | None = (
-            self.session.build_live_stream_session(self.decoder_pipeline_path)
+        self._live: LiveStreamSession | None = self.session.build_live_stream_session(
+            self.decoder_pipeline_path
         )
         self._wire_session(self._live)
 
@@ -115,9 +110,18 @@ class Phase2Screen(QWidget):
         """Connect cross-thread signals from the worker. Queued connection
         ensures the slot runs on the UI thread regardless of where the
         signal was emitted from."""
-        live.error_occurred.connect(
-            self._on_error, Qt.ConnectionType.QueuedConnection
+        live.error_occurred.connect(self._on_error, Qt.ConnectionType.QueuedConnection)
+        live.prediction_ready.connect(
+            self._on_predictions, Qt.ConnectionType.QueuedConnection
         )
+
+    def _on_predictions(
+        self,
+        predictions: dict,
+        out_ts,
+        markers: list,
+    ) -> None:
+        self._chart.append_predictions(predictions, out_ts)
 
     def _on_start_clicked(self) -> None:
         if self._live is None:
@@ -128,6 +132,9 @@ class Phase2Screen(QWidget):
             )
             self._wire_session(self._live)
 
+        # Drop any frozen tail from the previous session so the new one
+        # starts visually blank.
+        self._chart.reset_buffers()
         self._start_halt_button.set_connecting()
         # Force the disabled "Connecting…" repaint before the blocking
         # LSL resolve so the operator sees the state change.
@@ -137,9 +144,7 @@ class Phase2Screen(QWidget):
             self._live.start()
         except Exception as exc:
             self._safely_stop()
-            QMessageBox.critical(
-                self, "Could not start live inference", str(exc)
-            )
+            QMessageBox.critical(self, "Could not start live inference", str(exc))
             return
 
         self._start_halt_button.set_live()

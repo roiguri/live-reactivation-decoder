@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -290,3 +291,49 @@ def test_rapid_start_halt_cycles_no_thread_leak(qapp) -> None:
     assert threads_after == threads_before, (
         f"thread count drifted: {threads_before} → {threads_after}"
     )
+
+
+# ── prediction_ready → chart ──────────────────────────────────────────────────
+
+
+def test_prediction_ready_forwards_to_chart(screen_and_session) -> None:
+    """prediction_ready emissions land in the chart's ring buffer via
+    append_predictions; markers are ignored for M1."""
+    screen, fake, _, _ = screen_and_session
+    screen._start_halt_button.start_clicked.emit()
+
+    task_name = next(iter(screen._chart.task_colors.keys()))
+    out_ts = np.arange(4, dtype=np.float64) * 0.01
+    predictions = {task_name: np.array([0.1, 0.3, 0.5, 0.7])}
+
+    fake.prediction_ready.emit(predictions, out_ts, [])
+    QApplication.processEvents()
+
+    assert screen._chart._write_idx == 4
+    assert screen._chart._latest_ts == out_ts[-1]
+    cap = screen._chart._capacity
+    assert screen._chart._buffers[task_name][0] == 0.1
+    assert screen._chart._buffers[task_name][cap] == 0.1  # double-length mirror
+
+
+def test_start_resets_chart_buffers(screen_and_session) -> None:
+    """A fresh Start blanks any stale tail from a previous session."""
+    screen, fake, _, _ = screen_and_session
+    screen._start_halt_button.start_clicked.emit()
+
+    # Push some data through.
+    task_name = next(iter(screen._chart.task_colors.keys()))
+    fake.prediction_ready.emit(
+        {task_name: np.array([0.8, 0.9])},
+        np.array([0.0, 0.01]),
+        [],
+    )
+    QApplication.processEvents()
+    assert screen._chart._write_idx == 2
+
+    # Halt then Start again — the chart should be blank.
+    screen._start_halt_button.halt_clicked.emit()
+    screen._start_halt_button.start_clicked.emit()
+    assert screen._chart._write_idx == 0
+    assert screen._chart._latest_ts is None
+    assert np.all(np.isnan(screen._chart._buffers[task_name]))
