@@ -47,9 +47,9 @@ from frontend.styles.theme import (
 logger = logging.getLogger(__name__)
 
 _DEBUG_PREFIX = "[DEBUG] "
-_DEFAULT_CONFIG = Path("experiment_config.yaml")
+_DEFAULT_CONFIG = Path("debug_snapshots/experiment_config.yaml")
 _DEFAULT_OUTPUT = Path("debug_snapshots")
-_DEFAULT_DATA = Path("../data/new_experiment/test_set/subject_102_quarter")
+_DEFAULT_DATA = Path("data/subject_101/split/functional_localizer")
 _PREPROC_SNAPSHOT = _DEFAULT_OUTPUT / "preproc_done.joblib"
 _EVAL_SNAPSHOT = _DEFAULT_OUTPUT / "eval_done.joblib"
 _TRAIN_SNAPSHOT = _DEFAULT_OUTPUT / "train_done.joblib"

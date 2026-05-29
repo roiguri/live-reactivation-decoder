@@ -18,7 +18,7 @@ from pathlib import Path
 from backend.session import AppSession
 from frontend.screens.phase2_screen import Phase2Screen
 
-_DEFAULT_CONFIG = Path("experiment_config.yaml")
+_DEFAULT_CONFIG = Path("debug_snapshots/experiment_config.yaml")
 _DEFAULT_PIPELINE = Path("debug_snapshots/models/decoder_pipeline.joblib")
 
 

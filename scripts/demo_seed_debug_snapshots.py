@@ -45,8 +45,9 @@ logger = logging.getLogger("seed_debug_snapshots")
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--config", type=Path, default=Path("experiment_config.yaml"),
-        help="Path to the experiment YAML (default: experiment_config.yaml).",
+        "--config", type=Path, default=Path("debug_snapshots/experiment_config.yaml"),
+        help="Path to the experiment YAML (default: debug_snapshots/experiment_config.yaml — "
+             "the 6-decoder debug config; see src/frontend/debug/README.md).",
     )
     parser.add_argument(
         "--data", type=Path, required=True,
