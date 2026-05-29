@@ -86,7 +86,7 @@ def test_pull_new_data_drains_available_chunks_and_decodes_markers():
             (chunk2, [1.002, 1.003, 1.004]),
         ]
     )
-    receiver = LSLReceiver(launch_proxy=False)
+    receiver = LSLReceiver()
     receiver.inlet = inlet
 
     timestamps, eeg_chunk, markers = receiver.pull_new_data()
@@ -99,7 +99,7 @@ def test_pull_new_data_drains_available_chunks_and_decodes_markers():
 def test_pull_new_data_marker_timestamp_matches_trigger_sample():
     chunk = _chunk_from_trigger_values([0, 0, 7 << 8, 0])
     timestamps_in = [10.0, 10.001, 10.002, 10.003]
-    receiver = LSLReceiver(launch_proxy=False)
+    receiver = LSLReceiver()
     receiver.inlet = FakeInlet([(chunk, timestamps_in)])
 
     _, _, markers = receiver.pull_new_data()
@@ -108,7 +108,7 @@ def test_pull_new_data_marker_timestamp_matches_trigger_sample():
 
 
 def test_pull_new_data_preserves_trigger_state_across_calls():
-    receiver = LSLReceiver(launch_proxy=False)
+    receiver = LSLReceiver()
     receiver.inlet = FakeInlet([(_chunk_from_trigger_values([0, 1 << 8, 1 << 8]), [1.0, 1.001, 1.002])])
 
     _, _, markers_first = receiver.pull_new_data()
@@ -121,7 +121,7 @@ def test_pull_new_data_preserves_trigger_state_across_calls():
 
 
 def test_pull_new_data_held_trigger_across_calls_emits_once():
-    receiver = LSLReceiver(launch_proxy=False)
+    receiver = LSLReceiver()
     receiver.inlet = FakeInlet([(_chunk_from_trigger_values([0, 1 << 8, 1 << 8]), [1.0, 1.001, 1.002])])
 
     _, _, markers_first = receiver.pull_new_data()
@@ -134,7 +134,7 @@ def test_pull_new_data_held_trigger_across_calls_emits_once():
 
 
 def test_stop_closes_inlet_when_present():
-    receiver = LSLReceiver(launch_proxy=False)
+    receiver = LSLReceiver()
     inlet = FakeInlet([])
     receiver.inlet = inlet
 
@@ -158,7 +158,7 @@ def test_pull_new_data_skips_malformed_chunks_gracefully(caplog):
             (good_chunk2, [1.004, 1.005]),
         ]
     )
-    receiver = LSLReceiver(launch_proxy=False)
+    receiver = LSLReceiver()
     receiver.inlet = inlet
 
     timestamps, eeg_chunk, markers = receiver.pull_new_data()
@@ -174,7 +174,7 @@ def test_pull_new_data_skips_malformed_chunks_gracefully(caplog):
 
 
 def test_start_success_returns_none_and_opens_inlet(monkeypatch):
-    receiver = LSLReceiver(stream_name="TestStream", launch_proxy=False)
+    receiver = LSLReceiver(stream_name="TestStream")
 
     mock_stream = MagicMock()
     mock_stream.nominal_srate.return_value = 1000
@@ -194,7 +194,7 @@ def test_start_success_returns_none_and_opens_inlet(monkeypatch):
 
 def test_start_raises_runtime_error_when_stream_not_found():
     """Test that start() raises RuntimeError with helpful message when stream cannot be resolved."""
-    receiver = LSLReceiver(stream_name="NonExistentStream", launch_proxy=False)
+    receiver = LSLReceiver(stream_name="NonExistentStream")
 
     # Mock _resolve_stream to always return None (stream not found)
     receiver._resolve_stream = Mock(return_value=None)
@@ -205,7 +205,7 @@ def test_start_raises_runtime_error_when_stream_not_found():
 
 def test_start_raises_value_error_when_sample_rate_wrong():
     """Test that start() raises ValueError when stream has wrong sample rate."""
-    receiver = LSLReceiver(stream_name="TestStream", launch_proxy=False)
+    receiver = LSLReceiver(stream_name="TestStream")
 
     # Mock stream with wrong sample rate
     mock_stream = MagicMock()
@@ -223,7 +223,7 @@ def test_start_raises_value_error_when_sample_rate_wrong():
 
 def test_start_raises_value_error_when_channel_count_wrong():
     """Test that start() raises ValueError when stream has wrong channel count."""
-    receiver = LSLReceiver(stream_name="TestStream", launch_proxy=False)
+    receiver = LSLReceiver(stream_name="TestStream")
 
     # Mock stream with wrong channel count
     mock_stream = MagicMock()

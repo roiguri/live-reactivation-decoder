@@ -720,13 +720,12 @@ UI-facing artifacts that the live runtime does not need (`spatial_patterns`,
 
 ### **The Components**
 
-#### **1. LSLReceiver (The Listener & Proxy Runner)**
+#### **1. LSLReceiver (The Listener)**
 
-**Role:** Manages the LSL proxy subprocess lifecycle and provides a clean interface for pulling EEG data and markers from the hardware stream. Automatically decodes trigger channel markers and separates them from EEG data.
+**Role:** A pure *consumer* — resolves an LSL stream and provides a clean interface for pulling EEG data and markers. Automatically decodes trigger channel markers and separates them from EEG data. It does **not** manage any subprocess; making the stream appear on the network is the job of a `StreamSource` (see below).
 
 **Key Features:**
-- Manages LSLProxy.exe subprocess lifecycle (spawn, monitor, terminate)
-- Discovers available LSL streams on the network
+- Discovers available LSL streams on the network (`discover_streams`)
 - Connects to specific stream by name and type
 - Pulls all available data chunks since last call
 - Extracts and decodes trigger codes from channel 65
@@ -736,7 +735,7 @@ UI-facing artifacts that the live runtime does not need (`spatial_patterns`,
 - Comprehensive logging for diagnostics
 
 **Inputs:**
-- Configuration parameters (proxy path, stream name, stream type, timeouts)
+- Configuration parameters (stream name, stream type, timeouts)
 - Start/stop commands
 
 **Outputs:**
@@ -750,6 +749,17 @@ UI-facing artifacts that the live runtime does not need (`spatial_patterns`,
 - Trigger channel uses NeurOne packed format (PsychoPy code in bits 8-15)
 
 **Status:** ✅ Implemented in `src/backend/online_phase/lsl_receiver.py`
+
+#### **1b. StreamSource (The Publisher)**
+
+**Role:** Anything that publishes an LSL stream onto the network, so the `LSLReceiver` can consume it. A `Protocol` with `start()` / `stop()` / `is_running`.
+
+- `LslProxySource` — wraps the `LSLProxy.exe` subprocess that bridges NeurOne to LSL (Windows-only). `start()` is idempotent so discovery and the subsequent run share one proxy without churning the amplifier connection.
+- `ReplaySource` (Phase 2) — a sibling that publishes a recorded `.vhdr`/`.vmrk` directory as a live stream.
+
+**Ownership:** `AppSession` owns the active source's lifetime (`start_stream_source` / `stop_stream_source`); it is started during `discover_streams()` and reused by the next run. The per-run `LiveStreamSession` only consumes the stream and never touches the source.
+
+**Status:** ✅ Implemented in `src/backend/online_phase/stream_source.py` (`LslProxySource`); `ReplaySource` pending Phase 2.
 
 #### **2. OnlinePreprocessor (The Cleaner)**
 
@@ -833,6 +843,13 @@ pending backlog once per second.
 **Frontend rule:** use only `live.prediction_ready`, `live.error_occurred`, `live.latency_ready`, `live.start()`, and `live.stop()` during normal operation. Do not reach into the underlying worker or private live-session members.
 
 ### Components Interface
+
+> ⚠️ **Outdated below (pre-StreamSource extraction).** The proxy lifecycle
+> (`default_proxy_path`, `_start_proxy_process`, the `proxy_path` / `launch_proxy`
+> constructor args, and proxy teardown in `stop()`) has moved out of
+> `LSLReceiver` into `LslProxySource` in `src/backend/online_phase/stream_source.py`.
+> `LSLReceiver` is now a pure consumer and `AppSession` owns the source. Treat the
+> code as the source of truth for these signatures.
 
 #### LSLReceiver Helper Functions
 

@@ -12,9 +12,12 @@ from backend.session import AppSession, LiveStreamSession
 class FakeReceiver:
     instances = []
 
-    def __init__(self) -> None:
+    def __init__(self, stream_name=None, *, resolve_timeout_sec=5.0, **kwargs) -> None:
+        self.stream_name = stream_name
+        self.resolve_timeout_sec = resolve_timeout_sec
         self.start_calls = 0
         self.stop_calls = 0
+        self.discover_calls = []
         FakeReceiver.instances.append(self)
 
     def start(self) -> None:
@@ -22,6 +25,32 @@ class FakeReceiver:
 
     def stop(self) -> None:
         self.stop_calls += 1
+
+    def discover_streams(self, timeout_sec=3.0) -> list[str]:
+        self.discover_calls.append(timeout_sec)
+        return ["NeuroneStream", "OtherStream"]
+
+
+class FakeProxySource:
+    instances = []
+
+    def __init__(self, proxy_path=None) -> None:
+        self.start_calls = 0
+        self.stop_calls = 0
+        self._running = False
+        FakeProxySource.instances.append(self)
+
+    def start(self) -> None:
+        self.start_calls += 1
+        self._running = True
+
+    def stop(self) -> None:
+        self.stop_calls += 1
+        self._running = False
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
 
 
 class FakePreprocessor:
@@ -147,6 +176,7 @@ def _artifact() -> DecoderPipelineArtifact:
 
 def _patch_runtime(monkeypatch):
     FakeReceiver.instances = []
+    FakeProxySource.instances = []
     FakePreprocessor.instances = []
     FakeInferenceEngine.instances = []
     FakeWorker.instances = []
@@ -155,6 +185,7 @@ def _patch_runtime(monkeypatch):
         lambda path: _artifact(),
     )
     monkeypatch.setattr("backend.session.LSLReceiver", FakeReceiver)
+    monkeypatch.setattr("backend.session.LslProxySource", FakeProxySource)
     monkeypatch.setattr("backend.session.OnlinePreprocessor", FakePreprocessor)
     monkeypatch.setattr("backend.session.LiveInferenceEngine", FakeInferenceEngine)
     monkeypatch.setattr("backend.session.StreamWorker", FakeWorker)
@@ -232,6 +263,81 @@ def test_build_live_stream_session_returns_live_session(sample_config_path, monk
     assert worker.inference_engine is FakeInferenceEngine.instances[0]
     assert FakePreprocessor.instances[0].online_state == {"opaque": True}
     assert FakeInferenceEngine.instances[0].metadata == {"feature_width": 64}
+
+
+def test_build_live_stream_session_forwards_stream_name(
+    sample_config_path,
+    monkeypatch,
+):
+    _patch_runtime(monkeypatch)
+    session = AppSession(sample_config_path)
+
+    session.build_live_stream_session(
+        Path("decoder_pipeline.joblib"),
+        stream_name="CustomStream",
+    )
+
+    receiver = FakeReceiver.instances[0]
+    assert receiver.stream_name == "CustomStream"
+    # No active source / proxy source → short resolve timeout.
+    assert receiver.resolve_timeout_sec == 5.0
+
+
+def test_build_live_stream_session_receiver_defaults(sample_config_path, monkeypatch):
+    _patch_runtime(monkeypatch)
+    session = AppSession(sample_config_path)
+
+    session.build_live_stream_session(Path("decoder_pipeline.joblib"))
+
+    receiver = FakeReceiver.instances[0]
+    assert receiver.stream_name is None
+
+
+def test_discover_streams_starts_proxy_and_leaves_it_running(
+    sample_config_path,
+    monkeypatch,
+):
+    _patch_runtime(monkeypatch)
+    session = AppSession(sample_config_path)
+
+    names = session.discover_streams(timeout_sec=1.5)
+
+    assert names == ["NeuroneStream", "OtherStream"]
+    # A single proxy source was started and NOT stopped (reused by the run).
+    assert len(FakeProxySource.instances) == 1
+    proxy = FakeProxySource.instances[0]
+    assert proxy.start_calls == 1
+    assert proxy.stop_calls == 0
+    assert proxy.is_running is True
+    # The consumer receiver did the resolve and was not stopped.
+    assert FakeReceiver.instances[0].discover_calls == [1.5]
+
+
+def test_start_stream_source_reuses_discovery_proxy(sample_config_path, monkeypatch):
+    _patch_runtime(monkeypatch)
+    session = AppSession(sample_config_path)
+
+    session.discover_streams()
+    session.start_stream_source()
+
+    # Same proxy instance reused; start() is idempotent on an already-running proxy.
+    assert len(FakeProxySource.instances) == 1
+    assert FakeProxySource.instances[0].start_calls == 2
+
+
+def test_stop_stream_source_stops_and_clears(sample_config_path, monkeypatch):
+    _patch_runtime(monkeypatch)
+    session = AppSession(sample_config_path)
+
+    session.start_stream_source()
+    session.stop_stream_source()
+
+    proxy = FakeProxySource.instances[0]
+    assert proxy.stop_calls == 1
+    assert proxy.is_running is False
+    # Idempotent when already idle.
+    session.stop_stream_source()
+    assert proxy.stop_calls == 1
 
 
 def test_build_live_stream_session_without_log_has_no_logger_slot(
