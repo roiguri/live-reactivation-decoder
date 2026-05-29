@@ -22,7 +22,7 @@ M1 shipped the Phase 2 live-inference POC on branch `feat/phase2-live-ui` (13 co
 **What does not work or is unverified:**
 - The XDF recording used for testing (`scripts/recordings/eeg_recording_with_trigger.xdf`) contains no stimulus events (trigger codes 31-110, but no 11/12/13 for red/green/yellow). Predictions on this data are noise — we have not yet seen the online pipeline produce meaningful class-correlated predictions.
 - `OnlinePreprocessor.lsl_to_si_scale=1e-6` converts LSL microvolts to SI volts. Verified by z-score analysis against the fitted scaler, but not yet validated end-to-end against the offline pipeline on data with known labels.
-- `markers` from `prediction_ready` are emitted but ignored by the UI.
+- ~~`markers` from `prediction_ready` are emitted but ignored by the UI.~~ Now rendered as cue lines on the chart (Goal 2) — pending manual replay verification.
 - `latency_ready` signal is emitted but not consumed by the UI.
 - No back button, no exit confirmation, no decision settings, no logging.
 
@@ -58,7 +58,7 @@ Work from `feat/phase2-stream-selection` lands several M2 items early and change
 | # | Goal | Status |
 |---|------|--------|
 | 1 | Pipeline Validation | Step 1 (replay script) done; validation pending |
-| 2 | Event Markers on Probability Graph | Not started |
+| 2 | Event Markers on Probability Graph | In progress — rendering done; manual replay verification pending |
 | 3 | LSL Stream Picker | ✅ Done (stream-selection branch) |
 | 4 | Trigger Log | Not started |
 | 5 | Decision History Strip | Not started |
@@ -127,11 +127,19 @@ If Step 3 shows a significant gap, drill into the preprocessor.
 
 Display trigger events as vertical lines on the live probability chart. The `markers` tuple is already emitted by `prediction_ready` but currently ignored in `Phase2Screen._on_predictions`.
 
-- [ ] `LiveProbabilityChart` gains an `append_markers(markers)` method
-- [ ] Markers render as vertical lines at the correct timestamp, color-coded by trigger code
-- [ ] Markers scroll with the data (same coordinate system as the probability curves)
-- [ ] Marker legend or tooltip shows the trigger code / event name
-- [ ] Verified: with VHDR replay, vertical lines appear at stimulus onset times
+- [x] `LiveProbabilityChart` gains an `append_markers(markers)` method (data-only; lines materialise in `_refresh`)
+- [x] Each trigger code is resolved against the configured event map; codes **not** in the map are filtered out
+- [x] Markers render as bold black vertical lines (width 2) at the correct timestamp (colour is decoupled from the event name)
+- [x] Markers scroll with the data (rebased onto the same `x = ts - latest_ts` axis as the curves; pruned when they leave the window)
+- [x] Marker label shows the configured event name via the line's `InfLineLabel` — bold black text in a solid white, black-bordered box for contrast
+- [ ] Verified: with VHDR replay, vertical lines appear at stimulus onset times (manual UI verification on Windows)
+
+**Implementation notes:**
+- `Phase2Screen` builds the `{code: name}` map by inverting `settings["event_mapping"]` (which `SettingsManager.get_settings()` exposes as `{name: id}`, flattened from `markers_mapping.events`) — tolerant of a missing map — and passes it to the chart constructor; `_on_predictions` now calls `append_markers(markers)` after `append_predictions`.
+- The receiver emits **every** non-zero trigger edge, not just configured events. `append_markers` drops any code absent from the event map, so only declared events are drawn.
+- Colour is intentionally **not** derived from the event name (names are arbitrary config labels, not colour hints). All markers are black; the label is the only per-event distinction.
+- **Label placement.** A headroom band above the curves (`_Y_RANGE` top `1.1`, Y ticks capped at `1.0` so the band reads as blank margin) lets labels sit clear of the data. Labels are pinned to one fixed side via identical `InfLineLabel` `anchors` — this disables pyqtgraph's default view-edge flip, which otherwise makes two markers straddling the view centre point their labels inward and collide. Trade-off: a label on a marker near the right (NOW) edge can clip; flip the anchor side or centre it if that reads poorly in the lab.
+- All marker scene mutation happens on the 30 Hz repaint tick (`_refresh_markers`), keeping `append_markers` off the scene like the prediction hot path. `_MAX_MARKERS` (128) backstops unbounded growth if the stream stalls.
 
 ---
 

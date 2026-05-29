@@ -77,6 +77,9 @@ def _make_session_settings() -> dict[str, Any]:
                 {"name": "alpha", "pos_labels": ["a"], "neg_labels": ["b"]},
             ]
         },
+        # Mirrors SettingsManager.get_settings(): markers_mapping is flattened
+        # to event_mapping as {name: id}.
+        "event_mapping": {"a": 11, "b": 12},
     }
 
 
