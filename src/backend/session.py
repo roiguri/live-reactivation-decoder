@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from backend.online_phase.live_inference import LiveInferenceEngine
 from backend.online_phase.lsl_receiver import LSLReceiver
 from backend.online_phase.online_preprocessor import OnlinePreprocessor
 from backend.online_phase.prediction_logger import PredictionLogger
+from backend.online_phase.stream_source import LslProxySource, StreamSource
 from backend.online_phase.stream_worker import StreamWorker
 
 
@@ -87,27 +89,82 @@ class AppSession:
     def __init__(self, config_path: str | Path) -> None:
         self._settings = SettingsManager(config_path)
         self.offline: OfflineOrchestrator | None = None
+        # TODO(#1): Rethink the locking approach on the stream source.
+        self._stream_source: StreamSource | None = None
+        self._source_lock = threading.Lock()
 
     def configure_output(self, output_dir: str | Path) -> None:
         """Create the OfflineOrchestrator. Must be called before session.offline is used."""
         self.offline = OfflineOrchestrator(self._settings, Path(output_dir))
+
+    # ── live stream source lifecycle ──────────────────────────────────────────
+
+    def _ensure_proxy_source(self, *, start: bool) -> LslProxySource:
+        """Return the active proxy source, creating/starting it as needed.
+
+        Reuses an already-running proxy (e.g. one started during discovery) so
+        the NeurOne connection is not churned between discovery and the run.
+        """
+        with self._source_lock:
+            if not isinstance(self._stream_source, LslProxySource):
+                if self._stream_source is not None:
+                    self._stream_source.stop()
+                self._stream_source = LslProxySource()
+            if start:
+                self._stream_source.start()
+            return self._stream_source
+
+    def start_stream_source(self) -> None:
+        """Start (or reuse) the proxy source ahead of a live run."""
+        self._ensure_proxy_source(start=True)
+
+    def stop_stream_source(self) -> None:
+        """Stop and clear the active stream source. Safe to call when idle."""
+        with self._source_lock:
+            if self._stream_source is not None:
+                self._stream_source.stop()
+                self._stream_source = None
+
+    def discover_streams(self, timeout_sec: float = 3.0) -> list[str]:
+        """Return the names of LSL streams currently visible on the network.
+
+        Ensures the proxy is running (so the live NeurOne stream is published)
+        and leaves it running so the following run reuses it. The proxy
+        lifecycle stays behind ``AppSession`` so the frontend never touches
+        backend internals.
+        """
+        self._ensure_proxy_source(start=True)
+        return LSLReceiver().discover_streams(timeout_sec=timeout_sec)
 
     def build_live_stream_session(
         self,
         decoder_pipeline_path: str | Path,
         log_path: str | Path | None = None,
         batch_size_samples: int = 40,
+        *,
+        stream_name: str | None = None,
     ) -> LiveStreamSession:
-        """Construct the live backend pipeline without starting it."""
+        """Construct the live backend pipeline without starting it.
+
+        The receiver is a pure consumer; making the stream appear is the job of
+        the active ``StreamSource`` (start it via ``start_stream_source`` before
+        ``LiveStreamSession.start``). The resolve timeout is picked from the
+        active source kind — replay needs longer to advertise after MNE preload.
+        """
         # TODO(open): Avoid unnecessary disk reload when Phase 1 already has
         # an in-memory DecoderPipelineArtifact; see stream_worker_design.md Open §2.
         artifact = load_decoder_pipeline_artifact(decoder_pipeline_path)
         preprocessing_settings = self._settings.get_preprocessing_params()
 
-        # TODO(open): Stop hardcoding default LSLReceiver settings once Phase 2
-        # config defines stream name/type and runtime sampling parameters; see
-        # stream_worker_design.md Open §3.
-        receiver = LSLReceiver()
+        # Replay sources need longer to advertise (MNE preload before PlayerLSL).
+        is_replay = self._stream_source is not None and not isinstance(
+            self._stream_source, LslProxySource
+        )
+        resolve_timeout_sec = 15.0 if is_replay else 5.0
+        receiver = LSLReceiver(
+            stream_name=stream_name,
+            resolve_timeout_sec=resolve_timeout_sec,
+        )
         preprocessor = OnlinePreprocessor(
             preprocessing_settings=preprocessing_settings,
             online_state=artifact.online_state,

@@ -6,6 +6,7 @@ from backend.session import AppSession, LiveStreamSession
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QCloseEvent, QFont
 from PyQt6.QtWidgets import (
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -27,6 +28,7 @@ from frontend.widgets.phase2 import (
     Phase2Header,
     Phase2SettingsPanel,
     StartHaltButton,
+    TargetSelectionDialog,
 )
 
 # TODO: wire a Back button. Unresolved: which screen Back lands on
@@ -45,10 +47,10 @@ class Phase2Screen(QWidget):
     """Live-inference screen. Layout glue only — each panel lives in its
     own module under ``frontend.widgets.phase2``.
 
-    Owns the :class:`LiveStreamSession` lifecycle: builds it eagerly in
-    ``__init__`` so artifact load errors surface at screen-open, rebuilds
-    on each Start (the session is one-shot per ``LiveStreamSession.stop``),
-    and tears it down defensively on error, halt, and screen-close.
+    Owns the :class:`LiveStreamSession` lifecycle: builds the session on each
+    Start bound to the chosen target (the session is one-shot per
+    ``LiveStreamSession.stop``), and tears it down defensively on error, halt,
+    and screen-close.
     """
 
     def __init__(
@@ -71,7 +73,11 @@ class Phase2Screen(QWidget):
             target_sfreq=target_sfreq,
             threshold=_DEFAULT_THRESHOLD,
         )
+        # Live target chosen by the operator via the header. None until a
+        # target is selected; Start is guarded against a missing target.
+        self._target: dict | None = None
         self._header = Phase2Header()
+        self._header.choose_target_clicked.connect(self._on_choose_target)
         self._settings_panel = Phase2SettingsPanel(task_colors=self._chart.task_colors)
         self._settings_panel.task_visibility_toggled.connect(
             self._chart.set_task_visible
@@ -82,13 +88,8 @@ class Phase2Screen(QWidget):
         self._start_halt_button.halt_clicked.connect(self._on_halt_clicked)
         self._settings_panel.footer_layout.addWidget(self._start_halt_button)
 
-        # Eager session construction — load_decoder_pipeline_artifact errors
-        # surface here, propagate to Phase1Screen._on_go_live, and never
-        # show the operator a half-built Phase 2.
-        self._live: LiveStreamSession | None = self.session.build_live_stream_session(
-            self.decoder_pipeline_path
-        )
-        self._wire_session(self._live)
+        # The session is built lazily on Start, bound to the chosen target.
+        self._live: LiveStreamSession | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -123,14 +124,32 @@ class Phase2Screen(QWidget):
     ) -> None:
         self._chart.append_predictions(predictions, out_ts)
 
+    # ── target selection ───────────────────────────────────────────────────────
+
+    def _on_choose_target(self) -> None:
+        dialog = TargetSelectionDialog(self.session, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        target = dialog.selected_target()
+        if target is None:
+            return
+        self._target = target
+        self._header.set_target_text(self._describe_target(target))
+
+    @staticmethod
+    def _describe_target(target: dict) -> str:
+        if target.get("source") == "lsl":
+            return f"Target: {target.get('stream_name')} (LSL)"
+        return "Target: (unknown)"
+
     def _on_start_clicked(self) -> None:
-        if self._live is None:
-            # Previous Halt cleared it; rebuild before starting since the
-            # session is one-shot.
-            self._live = self.session.build_live_stream_session(
-                self.decoder_pipeline_path
+        if self._target is None:
+            QMessageBox.information(
+                self,
+                "No target selected",
+                "Choose a target before starting inference.",
             )
-            self._wire_session(self._live)
+            return
 
         # Drop any frozen tail from the previous session so the new one
         # starts visually blank.
@@ -141,6 +160,15 @@ class Phase2Screen(QWidget):
         self.repaint()
 
         try:
+            # Ensure the publishing source (proxy) is up — reuses the one
+            # started during discovery — then build a fresh one-shot session
+            # bound to the chosen stream and start it.
+            self.session.start_stream_source()
+            self._live = self.session.build_live_stream_session(
+                self.decoder_pipeline_path,
+                stream_name=self._target.get("stream_name"),
+            )
+            self._wire_session(self._live)
             self._live.start()
         except Exception as exc:
             self._safely_stop()
@@ -169,6 +197,12 @@ class Phase2Screen(QWidget):
                 # don't re-raise — we're already in a cleanup path.
                 pass
             self._live = None
+        try:
+            # Stop the publishing source (proxy/replay). AppSession owns its
+            # lifetime; a subsequent Start relaunches it.
+            self.session.stop_stream_source()
+        except Exception:
+            pass
         self._start_halt_button.set_idle()
         self._header.set_status("INFERENCE HALTED", color=TEXT_PRIMARY)
 

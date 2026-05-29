@@ -194,14 +194,12 @@ def _configure_receiver_for_smoke(
     stream_name: str,
     stream_type: str,
     resolve_timeout_sec: float,
-    launch_proxy: bool,
 ) -> None:
     # Tool-only bridge until Phase 2 runtime LSL settings live in config.
     receiver = live._receiver
     receiver.stream_name = stream_name
     receiver.stream_type = stream_type
     receiver.resolve_timeout_sec = resolve_timeout_sec
-    receiver.launch_proxy = launch_proxy
 
 
 def _summarize_csv(log_path: Path) -> tuple[int, bool, int, list[str]]:
@@ -227,6 +225,7 @@ def main() -> int:
     args = build_arg_parser().parse_args()
     replay_process: subprocess.Popen | None = None
     live: LiveStreamSession | None = None
+    session: AppSession | None = None
 
     try:
         _run_preflight(args)
@@ -257,8 +256,11 @@ def main() -> int:
             stream_name=args.stream_name,
             stream_type=args.stream_type,
             resolve_timeout_sec=args.resolve_timeout,
-            launch_proxy=args.launch_proxy,
         )
+
+        if args.launch_proxy:
+            print("Launching LSL proxy...")
+            session.start_stream_source()
 
         print(
             f"Starting live stream session for {args.duration:.1f}s "
@@ -293,6 +295,8 @@ def main() -> int:
     finally:
         if live is not None:
             live.stop()
+        if session is not None:
+            session.stop_stream_source()
         _stop_process(replay_process)
 
 

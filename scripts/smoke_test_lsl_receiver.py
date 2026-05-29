@@ -17,6 +17,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from backend.online_phase.lsl_receiver import LSLReceiver
+from backend.online_phase.stream_source import LslProxySource
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -94,12 +95,12 @@ def main() -> int:
     args = build_arg_parser().parse_args()
 
     replay_process: subprocess.Popen | None = None
+    proxy_source = LslProxySource() if args.launch_proxy else None
     receiver = LSLReceiver(
         stream_name=args.stream_name,
         stream_type=args.stream_type,
         resolve_timeout_sec=args.resolve_timeout,
         pull_timeout_sec=0.0,
-        launch_proxy=args.launch_proxy,
     )
 
     total_samples = 0
@@ -111,6 +112,10 @@ def main() -> int:
     last_eeg_shape = (0, receiver.eeg_channel_count)
 
     try:
+        if proxy_source is not None:
+            print("Launching LSL proxy...")
+            proxy_source.start()
+
         if args.replay_xdf is not None:
             xdf_path = args.replay_xdf.resolve()
             if not xdf_path.exists():
@@ -181,6 +186,8 @@ def main() -> int:
     finally:
         receiver.stop()
         _stop_process(replay_process)
+        if proxy_source is not None:
+            proxy_source.stop()
 
 
 if __name__ == "__main__":

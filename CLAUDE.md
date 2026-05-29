@@ -48,7 +48,7 @@ online_decoder/
 ## Known Conventions
 
 - **LSL unit scaling (lab validation needed)**: The `lsl_to_si_scale` parameter was removed from `OnlinePreprocessor`. VHDR replay via `PlayerLSL` delivers data in SI volts (MNE converts on load), so no scaling is needed for replay-based validation. Whether NeurOne's LSL proxy outputs µV or V has not been verified in the lab — if it outputs µV, a scaling mechanism will need to be re-introduced.
-- `LSLReceiver` defaults to `launch_proxy=True` and auto-launches `tools/lslproxy/LSLProxy.exe`. This requires Windows; all live-LSL testing must happen on Windows.
+- **Stream sources vs. the receiver**: `LSLReceiver` is a pure consumer (resolve + pull). Publishing a stream onto the network is a `StreamSource` (`src/backend/online_phase/stream_source.py`): `LslProxySource` wraps `tools/lslproxy/LSLProxy.exe` (Windows-only), and Phase 2 replay will add a `ReplaySource` sibling. `AppSession` owns the active source — started during `discover_streams()` and reused by the subsequent run (no proxy relaunch), stopped via `stop_stream_source()`. All live-LSL testing must happen on Windows.
 - `debug_snapshots/` is git-ignored. Re-run `scripts/demo_seed_debug_snapshots.py` when joining a new machine.
 
 

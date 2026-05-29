@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import logging
-import os
-import subprocess
 import time
-from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -22,10 +19,6 @@ DEFAULT_STREAM_NAME = "NeuroneStream"
 DEFAULT_STREAM_TYPE = "EEG"
 DEFAULT_EEG_CHANNEL_COUNT = 64
 DEFAULT_TRIGGER_CHANNEL_INDEX = 64
-
-
-def default_proxy_path() -> Path:
-    return Path(__file__).resolve().parents[3] / "tools" / "lslproxy" / "LSLProxy.exe"
 
 
 def decode_trigger_value(raw_value: float | int) -> int:
@@ -97,11 +90,15 @@ def split_eeg_and_markers(
 
 
 class LSLReceiver:
-    """Manage the LSL proxy process and pull EEG data from the LSL inlet."""
+    """Resolve an LSL stream and pull EEG data from its inlet.
+
+    This is a pure consumer: making the stream appear on the network is the job
+    of a ``StreamSource`` (``LslProxySource`` for live NeurOne, ``ReplaySource``
+    for recording replay), owned by ``AppSession``.
+    """
 
     def __init__(
         self,
-        proxy_path: str | Path | None = None,
         stream_name: Optional[str] = None,
         *,
         stream_type: str = DEFAULT_STREAM_TYPE,
@@ -109,65 +106,25 @@ class LSLReceiver:
         trigger_channel_index: int = DEFAULT_TRIGGER_CHANNEL_INDEX,
         resolve_timeout_sec: float = 5.0,
         pull_timeout_sec: float = 0.0,
-        launch_proxy: bool = True,
     ) -> None:
-        self.proxy_path = Path(proxy_path) if proxy_path is not None else default_proxy_path()
         self.stream_name = stream_name or DEFAULT_STREAM_NAME
         self.stream_type = stream_type
         self.eeg_channel_count = eeg_channel_count
         self.trigger_channel_index = trigger_channel_index
         self.resolve_timeout_sec = resolve_timeout_sec
         self.pull_timeout_sec = pull_timeout_sec
-        self.launch_proxy = launch_proxy
 
-        self.proxy_process: Optional[subprocess.Popen] = None
         self.inlet = None
         self._last_trigger_code = 0
 
         logger.info(
-            f"LSLReceiver initialized: stream='{self.stream_name}', type='{self.stream_type}', "
-            f"proxy_path='{self.proxy_path}', launch_proxy={self.launch_proxy}"
+            f"LSLReceiver initialized: stream='{self.stream_name}', type='{self.stream_type}'"
         )
 
     def _require_pylsl(self):
         if pylsl is None:
             raise RuntimeError("pylsl is required for LSLReceiver.")
         return pylsl
-
-    def _start_proxy_process(self) -> None:
-        if self.proxy_process is not None and self.proxy_process.poll() is None:
-            logger.debug("LSL proxy already running, skipping launch")
-            return
-
-        if not self.proxy_path.exists():
-            raise FileNotFoundError(f"LSL proxy executable not found: {self.proxy_path}")
-
-        if os.name != "nt" and self.proxy_path.suffix.lower() == ".exe":
-            raise RuntimeError(
-                f"Proxy executable {self.proxy_path.name} requires Windows. "
-                "Run this on the decoding machine or set launch_proxy=False."
-            )
-
-        logger.info(f"Starting LSL proxy: {self.proxy_path}")
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        self.proxy_process = subprocess.Popen(
-            [str(self.proxy_path)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            creationflags=creationflags,
-        )
-        logger.debug(f"LSL proxy spawned with PID {self.proxy_process.pid}")
-
-        # Wait briefly for proxy to initialize and check if it died immediately
-        time.sleep(0.5)
-        if self.proxy_process.poll() is not None:
-            # Proxy died immediately - capture diagnostics
-            _, stderr = self.proxy_process.communicate(timeout=1.0)
-            stderr_text = stderr.decode("utf-8", errors="replace") if stderr else "(no error output)"
-            raise RuntimeError(
-                f"LSL proxy executable failed to start. Exit code: {self.proxy_process.returncode}. "
-                f"Error output: {stderr_text}"
-            )
 
     def _resolve_stream(self, timeout_sec: float):
         pylsl_module = self._require_pylsl()
@@ -186,9 +143,6 @@ class LSLReceiver:
         return streams[0] if streams else None
 
     def discover_streams(self, timeout_sec: float = 3.0) -> list[str]:
-        if self.launch_proxy:
-            self._start_proxy_process()
-
         pylsl_module = self._require_pylsl()
         streams = pylsl_module.resolve_streams(wait_time=timeout_sec)
         return sorted(
@@ -203,9 +157,6 @@ class LSLReceiver:
         self.stream_name = stream_name
 
     def start(self) -> None:
-        if self.launch_proxy:
-            self._start_proxy_process()
-
         logger.info(
             f"Resolving LSL stream '{self.stream_name}' (type='{self.stream_type}', "
             f"timeout={self.resolve_timeout_sec}s)"
@@ -319,18 +270,5 @@ class LSLReceiver:
             self.inlet.close_stream()
             logger.debug("LSL inlet closed")
         self.inlet = None
-
-        if self.proxy_process is not None:
-            if self.proxy_process.poll() is None:
-                logger.debug("Terminating LSL proxy process")
-                self.proxy_process.terminate()
-                try:
-                    self.proxy_process.wait(timeout=2.0)
-                    logger.debug("LSL proxy terminated gracefully")
-                except subprocess.TimeoutExpired:
-                    logger.warning("LSL proxy did not terminate gracefully, killing process")
-                    self.proxy_process.kill()
-                    self.proxy_process.wait(timeout=2.0)
-            self.proxy_process = None
 
         logger.info("LSLReceiver stopped")

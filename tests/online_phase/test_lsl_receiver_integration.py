@@ -40,7 +40,6 @@ def test_lsl_receiver_can_connect_to_replayed_xdf_stream():
         stream_name=stream_name,
         resolve_timeout_sec=10.0,
         pull_timeout_sec=0.0,
-        launch_proxy=False,
     )
 
     try:
