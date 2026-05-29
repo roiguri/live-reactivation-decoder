@@ -10,7 +10,6 @@ from scipy.signal import firwin, iirnotch, lfilter, sosfilt, sosfilt_zi, tf2sos
 logger = logging.getLogger(__name__)
 
 
-
 class OnlinePreprocessor:
     """
     Stateful causal EEG preprocessor for the online phase.
@@ -47,7 +46,9 @@ class OnlinePreprocessor:
         self._validate_inputs(preprocessing_settings, online_state)
 
         self._input_sfreq = float(input_sfreq)
-        self._target_sfreq = float(preprocessing_settings["final_resample"]["target_rate"])
+        self._target_sfreq = float(
+            preprocessing_settings["final_resample"]["target_rate"]
+        )
         self._resample_filter_stage: str = preprocessing_settings.get(
             "resample_filter_stage", "early"
         )
@@ -63,7 +64,9 @@ class OnlinePreprocessor:
         self._interp_weights: Optional[np.ndarray] = online_state["interp_weights"]
         self._ica_unmixing: np.ndarray = np.array(online_state["ica_unmixing"])
         self._ica_mixing: np.ndarray = np.array(online_state["ica_mixing"])
-        self._ica_pca_components: np.ndarray = np.array(online_state["ica_pca_components"])
+        self._ica_pca_components: np.ndarray = np.array(
+            online_state["ica_pca_components"]
+        )
         self._ica_pca_mean: Optional[np.ndarray] = (
             np.array(online_state["ica_pca_mean"])
             if online_state["ica_pca_mean"] is not None
@@ -71,7 +74,9 @@ class OnlinePreprocessor:
         )
         self._ica_exclude: list[int] = list(online_state["ica_exclude"])
         # Per-channel-type rescaling factor MNE applies inside ICA.fit/apply.
-        self._pre_whitener: np.ndarray = np.array(online_state["pre_whitener"]).reshape(-1, 1).T
+        self._pre_whitener: np.ndarray = (
+            np.array(online_state["pre_whitener"]).reshape(-1, 1).T
+        )
 
         # Derive good indices from the post-hygiene channel count and the bad list.
         self._n_eeg: int = len(self._eeg_chunk_indices)
@@ -82,7 +87,7 @@ class OnlinePreprocessor:
         # Filter coefficients
         hp = preprocessing_settings["highpass"]
         notch_cfg = preprocessing_settings.get("notch")
-        
+
         iir_params = mne.filter.create_filter(
             data=None,
             sfreq=self._input_sfreq,
@@ -99,7 +104,7 @@ class OnlinePreprocessor:
         else:
             self._notch_sos = None
 
-        # Low-pass filter (40 Hz default, IIR causal). 
+        # Low-pass filter (40 Hz default, IIR causal).
         lp = preprocessing_settings["lowpass"]
         lp_params = mne.filter.create_filter(
             data=None,
@@ -187,7 +192,7 @@ class OnlinePreprocessor:
         if eeg_batch.shape[0] == 0:
             return np.empty((0, self.n_channels)), np.empty((0,))
 
-        # Apply positional EEG hygiene
+        # Apply positional EEG hygiene.
         data = eeg_batch[:, self._eeg_chunk_indices].astype(float)
         data = self._apply_filter(data)
         if self._resample_filter_stage == "early":
@@ -219,7 +224,9 @@ class OnlinePreprocessor:
         """
         if self._highpass_zi is None:
             zi_template = sosfilt_zi(self._highpass_sos)  # (n_sections, 2)
-            self._highpass_zi = zi_template[:, :, np.newaxis] * data[0]  # (n_sections, 2, n_ch)
+            self._highpass_zi = (
+                zi_template[:, :, np.newaxis] * data[0]
+            )  # (n_sections, 2, n_ch)
 
         filtered, self._highpass_zi = sosfilt(
             self._highpass_sos, data, axis=0, zi=self._highpass_zi
@@ -321,19 +328,19 @@ class OnlinePreprocessor:
         The delta-add (rather than overwrite) preserves PCA residual variance from
         components beyond n_components_.
         """
-        data /= self._pre_whitener                                        # (n, n_ch)
+        data /= self._pre_whitener  # (n, n_ch)
 
         if self._ica_pca_mean is not None:
             data -= self._ica_pca_mean
 
-        projected = data @ self._ica_pca_components.T                    # (n, n_comp)
-        sources = projected @ self._ica_unmixing.T                       # (n, n_comp)
+        projected = data @ self._ica_pca_components.T  # (n, n_comp)
+        sources = projected @ self._ica_unmixing.T  # (n, n_comp)
 
         if self._ica_exclude:
             sources[:, self._ica_exclude] = 0.0
 
-        cleaned = sources @ self._ica_mixing.T                           # (n, n_comp)
-        data += (cleaned - projected) @ self._ica_pca_components         # delta in PCA space
+        cleaned = sources @ self._ica_mixing.T  # (n, n_comp)
+        data += (cleaned - projected) @ self._ica_pca_components  # delta in PCA space
 
         if self._ica_pca_mean is not None:
             data += self._ica_pca_mean
@@ -347,7 +354,7 @@ class OnlinePreprocessor:
         preprocessing_settings: dict,
         online_state: dict,
     ) -> None:
-        
+
         eeg_chunk_indices = list(online_state["eeg_chunk_indices"])
         n_eeg = len(eeg_chunk_indices)
 
@@ -357,7 +364,9 @@ class OnlinePreprocessor:
                 f"{[i for i in eeg_chunk_indices if i < 0]}."
             )
         if len(set(eeg_chunk_indices)) != n_eeg:
-            duplicates = [i for i in eeg_chunk_indices if eeg_chunk_indices.count(i) > 1]
+            duplicates = [
+                i for i in eeg_chunk_indices if eeg_chunk_indices.count(i) > 1
+            ]
             raise ValueError(
                 f"online_state['eeg_chunk_indices'] contains duplicates: {sorted(set(duplicates))}."
             )
@@ -382,7 +391,9 @@ class OnlinePreprocessor:
                 "online_state shape is inconsistent."
             )
 
-        n_components = pca_components.shape[0] if hasattr(pca_components, "shape") else 0
+        n_components = (
+            pca_components.shape[0] if hasattr(pca_components, "shape") else 0
+        )
         ica_exclude = list(online_state.get("ica_exclude", []))
         if any(i < 0 or i >= n_components for i in ica_exclude):
             raise ValueError(

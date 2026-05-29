@@ -6,7 +6,7 @@
 
 Code under `src/` is the source of truth.
 
-Use [docs/backend_architecture.md](docs/backend_architecture.md) for the maintained backend summary and [docs/Phase2_Implementation_Plan.md](docs/Phase2_Implementation_Plan.md) for the active Phase 2 implementation checklist. If the docs and code disagree, follow the code and update the docs.
+Use [docs/backend_architecture.md](docs/backend_architecture.md) for the maintained backend summary, [docs/Phase2_Implementation_Plan.md](docs/Phase2_Implementation_Plan.md) for the Phase 2 backend checklist, and [docs/Phase2_UI_Plan_M1.md](docs/Phase2_UI_Plan_M1.md) for the completed M1 UI plan. If the docs and code disagree, follow the code and update the docs.
 
 ## Directory Layout
 
@@ -16,22 +16,40 @@ online_decoder/
 ├── src/backend/
 │   ├── core/           — SettingsManager and Pydantic config models
 │   ├── offline_phase/  — utils, OfflinePreprocessor, ModelEvaluator, ModelTrainer, OfflineOrchestrator
-│   └── online_phase/   — LSLReceiver and online inference package scaffold
+│   └── online_phase/   — LSLReceiver, OnlinePreprocessor, LiveInferenceEngine, StreamWorker, PredictionLogger
+├── src/frontend/
+│   ├── screens/        — Phase1Screen, Phase2Screen
+│   ├── widgets/        — Phase 1 widgets + LiveProbabilityChart (pyqtgraph)
+│   ├── widgets/phase2/ — Phase2Header, Phase2SettingsPanel, StartHaltButton
+│   └── debug/          — Debug entry points (--phase2 quick-jump)
 ├── tests/
 │   ├── core/           — Config validation tests
 │   ├── notebooks/      — Manual validation notebooks
 │   ├── offline_phase/  — Offline phase unit tests (preprocessor, evaluator, trainer)
-│   └── online_phase/   — LSLReceiver unit and opt-in replay integration tests
+│   ├── online_phase/   — LSLReceiver unit and opt-in replay integration tests
+│   └── test_phase2_lifecycle.py — Phase 2 screen lifecycle tests (headless)
 ├── tools/lslproxy/     — LSLProxy.exe and Windows DLLs (hardware interface)
 └── docs/               — Backend status and architecture notes
 ```
 
 ## Current Backend Scope
 
-- Phase 2 backend surface in the current branch: `LSLReceiver`, `DecoderPipelineArtifact` loader, `OnlinePreprocessor`, `LiveInferenceEngine`, `StreamWorker`, and `PredictionLogger`.
+- Phase 2 backend surface: `LSLReceiver`, `DecoderPipelineArtifact` loader, `OnlinePreprocessor`, `LiveInferenceEngine`, `StreamWorker`, and `PredictionLogger`.
 - Phase 2 session API: `AppSession.build_live_stream_session(...) -> LiveStreamSession`. `AppSession` remains the app-level composition boundary; do not introduce `OnlinePhase` or expose `session.online`.
 - `StreamWorker` owns only the injected-dependency micro-batch loop. It keeps references to receiver/preprocessor/inference objects for `run()`, but `LiveStreamSession` owns start/stop/cleanup for the receiver, worker, and optional logger.
-- Committed Phase 1 surface: config models, `SettingsManager`, `OfflinePreprocessor`, `ModelEvaluator`, `ModelTrainer`, shared `utils.py` (`build_classifier`, `get_task_data`), `OfflineOrchestrator` (Phase 1 state machine, owns file I/O and `decoder_pipeline.joblib` export), and `AppSession` (`src/backend/session.py` — the single frontend entry point; owns `SettingsManager` lifetime and exposes `session.offline` for Phase 1).
+- Phase 1 surface: config models, `SettingsManager`, `OfflinePreprocessor`, `ModelEvaluator`, `ModelTrainer`, shared `utils.py` (`build_classifier`, `get_task_data`), `OfflineOrchestrator` (Phase 1 state machine, owns file I/O and `decoder_pipeline.joblib` export), and `AppSession` (`src/backend/session.py` — the single frontend entry point; owns `SettingsManager` lifetime and exposes `session.offline` for Phase 1).
+
+## Current Frontend Scope
+
+- Phase 2 live-inference UI: `Phase2Screen` (layout glue + lifecycle), `LiveProbabilityChart` (pyqtgraph, ring-buffered), `Phase2Header`, `Phase2SettingsPanel`, `StartHaltButton`.
+- `pyqtgraph>=0.13` is a runtime dependency scoped to Phase 2 (Phase 1 uses matplotlib).
+- Phase 2 screen is the only frontend consumer of `LiveStreamSession`. It imports only `AppSession` — no direct imports of backend internals.
+
+## Known Conventions
+
+- **LSL unit scaling (lab validation needed)**: The `lsl_to_si_scale` parameter was removed from `OnlinePreprocessor`. VHDR replay via `PlayerLSL` delivers data in SI volts (MNE converts on load), so no scaling is needed for replay-based validation. Whether NeurOne's LSL proxy outputs µV or V has not been verified in the lab — if it outputs µV, a scaling mechanism will need to be re-introduced.
+- `LSLReceiver` defaults to `launch_proxy=True` and auto-launches `tools/lslproxy/LSLProxy.exe`. This requires Windows; all live-LSL testing must happen on Windows.
+- `debug_snapshots/` is git-ignored. Re-run `scripts/demo_seed_debug_snapshots.py` when joining a new machine.
 
 
 ## Dependency Management

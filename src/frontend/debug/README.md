@@ -1,11 +1,18 @@
 # Debug mode
 
-Developer affordance for iterating on Phase 1 UI screens without
-re-running the full offline pipeline every time. Production
+Developer affordance for iterating on UI screens without re-running
+the full offline pipeline every time. Production
 `python -m frontend.main` is **byte-for-byte unaffected** — it never
 imports anything from this package.
 
-## What it does
+Two entry points:
+
+| Command                                              | Opens                                       |
+|------------------------------------------------------|---------------------------------------------|
+| `python -m frontend.debug.main`                      | Phase 1 walkthrough (Next-driven)            |
+| `python -m frontend.debug.main --phase2`             | Phase 2 screen directly (skip Phase 1)       |
+
+## What it does (Phase 1 walkthrough)
 
 Boots the app already populated with realistic state from a previous
 real pipeline run, then exposes keyboard shortcuts to jump straight to
@@ -86,6 +93,33 @@ directly or loading on-disk snapshots.
 **Reset** rewinds the step counter to 0 + clears the file-picker
 visuals. There is no Prev — irreversible signal emissions can't be
 cleanly undone; relaunch the app for a fully clean state.
+
+## Phase 2 quick-jump
+
+```bash
+cd online_decoder
+PYTHONPATH=src python -m frontend.debug.main --phase2
+```
+
+Skips Phase 1 entirely. Builds a real `AppSession` from
+`experiment_config.yaml`, points `Phase2Screen` at
+`debug_snapshots/models/decoder_pipeline.joblib`, and shows it.
+
+Use this when iterating on Phase 2 layout, chart rendering, or the
+Start/Halt + latency wiring as those land — the round-trip per
+change is ~1 s instead of the full Phase 1 click-through.
+
+Defaults (in `phase2_screen_debug.py`):
+
+| Default                                             | Used for                                  |
+|-----------------------------------------------------|-------------------------------------------|
+| `experiment_config.yaml`                            | `AppSession` config load                  |
+| `debug_snapshots/models/decoder_pipeline.joblib`    | Phase 2's `decoder_pipeline_path`         |
+
+The pipeline file is written by Phase 1's train snapshot path
+(`scripts/demo_seed_debug_snapshots.py`). If the file is missing, the
+shell still opens — the artifact is loaded later by
+`build_live_stream_session(...)` when live inference starts.
 
 ## Troubleshooting
 

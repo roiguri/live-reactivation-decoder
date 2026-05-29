@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QMainWindow, QStackedWidget
+from PyQt6.QtWidgets import QMainWindow, QStackedWidget, QWidget
 
 
 class MainWindow(QMainWindow):
@@ -11,6 +11,7 @@ class MainWindow(QMainWindow):
         self._stack = QStackedWidget()
         self.setCentralWidget(self._stack)
 
-    def add_screen(self, widget):
-        self._stack.addWidget(widget)
+    def show_screen(self, widget: QWidget) -> None:
+        if self._stack.indexOf(widget) == -1:
+            self._stack.addWidget(widget)
         self._stack.setCurrentWidget(widget)
