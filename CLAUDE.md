@@ -47,7 +47,7 @@ online_decoder/
 
 ## Known Conventions
 
-- `OnlinePreprocessor.lsl_to_si_scale` (default `1e-6`): LSL streams deliver EEG in microvolts; MNE's offline pipeline trains models in SI volts. This parameter converts input units at the start of `process_batch`. See the TODO comment in `online_preprocessor.py` for context.
+- **LSL unit scaling (lab validation needed)**: The `lsl_to_si_scale` parameter was removed from `OnlinePreprocessor`. VHDR replay via `PlayerLSL` delivers data in SI volts (MNE converts on load), so no scaling is needed for replay-based validation. Whether NeurOne's LSL proxy outputs µV or V has not been verified in the lab — if it outputs µV, a scaling mechanism will need to be re-introduced.
 - `LSLReceiver` defaults to `launch_proxy=True` and auto-launches `tools/lslproxy/LSLProxy.exe`. This requires Windows; all live-LSL testing must happen on Windows.
 - `debug_snapshots/` is git-ignored. Re-run `scripts/demo_seed_debug_snapshots.py` when joining a new machine.
 

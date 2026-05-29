@@ -32,7 +32,7 @@ M1 shipped the Phase 2 live-inference POC on branch `feat/phase2-live-ui` (13 co
 
 | Issue | Status | Notes |
 |-------|--------|-------|
-| `lsl_to_si_scale=1e-6` workaround | Functional, needs design decision | LSL delivers uV, MNE trains in V. The 1e-6 default is correct for NeurOne but is a hardcoded assumption. Decide whether to detect units, export from offline, or keep the parameter. |
+| LSL unit scaling removed | Open — lab validation needed | The `lsl_to_si_scale=1e-6` factor was removed: VHDR replay via `PlayerLSL` streams in SI volts (MNE converts on load), so the scaling was incorrect for replay. Whether NeurOne's LSL proxy outputs µV or V is unverified — test in the lab and re-add scaling if needed. |
 | No pipeline validation | Open | Online predictions have never been verified against offline on the same labeled data. |
 | XDF test recording has no stimulus events | Open | Current replay file is from a non-task block. Need to replay actual training data (.vhdr) to validate. |
 

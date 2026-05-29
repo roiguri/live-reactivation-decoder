@@ -42,15 +42,9 @@ class OnlinePreprocessor:
         preprocessing_settings: dict,
         online_state: dict,
         input_sfreq: float = 1000.0,
-        # TODO: LSL streams (NeurOne, XDF replay) deliver EEG in microvolts,
-        # but the offline pipeline (MNE) trains models in SI volts. This
-        # scale factor converts LSL input to match the offline unit space.
-        # Hardcoded for NeurOne; revisit if a non-µV source is added.
-        lsl_to_si_scale: float = 1e-6,
     ) -> None:
         self._validate_inputs(preprocessing_settings, online_state)
 
-        self._lsl_to_si_scale = float(lsl_to_si_scale)
         self._input_sfreq = float(input_sfreq)
         self._target_sfreq = float(
             preprocessing_settings["final_resample"]["target_rate"]
@@ -198,11 +192,8 @@ class OnlinePreprocessor:
         if eeg_batch.shape[0] == 0:
             return np.empty((0, self.n_channels)), np.empty((0,))
 
-        # Apply positional EEG hygiene and convert to SI volts.
+        # Apply positional EEG hygiene.
         data = eeg_batch[:, self._eeg_chunk_indices].astype(float)
-        # TODO: review earlier comment and scaling
-        if self._lsl_to_si_scale != 1.0:
-            data *= self._lsl_to_si_scale
         data = self._apply_filter(data)
         if self._resample_filter_stage == "early":
             # LP + decimate happen before spatial transforms
