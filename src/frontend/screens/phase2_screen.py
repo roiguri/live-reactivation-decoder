@@ -71,12 +71,19 @@ class Phase2Screen(QWidget):
         settings = session.settings
         task_names = [t["name"] for t in settings["decoders"]["tasks"]]
         target_sfreq = float(settings["preprocessing"]["final_resample"]["target_rate"])
+        # settings["event_mapping"] is {name: id}; invert to {id: name} so the
+        # chart can resolve each trigger code to its configured event name.
+        event_names = {
+            int(code): str(name)
+            for name, code in settings.get("event_mapping", {}).items()
+        }
 
         self._chart = LiveProbabilityChart(
             task_names=task_names,
             window_seconds=_DEFAULT_WINDOW_SECONDS,
             target_sfreq=target_sfreq,
             threshold=_DEFAULT_THRESHOLD,
+            event_names=event_names,
         )
         # Live target chosen by the operator via the header. None until a
         # target is selected; Start is guarded against a missing target.
@@ -128,6 +135,7 @@ class Phase2Screen(QWidget):
         markers: list,
     ) -> None:
         self._chart.append_predictions(predictions, out_ts)
+        self._chart.append_markers(markers)
 
     # ── target selection ───────────────────────────────────────────────────────
 

@@ -48,6 +48,15 @@ _REFRESH_HZ = 30
 # with the vertical NOW line.
 _NOW_GAP_SECONDS = 0.5
 
+# All event markers share one neutral colour — the line distinguishes
+# itself by position + label (the configured event name), not by hue.
+# Colour is deliberately decoupled from the event name.
+_MARKER_COLOR = TEXT_MUTED
+# Hard cap on retained marker records so a stalled stream (latest_ts not
+# advancing) or a flood of unmapped codes can't grow the scene unbounded.
+# Pruning by window in ``_refresh`` is the normal path; this is a backstop.
+_MAX_MARKERS = 128
+
 
 class LiveProbabilityChart(pg.PlotWidget):
     """Rolling per-decoder probability chart with chance + threshold guides.
@@ -65,6 +74,11 @@ class LiveProbabilityChart(pg.PlotWidget):
     threshold
         y-position of the dashed red threshold guide. Purely visual for
         now; operator-tunable threshold semantics are a follow-up.
+    event_names
+        Trigger code → event name (from ``markers_mapping.events``). Used
+        to label markers drawn by :meth:`append_markers` and to decide
+        which codes to draw: a marker whose code is **not** in this map is
+        dropped. All markers share one neutral colour (``_MARKER_COLOR``).
     """
 
     def __init__(
@@ -74,6 +88,7 @@ class LiveProbabilityChart(pg.PlotWidget):
         window_seconds: float = 10.0,
         target_sfreq: float = 100.0,
         threshold: float = 0.85,
+        event_names: dict[int, str] | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent, background=CARD_WHITE)
@@ -85,6 +100,15 @@ class LiveProbabilityChart(pg.PlotWidget):
         self._window_seconds = float(window_seconds)
         self._target_sfreq = float(target_sfreq)
         self._threshold = float(threshold)
+        self._event_names: dict[int, str] = {
+            int(code): str(name) for code, name in (event_names or {}).items()
+        }
+        # Cue markers, oldest first. Each: {"ts": float, "code": int,
+        # "line": InfiniteLine | None}. The line is created lazily in
+        # ``_refresh`` (the only place that touches the scene) the first
+        # time a marker is inside the visible window, and removed when it
+        # scrolls off the left edge.
+        self._markers: list[dict] = []
 
         self._capacity: int = max(1, int(round(window_seconds * target_sfreq)))
         # Double-length ring: writes mirror into [idx] and [idx + capacity]
@@ -172,6 +196,32 @@ class LiveProbabilityChart(pg.PlotWidget):
         self._write_idx = idx
         self._latest_ts = float(timestamps[-1])
 
+    def append_markers(self, markers: list[tuple[float, int]]) -> None:
+        """Buffer cue markers for the next repaint. Data-only — like
+        :meth:`append_predictions`, this never touches the scene; the
+        actual line items are created/moved/removed in ``_refresh``.
+
+        ``markers`` is the ``(lsl_timestamp, code)`` list emitted by
+        ``prediction_ready``. Timestamps share the prediction clock, so
+        each marker rebases onto the same x-axis as the curves
+        (``x = ts - latest_ts``). Codes absent from ``event_names`` (the
+        ``markers_mapping.events`` set) are dropped — the receiver emits
+        every non-zero trigger edge, but only configured events are drawn.
+        """
+        if not markers:
+            return
+        for ts, code in markers:
+            code = int(code)
+            if code not in self._event_names:
+                continue
+            self._markers.append({"ts": float(ts), "code": code, "line": None})
+        # Backstop against unbounded growth (see _MAX_MARKERS). Drop the
+        # oldest, removing any realised line from the scene.
+        while len(self._markers) > _MAX_MARKERS:
+            stale = self._markers.pop(0)
+            if stale["line"] is not None:
+                self.removeItem(stale["line"])
+
     def set_task_visible(self, name: str, visible: bool) -> None:
         """Show or hide a single decoder's curve at runtime.
 
@@ -198,6 +248,10 @@ class LiveProbabilityChart(pg.PlotWidget):
             buf.fill(np.nan)
         self._write_idx = 0
         self._latest_ts = None
+        for marker in self._markers:
+            if marker["line"] is not None:
+                self.removeItem(marker["line"])
+        self._markers = []
 
     # ── internals ─────────────────────────────────────────────────────────────
 
@@ -222,6 +276,49 @@ class LiveProbabilityChart(pg.PlotWidget):
         x = ts - self._latest_ts  # rebased: latest sample at 0, older negative
         for name, curve in self._curves.items():
             curve.setData(x, self._buffers[name][start:end])
+        self._refresh_markers()
+
+    def _refresh_markers(self) -> None:
+        """Reposition cue markers onto the rebased x-axis, realising lines
+        the first time they enter the window and dropping them once they
+        scroll past the left edge. Called from ``_refresh`` so all marker
+        scene mutation happens on the repaint tick, not the signal path.
+        """
+        if self._latest_ts is None:
+            return
+        left = -self._window_seconds
+        kept: list[dict] = []
+        for marker in self._markers:
+            x = marker["ts"] - self._latest_ts
+            if x < left:
+                # Scrolled off the left edge — retire it.
+                if marker["line"] is not None:
+                    self.removeItem(marker["line"])
+                continue
+            if x <= _NOW_GAP_SECONDS:
+                if marker["line"] is None:
+                    marker["line"] = self._make_marker_line(marker["code"])
+                    self.addItem(marker["line"])
+                marker["line"].setPos(x)
+            kept.append(marker)
+        self._markers = kept
+
+    def _make_marker_line(self, code: int) -> pg.InfiniteLine:
+        """Build a neutral vertical line labelled with the configured
+        event name for ``code`` (guaranteed present — unmapped codes are
+        filtered out in :meth:`append_markers`)."""
+        return pg.InfiniteLine(
+            angle=90,
+            movable=False,
+            pen=self._pen(_MARKER_COLOR, dashed=False, width=1.2),
+            label=self._event_names.get(code, str(code)),
+            labelOpts={
+                "position": 0.92,
+                "color": _MARKER_COLOR,
+                "movable": False,
+                "fill": (255, 255, 255, 200),
+            },
+        )
 
     def _configure_axes(self) -> None:
         """Lock both axes to the analyst-facing units and hide chart-junk."""
