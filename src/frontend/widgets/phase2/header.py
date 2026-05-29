@@ -1,20 +1,27 @@
-"""Phase 2 status header: status indicator + target hardware label."""
+"""Phase 2 status header: status indicator + target selector."""
 from __future__ import annotations
 
+from PyQt6.QtCore import Qt, pyqtSignal as Signal
 from PyQt6.QtGui import QFont
-from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QWidget
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QWidget
 
-from backend.online_phase.lsl_receiver import DEFAULT_STREAM_NAME
 from frontend.styles.theme import (
     BG_LIGHT,
     BORDER_GRAY,
-    TEXT_MUTED,
+    PRIMARY_BLUE,
     TEXT_PRIMARY,
 )
 
 
 class Phase2Header(QWidget):
-    """Header bar: ``[status] | Target: <stream> (LSL)``."""
+    """Header bar: ``[status] | [Choose target… / Target: <name>]``.
+
+    The target is a clickable control: it starts as *Choose target…* and,
+    when clicked, emits :attr:`choose_target_clicked` so the screen can open
+    the target-selection dialog.
+    """
+
+    choose_target_clicked = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -42,14 +49,18 @@ class Phase2Header(QWidget):
         divider.setStyleSheet(f"background: {BORDER_GRAY};")
         layout.addWidget(divider)
 
-        self._target_label = QLabel(f"Target: {DEFAULT_STREAM_NAME} (LSL)")
-        tf = self._target_label.font()
-        tf.setPointSize(10)
-        self._target_label.setFont(tf)
-        self._target_label.setStyleSheet(
-            f"color: {TEXT_MUTED}; background: transparent;"
+        self._target_button = QPushButton("Choose target…")
+        self._target_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._target_button.setFlat(True)
+        self._target_button.setStyleSheet(
+            "QPushButton {"
+            f"  color: {PRIMARY_BLUE}; background: transparent; border: none;"
+            "  padding: 0; font-size: 10pt; text-align: left;"
+            "}"
+            "QPushButton:hover { text-decoration: underline; }"
         )
-        layout.addWidget(self._target_label)
+        self._target_button.clicked.connect(self.choose_target_clicked)
+        layout.addWidget(self._target_button)
 
         layout.addStretch(1)
 
@@ -59,3 +70,7 @@ class Phase2Header(QWidget):
         self._status_label.setStyleSheet(
             f"color: {color}; background: transparent;"
         )
+
+    def set_target_text(self, text: str) -> None:
+        """Update the target selector's label (e.g. ``Target: X (LSL)``)."""
+        self._target_button.setText(text)

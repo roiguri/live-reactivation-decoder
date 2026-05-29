@@ -86,16 +86,29 @@ class _StubAppSession:
     def __init__(self, live: _FakeLiveStreamSession, settings: dict | None = None) -> None:
         self._live = live
         self.settings = settings or _make_session_settings()
+        self.start_source_calls = 0
+        self.stop_source_calls = 0
+        self.last_stream_name: str | None = None
 
-    def build_live_stream_session(self, decoder_pipeline_path):
-        # Hand out a fresh fake on each call to mirror the real one-shot semantics
-        # (the screen rebuilds after every stop).
+    def build_live_stream_session(self, decoder_pipeline_path, *, stream_name=None):
+        self.last_stream_name = stream_name
+        # Hand out a fresh fake on each call to mirror the real one-shot
+        # semantics (the screen builds a new session on every Start).
         if getattr(self._live, "_handed_out", False):
             new_fake = _FakeLiveStreamSession()
             new_fake.raise_on_start = self._live.raise_on_start
             self._live = new_fake
         self._live._handed_out = True
         return self._live
+
+    def start_stream_source(self) -> None:
+        self.start_source_calls += 1
+
+    def stop_stream_source(self) -> None:
+        self.stop_source_calls += 1
+
+    def discover_streams(self, timeout_sec: float = 3.0) -> list[str]:
+        return ["NeuroneStream", "OtherStream"]
 
 
 @pytest.fixture
@@ -113,38 +126,22 @@ def screen_and_session(qapp):
             session=app_session,
             decoder_pipeline_path=Path("/nonexistent.joblib"),
         )
+        # Pre-select a target so the state-machine tests exercise Start
+        # without tripping the "no target" guard. Target-selection itself is
+        # covered by dedicated tests below.
+        screen._target = {"source": "lsl", "stream_name": "NeuroneStream"}
         yield screen, fake, app_session, mock_box
 
 
 # ── Construction ──────────────────────────────────────────────────────────────
 
 
-def test_constructor_builds_session_eagerly(screen_and_session) -> None:
+def test_constructor_does_not_build_session(screen_and_session) -> None:
     screen, fake, app_session, _ = screen_and_session
-    # The eager construction in __init__ should have invoked
-    # build_live_stream_session and stored the result.
-    assert screen._live is fake
-    # No start() yet — the operator hasn't clicked.
+    # The session is built lazily on Start (bound to the chosen target), so
+    # __init__ leaves _live unset and starts nothing.
+    assert screen._live is None
     assert fake.start_calls == 0
-
-
-def test_constructor_error_propagates(qapp) -> None:
-    """If build_live_stream_session raises (e.g. artifact missing), the
-    exception escapes ``__init__`` so the caller (Phase1Screen) can
-    show its own dialog and stay on Phase 1."""
-    from frontend.screens.phase2_screen import Phase2Screen
-
-    class _RaisingSession:
-        settings = _make_session_settings()
-
-        def build_live_stream_session(self, _):
-            raise FileNotFoundError("artifact missing")
-
-    with pytest.raises(FileNotFoundError, match="artifact missing"):
-        Phase2Screen(
-            session=_RaisingSession(),
-            decoder_pipeline_path=Path("/nope.joblib"),
-        )
 
 
 # ── Button state machine ──────────────────────────────────────────────────────
@@ -282,6 +279,7 @@ def test_rapid_start_halt_cycles_no_thread_leak(qapp) -> None:
             session=app_session,
             decoder_pipeline_path=Path("/nonexistent.joblib"),
         )
+        screen._target = {"source": "lsl", "stream_name": "NeuroneStream"}
         for _ in range(5):
             screen._start_halt_button.start_clicked.emit()
             screen._start_halt_button.halt_clicked.emit()
@@ -337,3 +335,124 @@ def test_start_resets_chart_buffers(screen_and_session) -> None:
     assert screen._chart._write_idx == 0
     assert screen._chart._latest_ts is None
     assert np.all(np.isnan(screen._chart._buffers[task_name]))
+
+
+# ── target selection (Step 1b) ─────────────────────────────────────────────────
+
+
+class _FakeTargetDialog:
+    """Stand-in for TargetSelectionDialog: always accepts with a fixed target."""
+
+    last_session = None
+
+    def __init__(self, session, parent=None) -> None:
+        _FakeTargetDialog.last_session = session
+
+    def exec(self):
+        from PyQt6.QtWidgets import QDialog
+
+        return QDialog.DialogCode.Accepted
+
+    def selected_target(self):
+        return {"source": "lsl", "stream_name": "PickedStream"}
+
+
+def test_header_starts_without_target_and_emits_signal(qapp) -> None:
+    # Exercise the header in isolation: a real screen would open a modal
+    # dialog on click, which would deadlock the offscreen test.
+    from frontend.widgets.phase2.header import Phase2Header
+
+    header = Phase2Header()
+    assert "Choose target" in header._target_button.text()
+
+    fired: list[bool] = []
+    header.choose_target_clicked.connect(lambda: fired.append(True))
+    header._target_button.click()
+    assert fired == [True]
+
+
+def test_choose_target_updates_header_and_state(screen_and_session) -> None:
+    screen, _, _, _ = screen_and_session
+    with patch(
+        "frontend.screens.phase2_screen.TargetSelectionDialog", _FakeTargetDialog
+    ):
+        screen._header.choose_target_clicked.emit()
+
+    assert screen._target == {"source": "lsl", "stream_name": "PickedStream"}
+    assert screen._header._target_button.text() == "Target: PickedStream (LSL)"
+    assert _FakeTargetDialog.last_session is screen.session
+
+
+def test_start_without_target_is_guarded(qapp) -> None:
+    """Start with no target must not build/start a session — just prompt."""
+    from frontend.screens.phase2_screen import Phase2Screen
+
+    fake = _FakeLiveStreamSession()
+    app_session = _StubAppSession(fake)
+    with patch("frontend.screens.phase2_screen.QMessageBox.critical"), patch(
+        "frontend.screens.phase2_screen.QMessageBox.information"
+    ) as mock_info:
+        screen = Phase2Screen(
+            session=app_session,
+            decoder_pipeline_path=Path("/nonexistent.joblib"),
+        )
+        assert screen._target is None
+        screen._start_halt_button.start_clicked.emit()
+
+        assert mock_info.called
+        assert fake.start_calls == 0
+        assert app_session.start_source_calls == 0
+        assert screen._start_halt_button._state == "idle"
+
+
+def test_start_uses_selected_stream_and_starts_source(screen_and_session) -> None:
+    screen, fake, app_session, _ = screen_and_session
+    screen._start_halt_button.start_clicked.emit()
+
+    assert app_session.start_source_calls == 1
+    assert app_session.last_stream_name == "NeuroneStream"
+    assert fake.start_calls == 1
+    assert screen._start_halt_button._state == "live"
+
+
+def test_halt_stops_stream_source(screen_and_session) -> None:
+    screen, _, app_session, _ = screen_and_session
+    screen._start_halt_button.start_clicked.emit()
+    screen._start_halt_button.halt_clicked.emit()
+
+    assert app_session.stop_source_calls >= 1
+
+
+# ── discovery worker + dialog ───────────────────────────────────────────────────
+
+
+def test_stream_discovery_worker_emits_names(qapp) -> None:
+    from frontend.workers.stream_discovery_worker import StreamDiscoveryWorker
+
+    fake = _FakeLiveStreamSession()
+    app_session = _StubAppSession(fake)
+    worker = StreamDiscoveryWorker(app_session, timeout_sec=1.0)
+
+    results: list[list[str]] = []
+    worker.result_ready.connect(results.append)
+    worker.run()
+
+    assert results == [["NeuroneStream", "OtherStream"]]
+
+
+def test_target_dialog_accept_returns_descriptor(qapp) -> None:
+    from frontend.widgets.phase2.target_dialog import TargetSelectionDialog
+
+    fake = _FakeLiveStreamSession()
+    app_session = _StubAppSession(fake)
+    dialog = TargetSelectionDialog(app_session)
+
+    # No streams yet → OK disabled, no result.
+    assert dialog.selected_target() is None
+
+    # Simulate a completed discovery, pick the second stream, accept.
+    dialog._on_streams_found(["StreamA", "StreamB"])
+    dialog._combo.setCurrentText("StreamB")
+    dialog._on_accept()
+
+    assert dialog.selected_target() == {"source": "lsl", "stream_name": "StreamB"}

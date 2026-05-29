@@ -13,5 +13,11 @@ Sub-widgets composed by :class:`Phase2Screen`:
 from frontend.widgets.phase2.header import Phase2Header
 from frontend.widgets.phase2.settings_panel import Phase2SettingsPanel
 from frontend.widgets.phase2.start_halt_button import StartHaltButton
+from frontend.widgets.phase2.target_dialog import TargetSelectionDialog
 
-__all__ = ["Phase2Header", "Phase2SettingsPanel", "StartHaltButton"]
+__all__ = [
+    "Phase2Header",
+    "Phase2SettingsPanel",
+    "StartHaltButton",
+    "TargetSelectionDialog",
+]
