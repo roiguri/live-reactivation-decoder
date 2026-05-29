@@ -35,6 +35,21 @@ M1 shipped the Phase 2 live-inference POC on branch `feat/phase2-live-ui` (13 co
 | LSL unit scaling removed | Open — lab validation needed | The `lsl_to_si_scale=1e-6` factor was removed: VHDR replay via `PlayerLSL` streams in SI volts (MNE converts on load), so the scaling was incorrect for replay. Whether NeurOne's LSL proxy outputs µV or V is unverified — test in the lab and re-add scaling if needed. |
 | No pipeline validation | Open | Online predictions have never been verified against offline on the same labeled data. |
 | XDF test recording has no stimulus events | Open | Current replay file is from a non-task block. Need to replay actual training data (.vhdr) to validate. |
+| Proxy auto-launch during discovery | Open — [#3] | `discover_streams` / `start_stream_source` always launch `LSLProxy.exe`; redundant and risks a `NeuroneStream` name collision when an external stream is already publishing. |
+| Stream-source locking model | Open — [#1] | `AppSession`'s coarse lock around the stream source held across the blocking proxy launch — revisit. |
+
+---
+
+## Update — stream-selection branch (2026-05-29)
+
+Work from `feat/phase2-stream-selection` lands several M2 items early and changes Goal 12's direction.
+
+**Landed:**
+- **StreamSource refactor.** Proxy management moved out of `LSLReceiver` (now a pure *consumer*) into `LslProxySource` (`src/backend/online_phase/stream_source.py`). `AppSession` owns the active source via `start_stream_source()` / `stop_stream_source()` and exposes `discover_streams()`. `build_live_stream_session(..., stream_name=...)` no longer hardcodes the stream.
+- **Goal 3 (LSL Stream Picker) — done** (header-launched dialog; see that section).
+- **Goal 1 Step 1 (replay script) — done**, with deviations (see that section).
+
+**Direction change — Goal 12 (in-app file replay) descoped.** An in-app `ReplaySource` (subprocess) + "Recording folder" dialog option was prototyped and reverted. **Decision: the app only consumes existing LSL streams; recording replay is out-of-process** via `scripts/replay_vhdr_to_lsl.py`, which publishes a NeurOne-like (`type=EEG`) stream the app discovers like hardware. This avoids in-app subprocess lifecycle and frozen-build (PyInstaller) entry-point complexity.
 
 ---
 
@@ -42,9 +57,9 @@ M1 shipped the Phase 2 live-inference POC on branch `feat/phase2-live-ui` (13 co
 
 | # | Goal | Status |
 |---|------|--------|
-| 1 | Pipeline Validation | Not started |
+| 1 | Pipeline Validation | Step 1 (replay script) done; validation pending |
 | 2 | Event Markers on Probability Graph | Not started |
-| 3 | LSL Stream Picker | Not started |
+| 3 | LSL Stream Picker | ✅ Done (stream-selection branch) |
 | 4 | Trigger Log | Not started |
 | 5 | Decision History Strip | Not started |
 | 6 | Latency Display + Buffer Health | Not started |
@@ -53,9 +68,11 @@ M1 shipped the Phase 2 live-inference POC on branch `feat/phase2-live-ui` (13 co
 | 9 | Frozen Event Graph | Not started |
 | 10 | Back Button + Exit Flow | Not started |
 | 11 | Past Events Dropdown | Not started |
-| 12 | Unified Source Picker (XDF Replay) | Not started |
+| 12 | Unified Source Picker (XDF Replay) | Revised — replay via external script; in-app picker descoped |
 | 13 | Modular Graph Layouts | Not started |
 | 14 | Per-Decoder Colour Picker | Not started |
+| 15 | Probability Graph Window Length | Not started |
+| 16 | Probability Graph History View | Not started — needs UX discussion |
 
 ---
 
@@ -63,14 +80,17 @@ M1 shipped the Phase 2 live-inference POC on branch `feat/phase2-live-ui` (13 co
 
 Prove that the online pipeline produces meaningful, class-correlated predictions on data with known labels. This is the foundation — all subsequent UI work assumes the predictions are trustworthy.
 
-### Step 1: VHDR-to-LSL replay script
+### Step 1: VHDR-to-LSL replay script — ✅ Done
 
-Create `scripts/replay_vhdr_to_lsl.py` that loads a BrainVision `.vhdr` file via MNE and streams it as LSL using `mne_lsl.player.PlayerLSL`. Must preserve the trigger channel so markers flow through the existing `LSLReceiver.split_eeg_and_markers` path.
+`scripts/replay_vhdr_to_lsl.py` loads a BrainVision recording **directory** via MNE and publishes it as a live LSL stream. Two deviations from the original plan:
 
-- [ ] Script loads `.vhdr` and streams as LSL with correct channel count (64 EEG + 1 trigger)
-- [ ] Trigger codes (11=red, 12=green, 13=yellow) are preserved in the stream
-- [ ] `--stream-name`, `--repeat` flags match `replay_xdf_to_lsl.py` interface
-- [ ] Verified: `LSLReceiver` pulls data and `StreamWorker` reports decoded markers in logs
+- **Raw `pylsl` outlet, not `mne_lsl.PlayerLSL`.** PlayerLSL derives the LSL `type` from MNE's channel kind (lowercase `eeg`, or `""` for mixed EEG+stim channels), which the app's `type == "EEG"` discovery filter skips. A manual outlet sets `type="EEG"` (name `NeuroneStream`, 65 ch @ the recording's rate) so the app discovers it exactly like NeurOne hardware.
+- **Flags:** `--stream-name`, `--stream-type`, `--chunk-ms`, `--no-repeat` (loops by default); the `replay_xdf_to_lsl.py` interface was not mirrored.
+
+- [x] Loads recording dir and streams with correct channel count (64 EEG + 1 trigger)
+- [x] Trigger codes preserved (packed `code << 8`) and decoded by `LSLReceiver`
+- [x] Stream advertises `type=EEG` so `AppSession.discover_streams()` lists it
+- [x] Verified: consumer pulls data @ 1000 Hz and decodes markers
 
 ### Step 2: End-to-end validation on training data
 
@@ -115,15 +135,15 @@ Display trigger events as vertical lines on the live probability chart. The `mar
 
 ---
 
-## Goal 3 — LSL Stream Picker
+## Goal 3 — LSL Stream Picker — ✅ Done (stream-selection branch)
 
-Replace the hardcoded `NeuroneStream` default with a discoverable stream selector in the header.
+Implemented as a **header-launched dialog** rather than an inline header dropdown.
 
-- [ ] Header gains a stream-name dropdown or picker widget
-- [ ] On screen open (or on a "Discover" action), `LSLReceiver.discover_streams()` populates available streams
-- [ ] Operator selects a stream before clicking Start
-- [ ] `LSLReceiver.set_stream(name)` is called before `live.start()`
-- [ ] Verified: with multiple LSL sources active, operator can pick the correct one
+- [x] Header "Choose target…" button opens `TargetSelectionDialog`
+- [x] Manual **Refresh** runs `AppSession.discover_streams()` on a `StreamDiscoveryWorker` thread and populates a combo
+- [x] Operator selects a stream before Start; Start is guarded against no target
+- [x] Chosen `stream_name` is passed to `build_live_stream_session(stream_name=...)` (no `set_stream` call)
+- [ ] Caveat: discovery currently always launches `LSLProxy.exe` — see [#3]
 
 ---
 
@@ -225,15 +245,11 @@ Browse earlier event snapshots in the Frozen Event Graph.
 
 ---
 
-## Goal 12 — Unified Source Picker (XDF Replay)
+## Goal 12 — Unified Source Picker (XDF Replay) — Revised: descoped
 
-Extend Goal 3's LSL stream picker to support file-based replay as an alternative source.
+Original intent was an in-app "Replay File" source alongside discovered streams. This was prototyped (`ReplaySource` subprocess + a "Recording folder" dialog option) and **reverted**.
 
-- [ ] Source picker gains a "Replay File" option alongside discovered LSL streams
-- [ ] File browser for selecting `.xdf` or `.vhdr` files
-- [ ] Replay runs in-process (or as a managed subprocess) and feeds data to the existing pipeline
-- [ ] Operator can stop/restart replay like a live stream
-- [ ] Verified: operator can switch between live NeurOne and file replay without restarting the app
+**Decision: the app only consumes existing LSL streams; recording replay is out-of-process** via `scripts/replay_vhdr_to_lsl.py`, which publishes a NeurOne-like (`type=EEG`) stream the app discovers like hardware. This keeps the app a pure consumer and avoids in-app subprocess lifecycle + frozen-build (PyInstaller) entry-point complexity. If an in-app picker is ever wanted, the prototype is recoverable from git history.
 
 ---
 
@@ -256,3 +272,37 @@ Make sidebar decoder swatches interactive.
 - [ ] Selected color updates the swatch, the chart curve, and the decision history indicator
 - [ ] Default colors remain as assigned by `chart_line_color()`
 - [ ] Verified: changing a decoder's color is immediately reflected on the chart
+
+---
+
+## Goal 15 — Probability Graph Window Length
+
+Today `LiveProbabilityChart` shows a **fixed 10 s** rolling window: the x-axis is locked to `[-window_seconds, NOW_GAP]`, timestamps are rebased so the latest sample sits at 0, and the curve scrolls right-to-left. The ring buffer's capacity equals the window. Give the operator control over **how much recent history is visible**, while still following the latest sample (no scrolling back — that's Goal 16).
+
+- [ ] A window-length control (e.g. segmented buttons / dropdown — 5 / 10 / 30 / 60 s) in the chart panel header
+- [ ] Selecting a length updates the x-range and the ring-buffer capacity together
+- [ ] Chart keeps following the latest sample; incoming data is never dropped during the change
+- [ ] Y-axis stays fixed at `[0, 1]` (probabilities are comparable across decoders)
+- [ ] Decide whether the choice persists within the session (across restarts: no, for now)
+- [ ] Verified: switching window length immediately re-scales the live chart
+
+---
+
+## Goal 16 — Probability Graph History View
+
+**Needs UX discussion before spec.** Goal 15 only changes how much of the *live tail* is visible. This goal is about **reviewing earlier predictions** — looking back at history beyond the current window while (or after) the stream runs. "In some way" is deliberately open: the mechanism is undecided.
+
+Approaches to weigh:
+- **Scroll/pan the live chart.** A scrollbar or drag to move back in time, with a **live/paused** mode and a "Jump to now" control to resume following. Needs a backing buffer larger than the visible window (a capped scrollback history) instead of the current window-sized ring buffer.
+- **Separate review/history view.** A distinct chart or mode for browsing past windows, leaving the live chart untouched.
+- **Lean on existing goals.** Goals 9 (Frozen Event Graph) and 11 (Past Events Dropdown) already snapshot and browse *per-event* windows; history review may be partly covered there, or should be unified with them rather than built twice.
+
+Open questions:
+- Continuous scrollback over the whole session, or only around detected events (overlap with Goals 9/11)?
+- How much history to retain (memory cap / max scrollback duration)?
+- Does entering history pause the live follow, and how does the operator return to live?
+- Persist position/zoom within the session?
+
+- [ ] Decide the mechanism (scroll/pan vs separate view vs fold into Goals 9/11) and the retention cap
+- [ ] Implement the chosen history buffer + live/paused state (if applicable)
+- [ ] Verified: operator can review earlier predictions and return to live without losing incoming data
