@@ -328,6 +328,7 @@ class LiveProbabilityChart(pg.PlotWidget):
                 # so the label stays legible over any curve behind it.
                 "fill": (255, 255, 255, 235),
                 "border": pg.mkPen(_MARKER_COLOR, width=1.0),
+                "anchors": [(0.0, 0.5), (0.0, 0.5)],
             },
         )
         # Bold the label. InfLineLabel is a TextItem whose underlying
