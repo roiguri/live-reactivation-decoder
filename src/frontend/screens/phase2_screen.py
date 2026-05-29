@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from backend.session import AppSession, LiveStreamSession
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QCloseEvent, QFont
 from PyQt6.QtWidgets import (
@@ -15,6 +14,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from backend.session import AppSession, LiveStreamSession
 from frontend.styles.theme import (
     BG_LIGHT,
     BORDER_GRAY,
@@ -40,6 +40,10 @@ from frontend.widgets.phase2 import (
 # ``decoders.threshold`` field yet. Once it does, read it from
 # ``session.settings["decoders"]["threshold"]``.
 _DEFAULT_THRESHOLD = 0.85
+# Fixed rolling-window width for the live probability chart. Operator
+# control over this (5 / 10 / 30 / 60 s) is Goal 15 in the M2 plan; until
+# then it's a single knob here, same altitude as _DEFAULT_THRESHOLD.
+_DEFAULT_WINDOW_SECONDS = 5.0
 _CHART_MAX_HEIGHT = 420
 
 
@@ -70,6 +74,7 @@ class Phase2Screen(QWidget):
 
         self._chart = LiveProbabilityChart(
             task_names=task_names,
+            window_seconds=_DEFAULT_WINDOW_SECONDS,
             target_sfreq=target_sfreq,
             threshold=_DEFAULT_THRESHOLD,
         )
