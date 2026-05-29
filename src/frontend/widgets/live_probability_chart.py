@@ -20,6 +20,7 @@ samples without ``np.roll`` or concatenation. Costs ~2× memory
 (~16 kB per task at 1000 samples × float64) — trivial vs. the
 allocation cost on every repaint.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -40,7 +41,12 @@ from frontend.styles.theme import (
 # first ``pg.PlotWidget`` constructs so the viewbox defaults stick.
 pg.setConfigOptions(background="w", foreground="k", antialias=True)
 
-_Y_RANGE = (0.0, 1.05)
+# Probabilities live in [0, 1]; the view extends to _Y_RANGE[1] to leave an
+# empty band above the data where event-marker labels are drawn (so they sit
+# clear of the curves). _Y_TICK_MAX caps the labelled Y ticks at 1.0 so that
+# headroom reads as blank margin, not as "probability > 1".
+_Y_RANGE = (0.0, 1.1)
+_Y_TICK_MAX = 1.0
 _CHANCE_LEVEL = 0.5
 _REFRESH_HZ = 30
 # Empty space to the right of x = 0 so the latest sample isn't pressed
@@ -48,10 +54,11 @@ _REFRESH_HZ = 30
 # with the vertical NOW line.
 _NOW_GAP_SECONDS = 0.5
 
-# All event markers share one neutral colour — the line distinguishes
-# itself by position + label (the configured event name), not by hue.
-# Colour is deliberately decoupled from the event name.
-_MARKER_COLOR = TEXT_MUTED
+# All event markers share one colour — the line distinguishes itself by
+# position + label (the configured event name), not by hue. Black for a
+# strong, neutral contrast against the curves; deliberately decoupled
+# from the event name.
+_MARKER_COLOR = "#000000"
 # Hard cap on retained marker records so a stalled stream (latest_ts not
 # advancing) or a flood of unmapped codes can't grow the scene unbounded.
 # Pruning by window in ``_refresh`` is the normal path; this is a backstop.
@@ -304,21 +311,32 @@ class LiveProbabilityChart(pg.PlotWidget):
         self._markers = kept
 
     def _make_marker_line(self, code: int) -> pg.InfiniteLine:
-        """Build a neutral vertical line labelled with the configured
-        event name for ``code`` (guaranteed present — unmapped codes are
-        filtered out in :meth:`append_markers`)."""
-        return pg.InfiniteLine(
+        """Build a black vertical line labelled with the configured event
+        name for ``code`` (guaranteed present — unmapped codes are filtered
+        out in :meth:`append_markers`). The label is bold black text in a
+        solid white, black-bordered box for contrast against the curves."""
+        line = pg.InfiniteLine(
             angle=90,
             movable=False,
-            pen=self._pen(_MARKER_COLOR, dashed=False, width=1.2),
+            pen=self._pen(_MARKER_COLOR, dashed=False, width=2.0),
             label=self._event_names.get(code, str(code)),
             labelOpts={
-                "position": 0.92,
+                "position": 0.95,
                 "color": _MARKER_COLOR,
                 "movable": False,
-                "fill": (255, 255, 255, 200),
+                # Solid white box with a black border — a crisp container
+                # so the label stays legible over any curve behind it.
+                "fill": (255, 255, 255, 235),
+                "border": pg.mkPen(_MARKER_COLOR, width=1.0),
             },
         )
+        # Bold the label. InfLineLabel is a TextItem whose underlying
+        # QGraphicsTextItem is ``.textItem``; the InfiniteLine reuses one
+        # label, so styling it once here sticks for the marker's lifetime.
+        font = line.label.textItem.font()
+        font.setBold(True)
+        line.label.textItem.setFont(font)
+        return line
 
     def _configure_axes(self) -> None:
         """Lock both axes to the analyst-facing units and hide chart-junk."""
@@ -337,6 +355,13 @@ class LiveProbabilityChart(pg.PlotWidget):
             ax = plot_item.getAxis(ax_name)
             ax.setPen(QPen(QColor(BORDER_GRAY)))
             ax.setTextPen(QPen(QColor(TEXT_MUTED)))
+
+        # Pin labelled Y ticks to [0, 1.0] so the headroom above 1.0 (where
+        # marker labels live) reads as blank margin, not a probability > 1.
+        y_ticks = [
+            (round(v, 1), f"{v:.1f}") for v in np.arange(0.0, _Y_TICK_MAX + 1e-9, 0.2)
+        ]
+        plot_item.getAxis("left").setTicks([y_ticks, []])
 
         # Subtle horizontal grid lines at major Y positions — same trick
         # AUCChart uses to avoid pyqtgraph's heavy default grid.
