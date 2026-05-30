@@ -4,7 +4,9 @@
 # Debug-mode snapshots (joblib dumps from scripts/demo_seed_debug_snapshots).
 # Each developer regenerates their own; never commit. See
 # src/frontend/debug/README.md.
-debug_snapshots/
+debug_snapshots*/
+
+bash.exe.stackdump
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
