@@ -7,3 +7,5 @@ pybv>=0.7
 # Replay/integration tooling used by scripts/replay_xdf_to_lsl.py and gated LSL tests
 pyxdf>=1.17
 mne-lsl>=1.13
+# Kernel for the manual validation notebooks under tests/notebooks/
+ipykernel>=6.29
