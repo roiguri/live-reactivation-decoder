@@ -1,3 +1,7 @@
+# Minimal 2-decoder demo. For the full FL config that trained the merged
+# artifact in debug_snapshots/models/decoder_pipeline.joblib, see
+# experiment_config.full.yaml.
+
 experiment_info:
   name: Reactivation_Study_V1
 

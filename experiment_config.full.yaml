@@ -1,0 +1,142 @@
+# 6-decoder cross-modality config used to train the merged artifact in
+# debug_snapshots/models/decoder_pipeline.joblib. Pass
+# --config experiment_config.full.yaml to scripts/demo_seed_debug_snapshots.py
+# to retrain. The minimal 2-decoder demo lives at experiment_config.yaml.
+#
+# Mirrors experiment_config.yaml at the repo root with two extensions for
+# development against the per-phase split data:
+
+experiment_info:
+  name: Reactivation_Study_V1_Debug
+
+random_state: 42
+
+preprocessing:
+  resample_filter_stage: early
+
+  channel_hygiene:
+    drop_emg: true
+    rename_hegoc_to_heog: true
+    montage_name: easycap-M1
+    afz_case_fix: true
+
+  highpass:
+    l_freq: 0.1
+    method: iir
+
+  notch:
+    freq: 50.0
+
+  ica:
+    method: infomax
+    extended: true
+    n_components: null
+    fit_l_freq: 1.0
+    iclabel:
+      enabled: true
+      drop_labels:
+        [
+          "muscle artifact",
+          "eye blink",
+          "heart beat",
+          "line noise",
+          "channel noise",
+        ]
+
+  epochs:
+    tmin: -0.2
+    tmax: 1.0
+    baseline: null
+
+  lowpass:
+    h_freq: 40.0
+    method: iir
+
+  final_resample:
+    target_rate: 100
+
+decoders:
+  model: Logistic
+  params:
+    solver: liblinear
+    class_weight: balanced
+    C: 1.0
+    penalty: l2
+    max_iter: 1000
+  scale_method: standard
+  cv:
+    k: 5
+  tasks:
+    # Cross-modality training: each decoder is now trained against ALL other
+    # FL stimuli (other colors AND scenes), not just within-modality. Yields
+    # 70 pos vs 350 neg trials per decoder
+    - name: red decoder
+      pos_labels: [red]
+      neg_labels: [green, yellow, living_room, bathroom, kitchen]
+    - name: green decoder
+      pos_labels: [green]
+      neg_labels: [red, yellow, living_room, bathroom, kitchen]
+    - name: yellow decoder
+      pos_labels: [yellow]
+      neg_labels: [red, green, living_room, bathroom, kitchen]
+    - name: living_room decoder
+      pos_labels: [living_room]
+      neg_labels: [red, green, yellow, bathroom, kitchen]
+    - name: bathroom decoder
+      pos_labels: [bathroom]
+      neg_labels: [red, green, yellow, living_room, kitchen]
+    - name: kitchen decoder
+      pos_labels: [kitchen]
+      neg_labels: [red, green, yellow, living_room, bathroom]
+
+markers_mapping:
+  events:
+    # Functional localizer — color stimuli (decoder labels)
+    - id: 11
+      name: red
+    - id: 12
+      name: green
+    - id: 13
+      name: yellow
+    # Functional localizer — scene stimuli (decoder labels)
+    - id: 16
+      name: living_room
+    - id: 17
+      name: bathroom
+    - id: 18
+      name: kitchen
+    # Attention probe (paired with every FL stimulus trial)
+    - id: 31
+      name: attention_question
+    - id: 32
+      name: answer_attention_question
+    # Binding learning phase (task split only)
+    - id: 41
+      name: binding_trial
+    - id: 43
+      name: difficulty_question
+    - id: 44
+      name: answer_difficulty_question
+    # Test trial — object + retrieval window (task split only)
+    - id: 51
+      name: object_test
+    - id: 53
+      name: start_retrieval_window
+    - id: 54
+      name: answer_retrieval_window
+    - id: 55
+      name: retrieval_question
+    - id: 56
+      name: answer_retrieval_question
+    # Test trial — color/scene forced-choice (task split only)
+    - id: 61
+      name: color_options
+    - id: 62
+      name: answer_color_question
+    - id: 66
+      name: scene_options
+    - id: 67
+      name: answer_scene_question
+    # Partial retrieval (task split only)
+    - id: 71
+      name: partial_probe
