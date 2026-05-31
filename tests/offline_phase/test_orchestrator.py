@@ -54,6 +54,27 @@ def _attach_preprocessor_stub(
     return stub
 
 
+def _attach_eval_results_stub(
+    orchestrator: OfflineOrchestrator,
+    epochs: mne.BaseEpochs,
+    task_names: list[str],
+) -> dict[str, Any]:
+    """Inject a minimal ``_eval_results`` so ``run_training`` can derive
+    per-task timepoints. Required since Step C — orchestrator pulls each task's
+    CV-peak time from ``_eval_results['tasks'][name]['diagonal_auc']``.
+    """
+    times = np.asarray(epochs.times, dtype=float)
+    eval_results = {
+        "times": times,
+        "tasks": {
+            name: {"diagonal_auc": np.linspace(0.5, 0.9, times.size)}
+            for name in task_names
+        },
+    }
+    orchestrator._eval_results = eval_results
+    return eval_results
+
+
 # ── TestSetFilePath ───────────────────────────────────────────────────────────
 
 
@@ -278,6 +299,9 @@ class TestRunTraining:
         orc = _make_orchestrator(tmp_path, sm)
         _attach_preprocessor_stub(orc)
         orc._epochs = synthetic_epochs
+        _attach_eval_results_stub(
+            orc, synthetic_epochs, [t["name"] for t in evaluator_settings["tasks"]]
+        )
 
         timepoint = float(synthetic_epochs.times[10])
         result = orc.run_training(timepoint)
@@ -294,6 +318,8 @@ class TestRunTraining:
         orc = _make_orchestrator(tmp_path, sm)
         _attach_preprocessor_stub(orc)
         orc._epochs = synthetic_epochs
+        task_names = [t["name"] for t in evaluator_settings["tasks"]]
+        _attach_eval_results_stub(orc, synthetic_epochs, task_names)
 
         timepoint = float(synthetic_epochs.times[10])
         orc.run_training(timepoint)
@@ -306,6 +332,10 @@ class TestRunTraining:
         assert "bad_indices" in spec.online_state
         assert "ch_names" not in spec.online_state
         assert spec.metadata.decoding_timepoint == timepoint
+        # Step C: per-task timepoints derived from _eval_results.
+        assert set(spec.metadata.decoding_timepoints.keys()) == set(task_names)
+        for name in task_names:
+            assert isinstance(spec.metadata.decoding_timepoints[name], float)
 
         ui = orc._ui_state
         assert ui is not None
@@ -320,6 +350,9 @@ class TestRunTraining:
         orc = _make_orchestrator(tmp_path, sm)
         _attach_preprocessor_stub(orc)
         orc._epochs = synthetic_epochs
+        _attach_eval_results_stub(
+            orc, synthetic_epochs, [t["name"] for t in evaluator_settings["tasks"]]
+        )
 
         timepoint = float(synthetic_epochs.times[10])
         result = orc.run_training(timepoint)
@@ -345,6 +378,9 @@ class TestGetLiveArtifactSpec:
         orc = _make_orchestrator(tmp_path, sm)
         _attach_preprocessor_stub(orc)
         orc._epochs = synthetic_epochs
+        _attach_eval_results_stub(
+            orc, synthetic_epochs, [t["name"] for t in evaluator_settings["tasks"]]
+        )
 
         timepoint = float(synthetic_epochs.times[10])
         orc.run_training(timepoint)

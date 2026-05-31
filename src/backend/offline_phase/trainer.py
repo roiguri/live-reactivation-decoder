@@ -26,12 +26,14 @@ class ModelTrainer:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def run_training(self, timepoint: float) -> dict[str, Any]:
+    def run_training(self, timepoints: float | dict[str, float]) -> dict[str, Any]:
         """
-        Train one classifier per task at the given timepoint.
+        Train one classifier per task, each at its own timepoint.
 
         Args:
-            timepoint: Time in seconds to extract features from (e.g. 0.350).
+            timepoints: Either a single float (same timepoint for every task,
+                legacy / shared-timepoint training) or a dict mapping task name
+                to per-decoder timepoint (Step C: per-decoder peak training).
 
         Returns:
             {
@@ -41,8 +43,9 @@ class ModelTrainer:
             }
 
         Raises:
-            ValueError: If settings contain no tasks, or if any task's labels
-                        are missing from the epochs or resolve to a single class.
+            ValueError: If settings contain no tasks, if any task's labels are
+                        missing from the epochs or resolve to a single class,
+                        or if a per-task timepoint dict is missing a task name.
         """
         tasks = self.settings["tasks"]
         if not tasks:
@@ -53,8 +56,16 @@ class ModelTrainer:
 
         for task_cfg in tasks:
             name = task_cfg["name"]
-            logger.info("Training task: %s", name)
-            X_t, y = self._extract_features(task_cfg, timepoint)
+            if isinstance(timepoints, dict):
+                if name not in timepoints:
+                    raise ValueError(
+                        f"Per-task timepoint dict missing entry for task '{name}'."
+                    )
+                task_timepoint = float(timepoints[name])
+            else:
+                task_timepoint = float(timepoints)
+            logger.info("Training task: %s at t=%.3fs", name, task_timepoint)
+            X_t, y = self._extract_features(task_cfg, task_timepoint)
             model = self._train_classifier(X_t, y)
             models[name] = model
             spatial_patterns[name] = self._calculate_spatial_patterns(X_t, model)
