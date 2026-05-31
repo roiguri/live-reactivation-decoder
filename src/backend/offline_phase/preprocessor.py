@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 import mne
 import numpy as np
+from scipy.signal import firwin, lfilter
 
 logger = logging.getLogger(__name__)
 
@@ -238,9 +239,10 @@ class OfflinePreprocessor:
 
     def _highpass(self) -> None:
         hp = self.settings["highpass"]
+        # causal: parity with streaming OnlinePreprocessor (scipy.signal.sosfilt).
         self.raw.filter(
             l_freq=hp["l_freq"], h_freq=None, method=hp.get("method", "iir"),
-            verbose=False,
+            phase="forward", verbose=False,
         )
 
     def _notch(self) -> None:
@@ -250,15 +252,86 @@ class OfflinePreprocessor:
 
     def _lowpass(self, inst) -> None:
         lp = self.settings["lowpass"]
+        # causal: parity with streaming OnlinePreprocessor (scipy.signal.sosfilt).
         inst.filter(
             l_freq=None, h_freq=lp["h_freq"], method=lp.get("method", "iir"),
-            verbose=False,
+            phase="forward", verbose=False,
         )
 
     def _resample(self, inst) -> None:
-        target = self.settings["final_resample"]["target_rate"]
-        if inst.info["sfreq"] > target:
-            inst.resample(target, verbose=False)
+        """Causal anti-alias FIR + integer decimation, mirroring online ``_decimate``.
+
+        MNE's built-in ``inst.resample()`` uses a zero-phase polyphase resampler;
+        the streaming OnlinePreprocessor cannot. Using the same causal FIR
+        recipe here keeps training and inference features aligned.
+        """
+        target = float(self.settings["final_resample"]["target_rate"])
+        current = float(inst.info["sfreq"])
+        if current <= target:
+            return
+        if int(current) % int(target) != 0:
+            raise RuntimeError(
+                f"causal decimate requires an integer ratio; got "
+                f"{current} / {target}"
+            )
+
+        decimation = int(current) // int(target)
+        cutoff_hz = 0.9 * target / 2.0
+        n_taps = 10 * decimation + 1
+        anti_alias = firwin(n_taps, cutoff_hz, fs=current)
+
+        # Process channel-by-channel for Raw — bulk lfilter() on a multi-hour
+        # buffer briefly holds three full-size float64 copies (~5 GB on the FL
+        # recording), which OOMs commodity dev boxes. Per-channel keeps the
+        # peak at input + output + one channel's filtered buffer.
+        data = inst.get_data()
+        if data.ndim == 2:
+            n_ch, n_samples = data.shape
+            n_out = len(range(0, n_samples, decimation))
+            decimated = np.empty((n_ch, n_out), dtype=data.dtype)
+            for channel_index in range(n_ch):
+                filtered_channel = lfilter(anti_alias, 1.0, data[channel_index])
+                decimated[channel_index] = filtered_channel[::decimation]
+        else:
+            filtered = lfilter(anti_alias, 1.0, data, axis=-1)
+            decimated = filtered[..., ::decimation]
+
+        new_info = mne.create_info(
+            ch_names=inst.ch_names,
+            sfreq=target,
+            ch_types=inst.get_channel_types(),
+            verbose=False,
+        )
+        new_info["bads"] = list(inst.info["bads"])
+        try:
+            new_info.set_montage(inst.get_montage(), match_case=False, verbose=False)
+        except Exception:
+            pass
+
+        if isinstance(inst, mne.io.BaseRaw):
+            new_raw = mne.io.RawArray(decimated, new_info, verbose=False)
+            new_raw.set_annotations(inst.annotations.copy())
+            inst._data = new_raw._data
+            inst.info = new_raw.info
+            inst._first_samps = new_raw._first_samps
+            inst._last_samps = new_raw._last_samps
+            inst.set_annotations(new_raw.annotations)
+        elif isinstance(inst, mne.BaseEpochs):
+            new_epochs = mne.EpochsArray(
+                decimated,
+                new_info,
+                events=inst.events,
+                tmin=inst.tmin,
+                event_id=inst.event_id,
+                baseline=None,
+                verbose=False,
+            )
+            inst._data = new_epochs._data
+            inst.info = new_epochs.info
+        else:
+            raise TypeError(
+                f"_resample expects Raw or Epochs; got {type(inst).__name__}"
+            )
 
     # ── Private: bad channels ─────────────────────────────────────────────────
 

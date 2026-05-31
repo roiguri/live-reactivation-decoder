@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 import joblib
 import mne
+import numpy as np
 
 from backend.core.artifact_models import (
     DecoderPipelineArtifactSpec,
@@ -221,11 +222,16 @@ class OfflineOrchestrator:
 
     def run_training(self, timepoint: float) -> dict[str, Any]:
         """
-        Train one classifier per task at the given timepoint, bundle the online state,
-        and save decoder_pipeline.joblib to disk.
+        Train one classifier per task, each at ITS OWN cross-validated peak
+        timepoint (Step C). The ``timepoint`` arg is kept as the representative
+        / shared-suggestion value and stored in metadata for backward
+        compatibility; the per-task peaks come from
+        ``self._eval_results['tasks'][name]['diagonal_auc']``.
 
         Args:
-            timepoint: Time in seconds selected by the researcher (e.g. 0.350).
+            timepoint: Representative time in seconds (e.g. the cross-decoder
+                CV-average peak). Used as the metadata's ``decoding_timepoint``
+                and as a fallback if a task has no diagonal_auc entry.
 
         Returns:
             {
@@ -239,9 +245,17 @@ class OfflineOrchestrator:
         """
         if self._epochs is None:
             raise RuntimeError("Call run_evaluation() before run_training().")
+        if self._eval_results is None:
+            raise RuntimeError("Call run_evaluation() before run_training().")
+
+        per_task_timepoints = self._derive_per_task_timepoints(
+            eval_results=self._eval_results,
+            fallback_timepoint=timepoint,
+            task_configs=self._settings.get_decoder_settings()["tasks"],
+        )
 
         trainer = ModelTrainer(self._epochs, self._settings.get_decoder_settings())
-        training_results = trainer.run_training(timepoint)
+        training_results = trainer.run_training(per_task_timepoints)
         preprocessor_state = self._preprocessor.export_online_state()
 
         self._live_artifact_spec = DecoderPipelineArtifactSpec(
@@ -250,6 +264,7 @@ class OfflineOrchestrator:
             metadata=DecoderPipelineMetadata(
                 feature_width=len(preprocessor_state["eeg_chunk_indices"]),
                 decoding_timepoint=timepoint,
+                decoding_timepoints=per_task_timepoints,
             ),
         )
         self._ui_state = {
@@ -264,6 +279,33 @@ class OfflineOrchestrator:
             "spatial_patterns": training_results["spatial_patterns"],
             "mne_info": training_results["mne_info"],
         }
+
+    @staticmethod
+    def _derive_per_task_timepoints(
+        eval_results: dict[str, Any],
+        fallback_timepoint: float,
+        task_configs: list[dict[str, Any]],
+    ) -> dict[str, float]:
+        """Pick each decoder's own cross-validated peak timepoint.
+
+        For each configured task, look up its ``diagonal_auc`` curve from the
+        evaluator output and return the time corresponding to ``argmax``. Tasks
+        that lack a diagonal_auc fall back to ``fallback_timepoint`` (the
+        shared cross-decoder average).
+        """
+        times = np.asarray(eval_results["times"], dtype=float)
+        per_task_results = eval_results.get("tasks", {})
+        per_task_timepoints: dict[str, float] = {}
+        for task_cfg in task_configs:
+            name = task_cfg["name"]
+            task_result = per_task_results.get(name)
+            if task_result is None or "diagonal_auc" not in task_result:
+                per_task_timepoints[name] = float(fallback_timepoint)
+                continue
+            diagonal_auc = np.asarray(task_result["diagonal_auc"], dtype=float)
+            peak_index = int(np.argmax(diagonal_auc))
+            per_task_timepoints[name] = float(times[peak_index])
+        return per_task_timepoints
 
     # ── Phase 2 handoff ───────────────────────────────────────────────────────
 
