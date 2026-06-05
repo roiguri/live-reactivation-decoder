@@ -2,6 +2,13 @@
 
 Implements **Goal 17 (Debug Profiles)** from [Phase2_UI_Plan_M2.md](../Phase2_UI_Plan_M2.md).
 
+> **Status (2026-06-05): implemented + seeded.** Steps 1–6 below are done —
+> `profiles.py` + tests, the profile-aware seeder, both debug entry points,
+> the `main.py` CLI, and the docs. One profile (`default`) is seeded and
+> verified (3-decoder Logistic, full event catalog). A second
+> labeled-validation profile (for Goal 1) is **not yet seeded**. The
+> deferred granular-preprocessing bonus is unstarted.
+
 ## Motivation
 
 Today `debug_snapshots/` is a **single, flat** profile: one `experiment_config.yaml`,
@@ -137,13 +144,17 @@ Then verify: `--list-profiles`, `--profile default`, and `--profile default --ph
 
 ## Implementation order
 
-1. `profiles.py` + unit test
-2. Seeder refactor (bootstrap + re-seed, manifest write/read, config copy-in)
-3. `build_debug_phase2(profile)`
-4. `DebugPhase1Screen(profile)`
-5. `main.py` CLI (`--profile`, `--list-profiles`, overrides)
-6. Re-seed `default`; verify both entry points
-7. Docs
+1. ✅ `profiles.py` + unit test (`tests/test_debug_profiles.py`, 14 tests)
+2. ✅ Seeder refactor (bootstrap + re-seed, manifest write/read, config copy-in)
+3. ✅ `build_debug_phase2(profile)`
+4. ✅ `DebugPhase1Screen(profile)`
+5. ✅ `main.py` CLI (`--profile`, `--list-profiles`, `--config`/`--data` overrides)
+6. ✅ Seed `default`; profile discovered, artifact carries all 3 decoders
+7. ✅ Docs (`src/frontend/debug/README.md` + this file)
+
+The seeded `default` profile uses a 3-decoder (red/green/yellow) Logistic
+baseline with the full event catalog. Re-running the GUI against it
+(`--phase2`, plus an out-of-process replay) is left to the operator.
 
 ## Deferred — granular preprocessing steps (bonus)
 

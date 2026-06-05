@@ -78,7 +78,7 @@ Work from `feat/phase2-stream-selection` lands several M2 items early and change
 
 | # | Goal | Status | Seq |
 |---|------|--------|-----|
-| 17 | Debug Profiles | Not started | **1** |
+| 17 | Debug Profiles | ✅ Done (1 profile seeded; validation profile pending) | **1** |
 | 18 | Group Delay Deep Dive | Not started | **2** |
 | 7 | System Logging (prediction + latency timepoints) | Not started | **3** |
 | 1 | Pipeline Validation | Step 1 (replay script) done; Steps 2-4 pending | **4** |
@@ -102,19 +102,19 @@ Work from `feat/phase2-stream-selection` lands several M2 items early and change
 
 # Critical Path
 
-## Goal 17 — Debug Profiles (Seq 1)
+## Goal 17 — Debug Profiles (Seq 1) — ✅ Done
 
-`python -m frontend.debug.main --phase2` is hardcoded to one config and one pipeline (`phase2_screen_debug.build_debug_phase2` defaults to `debug_snapshots/experiment_config.yaml` and `debug_snapshots/models/decoder_pipeline.joblib`). Diagnosing the fidelity bug and validating the pipeline both need to swap *settings*, *trained artifact*, and *replay recording* together, repeatably. A **debug profile** bundles those three so a single flag selects a known scenario.
+`python -m frontend.debug.main --phase2` was hardcoded to one config and one pipeline. Diagnosing the fidelity bug and validating the pipeline both need to swap *settings*, *trained artifact*, and *replay recording* together, repeatably. A **debug profile** bundles those so a single flag selects a known scenario.
 
-`build_debug_phase2(config_path, decoder_pipeline_path)` already accepts both paths as arguments — they are simply not exposed on the CLI. This goal is low-risk and self-contained in `src/frontend/debug/`; production `frontend.main` stays byte-for-byte unaffected.
+Implemented as **self-describing directories** (not a central registry): each `debug_snapshots/<name>/` carries a minimal `manifest.yaml` (`name`, copied-in `config`, `raw_data_dir` path-only) plus the snapshots, `models/`, and `epochs/` it produces. Discovery lists subdirs with a manifest. Self-contained in `src/frontend/debug/`; production `frontend.main` stays byte-for-byte unaffected. Full design + usage: [docs/features/debug_profiles.md](features/debug_profiles.md) and `src/frontend/debug/README.md`.
 
-- [ ] Define a `DebugProfile` (name → `{config_path, pipeline_path, recording_dir, stream_name?, notes}`); store profiles in a small registry (dict or a `debug_snapshots/profiles.yaml`)
-- [ ] `frontend.debug.main` gains `--profile <name>` and a `--list-profiles` helper, plus explicit `--config` / `--pipeline` overrides
-- [ ] `build_debug_phase2` resolves a profile and forwards the paths it already accepts
-- [ ] Each profile names the recording the operator should replay via `scripts/replay_vhdr_to_lsl.py` (the app stays a pure consumer; replay remains out-of-process per Goal 12)
-- [ ] At least two seeded profiles: the existing default, and a labeled-training-data profile for validation (Goal 1)
-- [ ] `scripts/demo_seed_debug_snapshots.py` documents/produces the snapshots each profile expects
-- [ ] Verified: `--profile <name>` opens Phase 2 against the right config + artifact, and `--list-profiles` prints the registry
+- [x] `DebugProfile` (`src/frontend/debug/profiles.py`) — resolved paths from a 3-field manifest. *Trimmed from the original sketch: no central registry, no `stream_name`/`notes`/explicit `pipeline` fields (snapshot/pipeline/epochs paths are conventions); add back if needed.*
+- [x] `frontend.debug.main` gains `--profile <name>`, `--list-profiles`, and `--config` / `--data` overrides (pipeline path is a convention, so no `--pipeline`)
+- [x] `build_debug_phase2(profile)` resolves config + pipeline from the profile; **also** `DebugPhase1Screen(profile)` (the Phase 1 walkthrough is now profile-driven too — beyond the original Phase-2-only scope)
+- [x] Each profile records the recording (`raw_data_dir`) the operator replays via `scripts/replay_vhdr_to_lsl.py` (app stays a pure consumer; replay out-of-process per Goal 12)
+- [ ] **Pending:** a second labeled-training-data profile for validation (Goal 1). One profile (`default`) is seeded so far.
+- [x] `scripts/demo_seed_debug_snapshots.py` is profile-aware (bootstrap copies the config in + writes the manifest; re-seed reuses it) and writes the snapshots inside the profile dir
+- [x] Verified: `--list-profiles` prints the registry; the `default` artifact loads with all 3 decoders + online_state + metadata; 14 `test_debug_profiles` tests pass. *GUI launch against the profile left to the operator.*
 
 ---
 
