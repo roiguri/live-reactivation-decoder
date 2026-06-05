@@ -1,22 +1,33 @@
-"""Seed the debug-mode snapshots by running the offline pipeline once.
+"""Seed a debug *profile*'s snapshots by running the offline pipeline once.
 
-Dev-only. Run after pipeline/schema changes (or whenever the test-set
-recording changes) to refresh the snapshots that
-``frontend.debug.main`` loads.
+Dev-only. Run after pipeline/schema changes (or whenever the recording
+changes) to refresh the snapshots that ``frontend.debug`` loads.
 
-Usage::
+A **profile** is a self-contained directory ``debug_snapshots/<name>/``
+(see ``src/frontend/debug/profiles.py``). This script either *bootstraps*
+a new profile or *re-seeds* an existing one:
+
+Bootstrap (first time) — copies the config in and records the raw-data path::
 
     cd online_decoder
     python -m scripts.demo_seed_debug_snapshots \\
+        --profile default \\
         --config experiment_config.yaml \\
-        --data   ../data/new_experiment/test_set/subject_102_quarter \\
-        --output debug_snapshots
+        --data   data/subject_101/split/functional_localizer
 
-Writes three joblib files in ``--output``::
+Re-seed (after a schema/pipeline change) — reuses the recorded config + data::
 
+    python -m scripts.demo_seed_debug_snapshots --profile default
+
+Writes, inside ``debug_snapshots/<name>/``::
+
+    manifest.yaml        name + config (copied in) + raw_data_dir
+    experiment_config.yaml
     preproc_done.joblib  state right after orchestrator.run_step2_apply_and_save()
     eval_done.joblib     state right after orchestrator.run_evaluation()
     train_done.joblib    state right after orchestrator.run_training()
+    models/decoder_pipeline.joblib
+    epochs/
 
 The pipeline runs non-interactively: ``set_bad_channels([])`` (no
 operator-marked bads) and ``run_step2_apply_and_save(suggested)``
@@ -37,6 +48,7 @@ if SRC.is_dir() and str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from backend.session import AppSession  # noqa: E402
+from frontend.debug.profiles import DEFAULT_ROOT, prepare_profile  # noqa: E402
 from frontend.debug.snapshots import save_snapshot  # noqa: E402
 
 logger = logging.getLogger("seed_debug_snapshots")
@@ -45,17 +57,22 @@ logger = logging.getLogger("seed_debug_snapshots")
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--config", type=Path, default=Path("debug_snapshots/experiment_config.yaml"),
-        help="Path to the experiment YAML (default: debug_snapshots/experiment_config.yaml — "
-             "the 6-decoder debug config; see src/frontend/debug/README.md).",
+        "--profile", required=True,
+        help="Profile name; its directory is <root>/<profile>/.",
     )
     parser.add_argument(
-        "--data", type=Path, required=True,
-        help="Directory containing the subject's .vhdr file.",
+        "--root", type=Path, default=DEFAULT_ROOT,
+        help="Profiles root directory (default: debug_snapshots/).",
     )
     parser.add_argument(
-        "--output", type=Path, default=Path("debug_snapshots"),
-        help="Where to write the snapshot files (default: debug_snapshots/).",
+        "--config", type=Path, default=None,
+        help="Experiment YAML to copy into the profile (required when "
+             "bootstrapping; reuses the manifest's config when re-seeding).",
+    )
+    parser.add_argument(
+        "--data", type=Path, default=None,
+        help="Directory containing the subject's .vhdr file (required when "
+             "bootstrapping; reuses the manifest's raw_data_dir when re-seeding).",
     )
     args = parser.parse_args()
 
@@ -65,20 +82,25 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    if not args.config.exists():
-        parser.error(f"--config not found: {args.config}")
-    if not args.data.exists():
-        parser.error(f"--data not found: {args.data}")
+    try:
+        profile = prepare_profile(
+            args.profile, root=args.root, config=args.config, data=args.data
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        parser.error(str(exc))
 
-    args.output.mkdir(parents=True, exist_ok=True)
+    if not profile.raw_data_dir.exists():
+        parser.error(f"raw_data_dir not found: {profile.raw_data_dir}")
 
-    session = AppSession(args.config)
-    session.configure_output(args.output)
+    logger.info("Profile '%s' -> %s", profile.name, profile.root_dir)
+
+    session = AppSession(profile.config_path)
+    session.configure_output(profile.root_dir)
     orch = session.offline
     assert orch is not None, "AppSession.configure_output should build session.offline"
 
-    logger.info("Loading raw from %s", args.data)
-    orch.set_file_path(args.data)
+    logger.info("Loading raw from %s", profile.raw_data_dir)
+    orch.set_file_path(profile.raw_data_dir)
     orch.load_raw_data()
 
     logger.info("Step 1A — channel hygiene + HP/notch + (if early) LP+resample")
@@ -95,21 +117,21 @@ def main() -> None:
     logger.info("Step 2 — apply ICA + save epochs")
     step2_result = orch.run_step2_apply_and_save(suggested)
     logger.info("Epochs retained: %d", step2_result.get("n_epochs", -1))
-    preproc_path = save_snapshot(orch, args.output / "preproc_done.joblib")
-    logger.info("Wrote preproc snapshot → %s", preproc_path)
+    preproc_path = save_snapshot(orch, profile.snapshot_paths["preproc"])
+    logger.info("Wrote preproc snapshot -> %s", preproc_path)
 
     logger.info("Evaluation — temporal generalization CV")
     eval_result = orch.run_evaluation()
-    eval_path = save_snapshot(orch, args.output / "eval_done.joblib")
-    logger.info("Wrote eval snapshot → %s", eval_path)
+    eval_path = save_snapshot(orch, profile.snapshot_paths["eval"])
+    logger.info("Wrote eval snapshot -> %s", eval_path)
 
     suggested_t = float(eval_result["suggested_timepoint"])
     logger.info("Training — at suggested timepoint = %.3f s", suggested_t)
     orch.run_training(suggested_t)
-    train_path = save_snapshot(orch, args.output / "train_done.joblib")
-    logger.info("Wrote train snapshot → %s", train_path)
+    train_path = save_snapshot(orch, profile.snapshot_paths["train"])
+    logger.info("Wrote train snapshot -> %s", train_path)
 
-    print(f"Saved 3 snapshots → {args.output}/")
+    print(f"Saved 3 snapshots -> {profile.root_dir}/")
 
 
 if __name__ == "__main__":
