@@ -61,7 +61,7 @@ decoders:
     solver: liblinear
     class_weight: balanced
     C: 1.0
-    penalty: l2
+    l1_ratio: 0          # 0 == L2, 1 == L1 (sklearn 1.8+; penalty= deprecated)
     max_iter: 1000
   scale_method: standard
   cv:

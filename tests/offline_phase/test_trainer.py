@@ -6,6 +6,8 @@ where they are the simplest target; run_training() is used for integration-level
 checks that require the full pipeline.
 """
 
+import warnings
+
 import numpy as np
 import pytest
 import mne
@@ -103,6 +105,17 @@ class TestTrainClassifier:
         X_t, y = tr._extract_features(task, timepoint=0.0)
         model = tr._train_classifier(X_t, y)
         assert isinstance(model[-1], LogisticRegression)
+
+    def test_logistic_fit_emits_no_penalty_deprecation(
+        self, synthetic_epochs, logistic_evaluator_settings
+    ):
+        # sklearn 1.8 deprecated penalty=; fitting must not trip the FutureWarning.
+        tr = ModelTrainer(synthetic_epochs, logistic_evaluator_settings)
+        task = logistic_evaluator_settings["tasks"][0]
+        X_t, y = tr._extract_features(task, timepoint=0.0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", FutureWarning)
+            tr._train_classifier(X_t, y)
 
     def test_returns_fitted_pipeline_svm(self, synthetic_epochs, svm_evaluator_settings):
         tr = ModelTrainer(synthetic_epochs, svm_evaluator_settings)
