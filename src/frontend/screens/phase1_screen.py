@@ -29,9 +29,10 @@ class Phase1Screen(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.session = None
-        # Timepoint chosen by the operator on Node 4; Node 5's Training
-        # worker reads this when it fires. None until eval is confirmed.
-        self._selected_timepoint: float | None = None
+        # Per-decoder timepoints chosen by the operator on Node 4
+        # (``{task_name: seconds}``); Node 5's Training worker reads these
+        # when it fires. None until eval is confirmed.
+        self._selected_timepoints: dict[str, float] | None = None
         # Path to the decoder_pipeline.joblib emitted by Node 5; consumed
         # by the Go-Live handoff to Phase 2. None until training succeeds.
         self._decoder_pipeline_path: Path | None = None
@@ -219,12 +220,12 @@ class Phase1Screen(QWidget):
         self._journey_panel.set_node_action(3, self._evaluation_view.trigger_confirm)
         self._journey_panel.set_node_action_label(3, "Approve && Continue")
 
-    def _on_evaluation_confirmed(self, timepoint: float) -> None:
+    def _on_evaluation_confirmed(self, timepoints: dict) -> None:
         # Stash for Node 5's training worker, then advance the trail.
-        self._selected_timepoint = timepoint
-        self._train_view.set_timepoint(timepoint)
+        self._selected_timepoints = dict(timepoints)
+        self._train_view.set_timepoints(self._selected_timepoints)
         self._journey_panel.set_node_summary(
-            3, self._format_evaluation_summary(timepoint)
+            3, self._format_evaluation_summary(self._selected_timepoints)
         )
         self._journey_panel.advance(4)
 
@@ -321,46 +322,49 @@ class Phase1Screen(QWidget):
             f"ICs removed: {n_excluded}"
         )
 
-    def _format_evaluation_summary(self, timepoint: float) -> str:
+    def _format_evaluation_summary(self, timepoints: dict[str, float]) -> str:
         view = self._evaluation_view
         result = view._result or {}
         tasks = result.get("tasks", {}) or {}
-        suggested_ms = float(result.get("suggested_timepoint", timepoint)) * 1000.0
-        sel_ms = timepoint * 1000.0
-
         times = result.get("times")
-        avg_at_t: float | None = None
-        if times is not None and tasks:
-            import numpy as np
-            arr = np.asarray(times)
-            idx = int(np.argmin(np.abs(arr - timepoint)))
-            vals = []
-            for task in tasks.values():
-                diag = task.get("diagonal_auc")
-                if diag is not None and len(diag) > idx:
-                    vals.append(float(diag[idx]))
-            if vals:
-                avg_at_t = sum(vals) / len(vals)
 
-        avg_str = f"{avg_at_t:.2f}" if avg_at_t is not None else "—"
+        import numpy as np
+        arr = np.asarray(times) if times is not None else None
+
+        vals: list[float] = []
+        for name, task in tasks.items():
+            diag = task.get("diagonal_auc")
+            t = timepoints.get(name)
+            if diag is None or arr is None or t is None:
+                continue
+            idx = int(np.argmin(np.abs(arr - t)))
+            if len(diag) > idx:
+                vals.append(float(diag[idx]))
+        avg_str = f"{sum(vals) / len(vals):.2f}" if vals else "—"
+
+        # Per-decoder ms, compact (e.g. "red 220 · green 180").
+        tp_str = " · ".join(
+            f"{name} {t * 1000.0:.0f}" for name, t in timepoints.items()
+        )
         return (
-            f"Decoders: {len(tasks)}\n"
-            f"Selected: {sel_ms:.0f} ms (suggested {suggested_ms:.0f})\n"
+            f"Decoders: {len(timepoints)}\n"
+            f"Timepoints: {tp_str} ms\n"
             f"Avg AUC @t: {avg_str}"
         )
 
     def _format_training_summary(self, result: dict) -> str:
         patterns = result.get("spatial_patterns", {}) or {}
         n_models = len(patterns)
-        t_ms = (
-            self._selected_timepoint * 1000.0
-            if self._selected_timepoint is not None
-            else float("nan")
+        timepoints = self._selected_timepoints or {}
+        tp_str = (
+            " · ".join(f"{name} {t * 1000.0:.0f}" for name, t in timepoints.items())
+            if timepoints
+            else "—"
         )
         path = result.get("model_filepath")
         path_name = Path(path).name if path else "decoder_pipeline.joblib"
         return (
             f"Models trained: {n_models}\n"
-            f"Trained @ {t_ms:.0f} ms\n"
+            f"Trained @ {tp_str} ms\n"
             f"Saved: {path_name}"
         )
