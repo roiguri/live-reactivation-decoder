@@ -250,3 +250,19 @@ class TestCrossModelValidation:
         minimal_valid_data["decoders"]["tasks"] = []
         sm = SettingsManager(tmp_config_file(minimal_valid_data))
         assert sm.get_decoder_settings()["tasks"] == []
+
+
+class TestLogisticPenaltyMigration:
+    """sklearn 1.8 deprecated LogisticRegression(penalty=); we use l1_ratio."""
+
+    def test_default_uses_l1_ratio_not_penalty(self):
+        from backend.core.config_models import DecoderSettings
+        params = DecoderSettings(model="Logistic").params
+        assert params["l1_ratio"] == 1      # == old penalty="l1"
+        assert params["solver"] == "liblinear"  # required for l1_ratio=1
+        assert "penalty" not in params
+
+    def test_penalty_param_is_now_rejected(self):
+        from backend.core.config_models import DecoderSettings
+        with pytest.raises(ValueError, match="penalty"):
+            DecoderSettings(model="Logistic", params={"penalty": "l1"})

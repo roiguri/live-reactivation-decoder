@@ -199,14 +199,14 @@ class DecoderTask(BaseModel):
 
 _VALID_PARAMS_BY_MODEL: dict[str, set[str]] = {
     "LDA":      {"solver", "shrinkage", "n_components", "priors"},
-    "Logistic": {"C", "penalty", "solver", "class_weight", "max_iter"},
+    "Logistic": {"C", "l1_ratio", "solver", "class_weight", "max_iter"},
     "SVM":      {"C", "kernel", "gamma", "class_weight", "max_iter"},
 }
 
 _CLASSIFIER_DEFAULTS: dict[str, dict] = {
     "LDA":      {},
     "Logistic": {"solver": "liblinear", "class_weight": "balanced",
-                 "C": 1000, "penalty": "l1", "max_iter": 1000},
+                 "C": 1000, "l1_ratio": 1, "max_iter": 1000},
     "SVM":      {"kernel": "linear", "class_weight": "balanced", "C": 1.0, "max_iter": 1000},
 }
 
