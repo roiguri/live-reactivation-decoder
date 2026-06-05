@@ -125,9 +125,17 @@ def main() -> None:
     eval_path = save_snapshot(orch, profile.snapshot_paths["eval"])
     logger.info("Wrote eval snapshot -> %s", eval_path)
 
-    suggested_t = float(eval_result["suggested_timepoint"])
-    logger.info("Training — at suggested timepoint = %.3f s", suggested_t)
-    orch.run_training(suggested_t)
+    # Per-decoder suggested peaks (the same dict the Evaluation UI now
+    # passes), so the seeded artifact carries genuinely distinct per-decoder
+    # decoding_timepoints rather than one shared value.
+    per_decoder_timepoints = {
+        name: float(task["peak_timepoint"])
+        for name, task in eval_result["tasks"].items()
+    }
+    logger.info("Training — per-decoder timepoints (s) = %s", {
+        k: round(v, 3) for k, v in per_decoder_timepoints.items()
+    })
+    orch.run_training(per_decoder_timepoints)
     train_path = save_snapshot(orch, profile.snapshot_paths["train"])
     logger.info("Wrote train snapshot -> %s", train_path)
 
