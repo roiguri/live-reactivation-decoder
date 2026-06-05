@@ -148,7 +148,17 @@ class LiveProbabilityChart(pg.PlotWidget):
         }
         self._curves: dict[str, pg.PlotDataItem] = {}
         for name, color in self._task_colors.items():
-            curve = self.plot(pen=pg.mkPen(color=color, width=2), name=name)
+            # ``antialias=False`` per-curve overrides the global
+            # ``setConfigOptions(antialias=True)`` for the data curves only.
+            # Antialiased curves cost ~2-3x more to paint, and with one
+            # ~500-point curve per decoder repainted at 30 Hz that dominates
+            # the frame budget. Static guide/marker InfiniteLines keep the
+            # global setting, so they stay smooth. Tradeoff: slightly harder
+            # curve edges / mild shimmer as the curve scrolls. See the "Chart
+            # Rendering Performance" section in docs/Phase2_UI_Plan_M2.md.
+            curve = self.plot(
+                pen=pg.mkPen(color=color, width=2), name=name, antialias=False
+            )
             self._curves[name] = curve
 
         # 30 Hz repaint timer — decoupled from the ~25 Hz signal rate so
