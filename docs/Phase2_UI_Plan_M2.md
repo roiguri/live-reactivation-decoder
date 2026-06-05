@@ -58,6 +58,7 @@ M2 is re-sequenced around one principle: **nothing downstream is meaningful unti
 | XDF test recording has no stimulus events | Open | Current replay file is from a non-task block. Validation replays actual training data (.vhdr). |
 | Proxy auto-launch during discovery | Open — [#3] | `discover_streams` / `start_stream_source` always launch `LSLProxy.exe`; redundant and risks a `NeuroneStream` name collision when an external stream is already publishing. |
 | Stream-source locking model | Open — [#1] | `AppSession`'s coarse lock around the stream source held across the blocking proxy launch — revisit. |
+| Live chart rendering latency (all decoders visible) | Partially mitigated — antialias-off landed 2026-06-05 | Paint cost of the moving probability curves dominates. Fix 1 (antialias-off on curves) landed — biggest win; accepted the mild scrolling shimmer. Fixes 2–4 still open. See [Chart Rendering Performance](#chart-rendering-performance). |
 
 ---
 
@@ -359,6 +360,39 @@ Open questions:
 - [ ] Decide the mechanism (scroll/pan vs separate view vs fold into Goals 9/11) and the retention cap
 - [ ] Implement the chosen history buffer + live/paused state (if applicable)
 - [ ] Verified: operator can review earlier predictions and return to live without losing incoming data
+
+---
+
+## Chart Rendering Performance
+
+**Status (2026-06-05): Fix 1 (antialias-off) landed; Fixes 2–4 open.** This section records the diagnosis and the ranked options. Remaining work: **one fix at a time, live-verify in the Phase 2 screen, commit, then next** (live LSL only runs on Windows).
+
+### Symptom / root cause
+
+The live probability chart feels laggy with all decoders shown. Turning every decoder **off** (only event-marker annotations left) gives an immediate speedup — `set_task_visible` → `curve.setVisible(False)`, and Qt skips painting invisible items. That isolates the bottleneck to the **paint cost of the moving probability curves**, not the data path (the `append_*` hot path only writes preallocated ring buffers and never touches the scene).
+
+Chart math: `target_sfreq` (default 100 Hz) × window (5–10 s) ≈ 500–1000 points/curve, repainted at `_REFRESH_HZ` (30 Hz), once per decoder. The architecture is sound — ring buffer + decoupled 30 Hz repaint. Every option below reduces **per-frame paint work**; none restructures the widget.
+
+### Options (ranked) and conclusions
+
+1. **Antialias off on the data curves — ✅ landed (2026-06-05).** The global `pg.setConfigOptions(..., antialias=True)` (`live_probability_chart.py:42`) makes every curve paint antialiased (~2–3× paint cost). Applied: pass `antialias=False` per-curve in the `self.plot(...)` loop (~line 150), keeping the **global** setting so the static guide/marker `InfiniteLine`s stay smooth.
+   - **Live-tested 2026-06-05:** clearly faster, but the scrolling curves **shimmer / feel "glitchier"** — temporal aliasing as each line shifts sub-pixel per frame. This is the documented tradeoff (slightly harder curve edges).
+   - **Verdict:** the best single win; the speedup is real and the operator accepted the mild shimmer. **Kept.** 24 frontend tests pass.
+
+2. **Skip `setData` for hidden curves — queued, not implemented.** In `_refresh` (~line 284) the loop calls `curve.setData(...)` on **every** curve regardless of visibility. Qt skips the paint for hidden curves, but `setData` still re-slices, recomputes bounds, and rebuilds the path — wasted per-tick CPU for toggled-off decoders. Guard with `if curve.isVisible():`. Data keeps flowing into the ring buffer, so toggling a curve back on repopulates it on the next tick. **No tradeoff.** Natural follow-up to option 1.
+
+3. **`autoDownsample=True` + `clipToView=True` on the curves — tried as a middle ground, did not work.** Bounds paint cost by screen width using a peak-preserving (visually faithful) reduction; `clipToView` renders only the in-view x-range.
+   - **Live-tested 2026-06-05** (combined with antialias back **on**, as a "smooth *and* fast" middle ground): **did not deliver** — the chart was not acceptably smoother/faster. At a 10 s / ~500-point window there is little to downsample (point count ≈ screen width), so the antialiased paint cost still dominated.
+   - **Verdict:** not the glitch fix. Its real payoff is at **long windows** — fold it into **[Goal 15](#goal-15--probability-graph-window-length)** (30 s × 100 Hz = 3000 pts, 60 s = 6000 pts/curve), not here.
+
+4. **NaN skip (`skipFiniteCheck=True`) — low priority.** Buffers start NaN-filled (the cold-start tail before the ring fills), which forces pyqtgraph's slower segmented-path rendering for the first window-length after Start. Self-resolves once the ring fills. Would require an invariant that no NaN ever reaches `setData`, so it carries correctness risk for a transient, one-time cost.
+
+### Decision (2026-06-05)
+
+- **Option 1 landed** — antialias off on the data curves; the mild scrolling shimmer is accepted.
+- **Option 2** (skip `setData` for hidden curves) is the next candidate when more headroom is needed.
+- **Option 3 is reassigned to Goal 15** (long-window rendering), not used as the glitch fix.
+- **Option 4** stays low priority.
 
 ---
 
