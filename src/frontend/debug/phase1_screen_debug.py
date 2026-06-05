@@ -315,11 +315,14 @@ class DebugPhase1Screen(Phase1Screen):
         return None
 
     def _step_continue_eval(self) -> None:
-        """10: fire evaluation_complete(timepoint) → advance(4) (wired)."""
-        t = self._evaluation_view._selected_timepoint
-        if t is None:
-            t = 0.0  # defensive; _on_eval_done above sets this
-        self._evaluation_view.evaluation_complete.emit(t)
+        """10: fire evaluation_complete(timepoints) → advance(4) (wired).
+
+        ``_on_eval_done`` above pre-fills ``_selected_timepoints`` with each
+        decoder's suggested peak, so the walkthrough emits those (the gated
+        per-decoder confirm is bypassed in dev tooling).
+        """
+        timepoints = dict(self._evaluation_view._selected_timepoints)
+        self._evaluation_view.evaluation_complete.emit(timepoints)
 
     def _step_skip_train(self) -> bool | None:
         """11: load train snapshot + drive ``TrainView._on_train_done``
@@ -344,11 +347,11 @@ class DebugPhase1Screen(Phase1Screen):
         self._workspace.setCurrentIndex(4)
         self._header_title.setText(_DEBUG_PREFIX + _NODE_TITLES[4])
         self._train_view.set_session(self.session)
-        # Eval step earlier already locked the timepoint; the snapshot
-        # also carries it via the spec's metadata. Set it explicitly so
-        # set_timepoint's validation doesn't block.
+        # Eval step earlier already set the per-decoder timepoints; the
+        # snapshot also carries them via the spec's metadata. Set them
+        # explicitly so TrainView's ready-gating doesn't block.
         if spec is not None:
-            self._train_view.set_timepoint(float(spec.metadata.decoding_timepoint))
+            self._train_view.set_timepoints(dict(spec.metadata.decoding_timepoints))
         self._train_view._on_train_done(result)  # noqa: SLF001 — dev tooling
         return None
 

@@ -13,9 +13,9 @@ same loading-overlay / ready-changed protocols:
 
 * ``set_session(session)``   — provided when the operator continues
   past Settings.
-* ``set_timepoint(t)``       — the operator's confirmed timepoint from
-  the Eval view; the worker passes it straight to
-  ``orchestrator.run_training``.
+* ``set_timepoints(d)``      — the operator's confirmed per-decoder
+  timepoints (``{task_name: seconds}``) from the Eval view; the worker
+  passes them straight to ``orchestrator.run_training``.
 * ``trigger_run()``          — the journey-panel Node 5 button is
   rebound to this once the Ready page is showing.
 * ``ready_changed(bool)``    — gates the journey-panel button.
@@ -66,7 +66,8 @@ class TrainView(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._session = None
-        self._timepoint: Optional[float] = None
+        # Per-decoder confirmed timepoints (task → seconds) from Node 4.
+        self._timepoints: dict[str, float] = {}
         self._running: bool = False
         self._done: bool = False
         self._was_ready: bool = False
@@ -101,9 +102,10 @@ class TrainView(QWidget):
         self._session = session
         self._update_ready_state()
 
-    def set_timepoint(self, t_seconds: float) -> None:
-        """Stash the timepoint the operator confirmed on the Eval screen."""
-        self._timepoint = float(t_seconds)
+    def set_timepoints(self, timepoints: dict[str, float]) -> None:
+        """Stash the per-decoder timepoints the operator confirmed on the
+        Eval screen (``{task_name: seconds}``)."""
+        self._timepoints = {k: float(v) for k, v in timepoints.items()}
         self._update_ready_state()
 
     def trigger_run(self) -> None:
@@ -111,14 +113,14 @@ class TrainView(QWidget):
         if (
             self._session is None
             or self._session.offline is None
-            or self._timepoint is None
+            or not self._timepoints
             or self._running
             or self._done
         ):
             return
         self._running = True
         self._update_ready_state()
-        worker = TrainingWorker(self._session.offline, self._timepoint)
+        worker = TrainingWorker(self._session.offline, self._timepoints)
         self.loading_requested.emit("Training decoders…")
         self._thread = QThread()
         self._worker = worker
@@ -159,11 +161,15 @@ class TrainView(QWidget):
         if self._save_path_field is not None and path is not None:
             self._save_path_field.setText(str(path))
 
-        # "Trained at" — read from ``self._timepoint`` (set by
-        # Phase1Screen on evaluation_complete; ``run_training`` doesn't
-        # echo the timepoint back in its result).
-        if self._trained_at_lbl is not None and self._timepoint is not None:
-            self._trained_at_lbl.setText(f"{self._timepoint * 1000.0:.0f} ms")
+        # "Trained at" — per-decoder ms read from ``self._timepoints`` (set
+        # by Phase1Screen on evaluation_complete; ``run_training`` doesn't
+        # echo the timepoints back in its result).
+        if self._trained_at_lbl is not None and self._timepoints:
+            parts = [
+                f"{name} {t * 1000.0:.0f}"
+                for name, t in self._timepoints.items()
+            ]
+            self._trained_at_lbl.setText(" · ".join(parts) + " ms")
 
         # Build the topomap row.
         self._populate_topomaps(
@@ -336,7 +342,7 @@ class TrainView(QWidget):
         # is built and a timepoint has been confirmed.
         page0_ready = (
             self._session is not None
-            and self._timepoint is not None
+            and bool(self._timepoints)
             and not self._running
             and not self._done
         )

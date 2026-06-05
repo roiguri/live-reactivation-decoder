@@ -43,10 +43,11 @@ class ModelEvaluator:
                 "average_peak_auc": float,
                 "tasks": {
                     "<task_name>": {
-                        "diagonal_auc": np.ndarray,   # shape (n_times,)
-                        "tgm_matrix":   np.ndarray,   # shape (n_times, n_times)
-                        "peak_auc":     float,
-                        "chance_level": float,
+                        "diagonal_auc":  np.ndarray,   # shape (n_times,)
+                        "tgm_matrix":    np.ndarray,   # shape (n_times, n_times)
+                        "peak_auc":      float,
+                        "peak_timepoint": float,       # time (s) of diagonal argmax
+                        "chance_level":  float,
                     },
                     ...
                 },
@@ -71,6 +72,7 @@ class ModelEvaluator:
                 "diagonal_auc": diagonal,
                 "tgm_matrix": tgm,
                 "peak_auc": float(np.max(diagonal)),
+                "peak_timepoint": float(self.times[int(np.argmax(diagonal))]),
                 "chance_level": _CHANCE_LEVEL,
             }
 

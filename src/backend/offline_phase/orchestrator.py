@@ -6,7 +6,6 @@ from typing import Any, Optional
 
 import joblib
 import mne
-import numpy as np
 
 from backend.core.artifact_models import (
     DecoderPipelineArtifactSpec,
@@ -40,8 +39,8 @@ class OfflineOrchestrator:
         # UI: ica.plot_sources(epochs, block=True) → operator toggles excludes
         stats = run_step2_apply_and_save(excluded)   # worker
         eval_results = run_evaluation()
-        # UI: user clicks timepoint on TGM plot
-        result = run_training(timepoint)
+        # UI: operator picks + confirms each decoder's timepoint
+        result = run_training(timepoints)   # {task_name: seconds}
         artifact = get_live_artifact_spec()
     """
 
@@ -220,18 +219,16 @@ class OfflineOrchestrator:
         )
         return self._eval_results
 
-    def run_training(self, timepoint: float) -> dict[str, Any]:
+    def run_training(self, timepoints: dict[str, float]) -> dict[str, Any]:
         """
-        Train one classifier per task, each at ITS OWN cross-validated peak
-        timepoint (Step C). The ``timepoint`` arg is kept as the representative
-        / shared-suggestion value and stored in metadata for backward
-        compatibility; the per-task peaks come from
-        ``self._eval_results['tasks'][name]['diagonal_auc']``.
+        Train one classifier per task, each at its operator-chosen timepoint.
 
         Args:
-            timepoint: Representative time in seconds (e.g. the cross-decoder
-                CV-average peak). Used as the metadata's ``decoding_timepoint``
-                and as a fallback if a task has no diagonal_auc entry.
+            timepoints: An explicit per-task ``{task_name: seconds}`` map (from
+                the Evaluation UI, each decoder pre-filled with its own
+                ``peak_timepoint`` suggestion). Stored verbatim in
+                ``metadata.decoding_timepoints``. A task missing from the dict
+                raises ``ValueError`` in ``ModelTrainer.run_training``.
 
         Returns:
             {
@@ -248,11 +245,7 @@ class OfflineOrchestrator:
         if self._eval_results is None:
             raise RuntimeError("Call run_evaluation() before run_training().")
 
-        per_task_timepoints = self._derive_per_task_timepoints(
-            eval_results=self._eval_results,
-            fallback_timepoint=timepoint,
-            task_configs=self._settings.get_decoder_settings()["tasks"],
-        )
+        per_task_timepoints = {k: float(v) for k, v in timepoints.items()}
 
         trainer = ModelTrainer(self._epochs, self._settings.get_decoder_settings())
         training_results = trainer.run_training(per_task_timepoints)
@@ -263,7 +256,6 @@ class OfflineOrchestrator:
             online_state=preprocessor_state,
             metadata=DecoderPipelineMetadata(
                 feature_width=len(preprocessor_state["eeg_chunk_indices"]),
-                decoding_timepoint=timepoint,
                 decoding_timepoints=per_task_timepoints,
             ),
         )
@@ -279,33 +271,6 @@ class OfflineOrchestrator:
             "spatial_patterns": training_results["spatial_patterns"],
             "mne_info": training_results["mne_info"],
         }
-
-    @staticmethod
-    def _derive_per_task_timepoints(
-        eval_results: dict[str, Any],
-        fallback_timepoint: float,
-        task_configs: list[dict[str, Any]],
-    ) -> dict[str, float]:
-        """Pick each decoder's own cross-validated peak timepoint.
-
-        For each configured task, look up its ``diagonal_auc`` curve from the
-        evaluator output and return the time corresponding to ``argmax``. Tasks
-        that lack a diagonal_auc fall back to ``fallback_timepoint`` (the
-        shared cross-decoder average).
-        """
-        times = np.asarray(eval_results["times"], dtype=float)
-        per_task_results = eval_results.get("tasks", {})
-        per_task_timepoints: dict[str, float] = {}
-        for task_cfg in task_configs:
-            name = task_cfg["name"]
-            task_result = per_task_results.get(name)
-            if task_result is None or "diagonal_auc" not in task_result:
-                per_task_timepoints[name] = float(fallback_timepoint)
-                continue
-            diagonal_auc = np.asarray(task_result["diagonal_auc"], dtype=float)
-            peak_index = int(np.argmax(diagonal_auc))
-            per_task_timepoints[name] = float(times[peak_index])
-        return per_task_timepoints
 
     # ── Phase 2 handoff ───────────────────────────────────────────────────────
 

@@ -45,7 +45,7 @@ M2 is re-sequenced around one principle: **nothing downstream is meaningful unti
 
 > **Phase 1 cross-cutting note — per-decoder training timepoint selection.** Each decoder is trained at a **single** timepoint, and the backend **already supports a *different* timepoint per decoder**: `ModelTrainer.run_training()` accepts `dict[str, float]` (task → one timepoint), the trained feature stays `n_channels` wide, and `DecoderPipelineMetadata.decoding_timepoints` carries the per-task values. This is *not* multi-timepoint/multi-slice training — there is no `n_channels × k` feature and **no online impact**: `LiveInferenceEngine.predict()` runs every decoder on the same sliding `feature_width` window, and each fires when its pattern slides through.
 >
-> The **only** missing piece is the **Phase 1 (offline) UI** to let the operator *choose/override* each decoder's timepoint. Today `OfflineOrchestrator.run_training()` auto-fills the per-task dict from `argmax` of each task's `diagonal_auc` (`_derive_per_task_timepoints`); the evaluation step already computes those per-task curves, so the UI work is to surface them and pass an **operator-selected** dict instead of the auto-derived one. **Deliberately out of M2 (Phase-2 UI) scope** — tracked here only as the cross-reference; the actual work belongs in a Phase 1 plan.
+> The **only** missing piece is the **Phase 1 (offline) UI** to let the operator *choose/override* each decoder's timepoint. **✅ Now done — see [Goal 19](#goal-19--per-decoder-timepoint-selection-phase-1-offline-ui----done).** The operator picks/confirms each decoder's timepoint in the Evaluation roster and the selected dict is passed to `run_training(...)`. (The old auto-derivation `_derive_per_task_timepoints` and the legacy single-float path were removed in the process.)
 
 ---
 
@@ -96,7 +96,7 @@ Work from `feat/phase2-stream-selection` lands several M2 items early and change
 | 14 | Per-Decoder Colour Picker | Not started | backlog |
 | 15 | Probability Graph Window Length | Not started | backlog |
 | 16 | Probability Graph History View | Not started — needs UX discussion | backlog |
-| 19 | Per-Decoder Timepoint Selection (Phase 1 offline UI) | Not started — backend ready | Phase 1 |
+| 19 | Per-Decoder Timepoint Selection (Phase 1 offline UI) | ✅ Done (branch `feat/per-decoder-timepoints`) | Phase 1 |
 
 ---
 
@@ -366,17 +366,28 @@ Open questions:
 
 These items are **offline (Phase 1)** and have **no Phase-2 / online impact**. They are tracked here because they surfaced during M2 planning, but the work belongs to the Phase 1 surface — not on the Phase-2 critical path above. Move to a dedicated Phase 1 plan if/when one exists.
 
-## Goal 19 — Per-Decoder Timepoint Selection (Phase 1 offline UI)
+## Goal 19 — Per-Decoder Timepoint Selection (Phase 1 offline UI) — ✅ Done
 
-The backend already trains each decoder at its own **single** timepoint via `ModelTrainer.run_training(dict[str, float])`, and the artifact carries them in `DecoderPipelineMetadata.decoding_timepoints` (feature stays `n_channels` wide — no online change). Today the per-decoder dict is **auto-filled** from `argmax` of each task's `diagonal_auc` (`OfflineOrchestrator._derive_per_task_timepoints`); the operator cannot view or override it. This goal adds that UI.
+Each decoder is now operator-selectable at its own timepoint, end-to-end. Shipped on `feat/per-decoder-timepoints` (7 commits); full design in [docs/feature_plans/per_decoder_timepoint_selection.md](feature_plans/per_decoder_timepoint_selection.md).
 
-- [ ] Evaluation/training screen surfaces each decoder's `diagonal_auc` curve with its auto-derived peak (`argmax`) pre-selected as the default
-- [ ] Operator can adjust each decoder's timepoint independently (per-decoder slider/input, or click-on-curve), pre-filled with the suggested peak
-- [ ] Selected timepoints are collected into a `dict[str, float]` (task → one timepoint)
-- [ ] `OfflineOrchestrator` passes the **operator-selected** dict to `run_training(...)` instead of the auto-derived one (keep `_derive_per_task_timepoints` as the default/fallback when the operator makes no change)
-- [ ] Out-of-bounds timepoints are caught and surfaced as a UI error **before** training (the trainer already raises `ValueError` for timepoints outside `[tmin, tmax]`)
-- [ ] `decoding_timepoints` in the exported artifact reflects the operator's choices; the representative `decoding_timepoint` stays the shared/mean value for backward compatibility
-- [ ] Verified: changing a decoder's timepoint in the UI changes which time-slice that decoder trains on, reflected in the exported `decoding_timepoints`
+- [x] `EvaluationView` Summary tab is a **per-decoder roster** — each decoder has its own timepoint spinbox, AUC@t, read-only Peak column, and Confirm; pre-filled with its evaluator `peak_timepoint`
+- [x] Per-decoder editing (roster spinbox, decoder-tab spinbox, or chart click) moves **only that decoder**, synced bidirectionally; "Approve && Continue" gates on **all** decoders confirmed
+- [x] Selected timepoints flow as a `dict[str, float]` through `evaluation_complete → TrainView.set_timepoints → TrainingWorker → OfflineOrchestrator.run_training(dict)`
+- [x] Out-of-bounds timepoints raise `ValueError` in `ModelTrainer` (surfaced via the worker error path)
+- [x] Evaluator exposes per-task `peak_timepoint` (canonical suggestion); cross-task `suggested_timepoint` surfaced in the roster caption with an info badge ("peak of mean AUC", not a plain average)
+- [x] Debug seeder + walkthrough pass per-decoder dicts; `debug_snapshots/default` re-seeded with 6 decoders
+- [x] Verified: exported `decoding_timepoints` holds the **distinct** per-decoder values
+
+**Deviations from the original sketch:** the legacy single-float `run_training` path and `_derive_per_task_timepoints` were **removed** (not kept as a fallback); the singular `decoding_timepoint` metadata field was **removed** entirely (`decoding_timepoints` is now the authoritative required field) rather than kept as a representative mean.
+
+### Goal 19 — Deferred follow-ups (tracked here; feature otherwise complete)
+
+- [ ] **Diagnostic scripts left stale.** Four single-timepoint diagnostics still read the removed `metadata["decoding_timepoint"]` — `scripts/preproc_parity_check.py` (subscript → **KeyError** on artifacts trained after the change), `offline_inference_check.py`, `inspect_decoder_internals.py`, `full_recording_live_inference_check.py` (`.get(...)` → `None`). They still work against *existing* artifacts but break on newly-trained ones. **Fix:** replace the read with the local mean of `decoding_timepoints`, e.g. `float(sum(d.values()) / len(d))`. (Left untouched on purpose to avoid conflicts with in-flight Goal-18 work.)
+- [ ] **sklearn `penalty` → `l1_ratio` migration (optional).** scikit-learn 1.8 deprecated `LogisticRegression(penalty=...)` (removed in 1.10). Our `_CLASSIFIER_DEFAULTS["Logistic"]` uses `penalty: "l1"`, which emits a `FutureWarning` per fit and will **break at 1.10**. **Fix:** `_VALID_PARAMS_BY_MODEL`/`_CLASSIFIER_DEFAULTS` `penalty: "l1"` → `l1_ratio: 1` (`build_classifier` forwards `**params`, no change). LDA/SVM unaffected.
+
+### Goal 19 — Remaining wrap-up
+- [x] `docs/backend_architecture.md` `run_training` signature reflects `dict[str, float]` (light targeted touch; doc has broader pre-existing drift)
+- [ ] Merge `feat/per-decoder-timepoints` to `main`
 
 ---
 

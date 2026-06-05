@@ -20,12 +20,10 @@ class DecoderPipelineMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     feature_width: int = Field(gt=0)
-    # Representative timepoint (e.g. mean of per-task peaks). Kept for backward
-    # compatibility with consumers / artifacts that don't carry the per-task dict.
-    decoding_timepoint: float
-    # Per-decoder training timepoints (Step C). Empty for legacy artifacts trained
-    # before per-decoder timepoint support was added.
-    decoding_timepoints: dict[str, float] = Field(default_factory=dict)
+    # Per-decoder training timepoints (``{task_name: seconds}``) — authoritative.
+    # Each decoder is trained at its own timepoint; consumers that want a single
+    # representative compute the mean themselves.
+    decoding_timepoints: dict[str, float] = Field(min_length=1)
 
 
 class DecoderPipelineArtifactSpec(BaseModel):

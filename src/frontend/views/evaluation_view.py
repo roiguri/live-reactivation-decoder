@@ -19,21 +19,38 @@ from frontend.workers.evaluation_worker import EvaluationWorker
 
 _DEVIATION_WARN_MS = 50.0  # |selected − suggested| above this → amber hint shown
 
+# Summary-roster column widths (px) — header + rows share them so cells line up.
+_ROSTER_SPIN_W = 78
+_ROSTER_PEAK_W = 42
+_ROSTER_AUC_W = 36
+_ROSTER_CONFIRM_W = 84
+
+# Tooltip explaining the cross-task suggested timepoint (not a plain average).
+_SUGGESTED_TOOLTIP = (
+    "Suggested timepoint = peak of the mean AUC curve.\n"
+    "\n"
+    "The single moment where decoding accuracy, averaged across all\n"
+    "decoders, is highest - the best shared timepoint if one had to\n"
+    "serve every decoder.\n"
+    "\n"
+    "This is NOT the mean of the per-decoder peaks. Each decoder\n"
+    "below is pre-filled with its own peak instead."
+)
+
 logger = logging.getLogger(__name__)
 
 
 class EvaluationView(QWidget):
     """Node 4 workspace: 2-page stack (Ready → Results).
 
-    Step 1 scaffolding: Page 0 triggers ``orchestrator.run_evaluation()``
-    off-thread; Page 1 currently shows a placeholder summary
-    ("N tasks evaluated, suggested timepoint = X ms"). Subsequent plan
-    steps replace the placeholder with the QTabWidget + chart widgets.
+    Page 0 triggers ``orchestrator.run_evaluation()`` off-thread; Page 1
+    shows a Summary tab (per-decoder roster + overlay AUC chart + decoder
+    table) plus one tab per decoder (AUC curve + TGM heatmap).
 
-    ``_selected_timepoint`` is initialised to the evaluator's
-    ``suggested_timepoint`` so the journey-panel "Approve && Continue"
-    button is immediately clickable — later steps let the operator
-    override it via the AUC chart.
+    Each decoder gets its OWN selected timepoint (``_selected_timepoints``),
+    pre-filled with its evaluator ``peak_timepoint`` and confirmed
+    independently from the roster. The journey-panel "Approve && Continue"
+    button unlocks only once every decoder is confirmed (``_all_confirmed``).
     """
 
     # Loading-overlay protocol — handled by Phase1Screen
@@ -43,9 +60,9 @@ class EvaluationView(QWidget):
     ready_changed = Signal(bool)
     # Emitted once results render and the trigger should rebind to confirm.
     results_displayed = Signal()
-    # Emitted when the operator confirms the chosen timepoint; payload is
-    # the timepoint (seconds) Phase 1 Training will use.
-    evaluation_complete = Signal(float)
+    # Emitted when the operator confirms every decoder's timepoint; payload
+    # is the per-decoder ``{task_name: seconds}`` map Phase 1 Training will use.
+    evaluation_complete = Signal(dict)
     # Emitted when the operator picks a timepoint on a chart (later steps).
     timepoint_selected = Signal(float)
 
@@ -57,27 +74,33 @@ class EvaluationView(QWidget):
         self._done: bool = False
         self._was_ready: bool = False
         self._result: Optional[dict[str, Any]] = None
-        self._selected_timepoint: Optional[float] = None
-        # Locally-confirmed timepoint. None = no commitment yet; equal to
-        # ``_selected_timepoint`` = the operator has pressed "Confirm
-        # Timepoint" for the currently selected time. Gates the
-        # journey-panel "Approve && Continue" button.
-        self._confirmed_timepoint: Optional[float] = None
+        # Per-decoder selected timepoints (task → seconds) and per-decoder
+        # confirm flags. The operator picks/locks each decoder independently;
+        # the journey-panel "Approve && Continue" button unlocks only once
+        # every decoder is confirmed (see ``_all_confirmed``).
+        self._selected_timepoints: dict[str, float] = {}
+        self._confirmed: dict[str, bool] = {}
+        # Each decoder's suggested peak (task → seconds), from the evaluator's
+        # per-task ``peak_timepoint``. Pre-fills the spinboxes/markers and
+        # drives the per-decoder amber deviation hint.
+        self._suggested_timepoints: dict[str, float] = {}
         self._thread: QThread | None = None
         self._worker = None
         # Populated when results land. Tabs are built once per eval run.
         self._tabs: Optional[QTabWidget] = None
         self._per_decoder_tabs: dict[str, QWidget] = {}
-        # Summary-tab live widgets (built up-front, populated on result arrival).
-        self._stats_selected_input: Optional[QSpinBox] = None
-        self._stats_dev_lbl: Optional[QLabel] = None
-        self._stats_decoder_rows_layout: Optional[QVBoxLayout] = None
-        self._stats_avg_row: Optional[QFrame] = None
-        self._stats_avg_lbl: Optional[QLabel] = None
-        # Per-decoder AUC value labels — kept around so we can rewrite
-        # them when the operator picks a different timepoint (the AUC
-        # column always reads "AUC @ selected timepoint", not peak).
-        self._stats_auc_lbls: dict[str, QLabel] = {}
+        # Summary-tab roster: one row per decoder, each with its own
+        # timepoint spinbox, AUC@t label and Confirm button. Built when the
+        # eval result lands (task names known then).
+        self._roster_rows_layout: Optional[QVBoxLayout] = None
+        self._roster_suggested_lbl: Optional[QLabel] = None
+        self._roster_spins: dict[str, QSpinBox] = {}
+        self._roster_auc_lbls: dict[str, QLabel] = {}
+        self._roster_confirm_btns: dict[str, QPushButton] = {}
+        self._roster_status_lbl: Optional[QLabel] = None
+        self._roster_reset_btn: Optional[QPushButton] = None
+        # Bottom summary-table AUC labels — rewritten when a decoder's
+        # timepoint changes (reads AUC @ that decoder's own timepoint).
         self._table_auc_lbls: dict[str, QLabel] = {}
         # AUC chart instances: one on the Summary tab plotting all
         # decoders, plus one inside each per-decoder tab plotting just
@@ -91,9 +114,6 @@ class EvaluationView(QWidget):
         # update flow can rewrite the values from one place.
         self._decoder_tgm_charts: dict[str, TGMChart] = {}
         self._decoder_stats: dict[str, dict[str, QWidget]] = {}
-        self._stats_suggested_hint_lbl: Optional[QLabel] = None
-        self._stats_confirm_btn: Optional[QPushButton] = None
-        self._stats_reset_btn: Optional[QPushButton] = None
         self._summary_table_body: Optional[QVBoxLayout] = None
 
         outer = QVBoxLayout(self)
@@ -140,22 +160,25 @@ class EvaluationView(QWidget):
         )
 
     def trigger_confirm(self) -> None:
-        """Advance to Node 5 once the operator has locally confirmed a
-        timepoint via the in-panel button.
+        """Advance to Node 5 once the operator has confirmed every decoder's
+        timepoint via the Summary-tab roster.
 
         Wired by Phase1Screen as the Node 4 panel "Approve && Continue"
-        action. Guarded by ``_update_ready_state`` so the panel button
-        won't fire until ``_confirmed_timepoint is not None``.
+        action. Guarded by ``_update_ready_state`` so the panel button won't
+        fire until ``_all_confirmed()``.
         """
-        if not self._done or self._confirmed_timepoint is None:
+        if not self._done or not self._all_confirmed():
             return
         logger.info(
-            "Evaluation confirmed; operator selected timepoint = %.3f s "
-            "(suggested = %.3f s)",
-            self._confirmed_timepoint,
-            self._result.get("suggested_timepoint") if self._result else float("nan"),
+            "Evaluation confirmed; per-decoder timepoints (s) = %s",
+            {k: round(v, 3) for k, v in self._selected_timepoints.items()},
         )
-        self.evaluation_complete.emit(self._confirmed_timepoint)
+        self.evaluation_complete.emit(dict(self._selected_timepoints))
+
+    def _all_confirmed(self) -> bool:
+        """True once every decoder has a confirmed timepoint."""
+        names = list(self._selected_timepoints.keys())
+        return bool(names) and all(self._confirmed.get(n, False) for n in names)
 
     # ── worker plumbing ──────────────────────────────────────────────────────
 
@@ -190,26 +213,32 @@ class EvaluationView(QWidget):
         self.loading_done.emit()
         self._result = result
         self._running = False
-        self._done = True  # set before _populate_results so the in-panel
+        self._done = True  # set before _populate_results so the per-decoder
                            # Confirm button gating sees the right state.
-        self._selected_timepoint = float(result["suggested_timepoint"])
         self._populate_results(result)
         self._pages.setCurrentIndex(1)
         self._update_ready_state()
         self.results_displayed.emit()
 
     def _populate_results(self, result: dict) -> None:
-        """Fill in everything the eval result determines: per-decoder tabs
-        (with coloured dot icons), stats panel rows, and decoder summary
-        table rows.
+        """Fill in everything the eval result determines: per-decoder tabs,
+        the Summary-tab roster (per-decoder timepoint + Confirm), and the
+        decoder summary table rows.
 
-        The AUC chart / TGM heatmap slots stay as dashed placeholders —
-        the chart widgets land in subsequent plan steps.
+        Each decoder is pre-filled with its own suggested peak
+        (``tasks[name]['peak_timepoint']``); the operator overrides any of
+        them and confirms each from the roster.
         """
-        suggested_s = float(result["suggested_timepoint"])
-        suggested_ms = suggested_s * 1000.0
         tasks_result: dict[str, dict] = result.get("tasks", {})
         task_names = list(tasks_result.keys())
+
+        # Per-decoder suggested peaks → pre-filled, unconfirmed selections.
+        self._suggested_timepoints = {
+            name: float(task.get("peak_timepoint", 0.0))
+            for name, task in tasks_result.items()
+        }
+        self._selected_timepoints = dict(self._suggested_timepoints)
+        self._confirmed = {name: False for name in task_names}
 
         # Drop any per-decoder tabs left over from a previous run; the
         # Summary tab (index 0) stays put. Also drop the chart refs since
@@ -230,23 +259,24 @@ class EvaluationView(QWidget):
             self._per_decoder_tabs[task_name] = tab
             self._tabs.addTab(tab, task_name)
 
-        # Clearing _confirmed_timepoint first ensures the Confirm button
-        # comes back as primary-blue "Confirm Timepoint" on a fresh result.
-        self._confirmed_timepoint = None
-        # Build the per-decoder AUC label widgets + chart curves in
-        # BOTH places before calling _set_selected_timepoint — that
-        # method writes into the labels and moves the chart markers.
-        self._rebuild_stats_decoder_rows(tasks_result)
-        self._rebuild_summary_table(tasks_result, suggested_s)
+        # Cross-task suggestion line (peak of the mean AUC curve).
+        if self._roster_suggested_lbl is not None:
+            suggested_ms = float(result.get("suggested_timepoint", 0.0)) * 1000.0
+            self._roster_suggested_lbl.setText(
+                f"Suggested {suggested_ms:.0f} ms · peak of mean AUC"
+            )
+
+        # Build the roster + table + chart widgets BEFORE the per-decoder
+        # sync loop below — that loop writes into the labels and moves the
+        # chart markers.
+        self._rebuild_roster(tasks_result)
+        self._rebuild_summary_table(tasks_result, 0.0)
         self._populate_charts(result.get("times"), tasks_result)
         self._populate_decoder_peak_stats(result.get("times"), tasks_result)
-        if self._stats_suggested_hint_lbl is not None:
-            self._stats_suggested_hint_lbl.setText(
-                f"Suggested: {suggested_ms:.0f} ms (avg peak)"
-            )
-        # Constrain every SELECTED TIMEPOINT input to the evaluator's
-        # time range, with a step matching the sample spacing — so the
-        # spinbox arrows walk one sample at a time.
+
+        # Constrain every timepoint spinbox to the evaluator's time range,
+        # with a step matching the sample spacing — so the spinbox arrows
+        # walk one sample at a time.
         times = result.get("times")
         if times is not None and len(times) > 1:
             step_ms = int(round((times[1] - times[0]) * 1000.0))
@@ -255,7 +285,12 @@ class EvaluationView(QWidget):
             for spin in self._all_timepoint_spinboxes():
                 spin.setRange(t_lo, t_hi)
                 spin.setSingleStep(max(1, step_ms))
-        self._set_selected_timepoint(suggested_s)
+
+        # Sync every decoder's display (spinboxes, AUC labels, markers,
+        # confirm button) to its pre-filled suggested timepoint.
+        for name in task_names:
+            self._set_decoder_timepoint(name, self._selected_timepoints[name])
+        self._refresh_roster_status()
 
     def _populate_charts(self, times, tasks_result: dict[str, dict]) -> None:
         """Push curves into the Summary + per-decoder AUC charts AND
@@ -272,13 +307,18 @@ class EvaluationView(QWidget):
         colors = {
             name: chart_line_color(i) for i, name in enumerate(curves.keys())
         }
-        suggested_t = (
+        # Summary overlay shows the cross-task average peak as a single
+        # reference line (the overlay is for comparing curves, not picking
+        # a per-decoder timepoint).
+        avg_suggested = (
             float(self._result["suggested_timepoint"]) if self._result else 0.0
         )
         if self._summary_auc_chart is not None:
             self._summary_auc_chart.set_curves(times, curves, colors=colors)
-            self._summary_auc_chart.set_suggested_timepoint(suggested_t)
+            self._summary_auc_chart.set_suggested_timepoint(avg_suggested)
+        # Per-decoder charts show that decoder's OWN suggested peak.
         for name, task in tasks_result.items():
+            suggested_t = self._suggested_timepoints.get(name, avg_suggested)
             auc = self._decoder_auc_charts.get(name)
             if auc is not None:
                 auc.set_curves(times, {name: task["diagonal_auc"]},
@@ -316,15 +356,42 @@ class EvaluationView(QWidget):
         value_lbl.setText(f"{text}{suffix}")
 
     def _all_timepoint_spinboxes(self) -> list[QSpinBox]:
-        """Every SELECTED TIMEPOINT spinbox in the Eval results screen."""
+        """Every timepoint spinbox in the Eval results screen — the Summary
+        roster rows plus the per-decoder tab cards."""
         spins: list[QSpinBox] = []
-        if self._stats_selected_input is not None:
-            spins.append(self._stats_selected_input)
+        for spin in self._roster_spins.values():
+            if isinstance(spin, QSpinBox):
+                spins.append(spin)
         for stats in self._decoder_stats.values():
             spin = stats.get("timepoint")
             if isinstance(spin, QSpinBox):
                 spins.append(spin)
         return spins
+
+    def _decoder_spinboxes(self, task_name: str) -> list[QSpinBox]:
+        """Both spinboxes that edit ``task_name`` — its Summary roster row
+        and its per-decoder tab card — kept in sync with each other."""
+        spins: list[QSpinBox] = []
+        roster = self._roster_spins.get(task_name)
+        if isinstance(roster, QSpinBox):
+            spins.append(roster)
+        stats = self._decoder_stats.get(task_name)
+        if stats is not None:
+            tab_spin = stats.get("timepoint")
+            if isinstance(tab_spin, QSpinBox):
+                spins.append(tab_spin)
+        return spins
+
+    def _snap_to_sample(self, t_seconds: float) -> float:
+        """Snap a time (seconds) to the nearest evaluator sample."""
+        if self._result is None:
+            return t_seconds
+        times = self._result.get("times")
+        if times is None or len(times) == 0:
+            return t_seconds
+        import numpy as np
+        idx = int(np.argmin(np.abs(np.asarray(times) - t_seconds)))
+        return float(times[idx])
 
     # ── page builders ────────────────────────────────────────────────────────
 
@@ -447,25 +514,26 @@ class EvaluationView(QWidget):
 
         self._summary_auc_chart = AUCChart(show_legend=True)
         self._summary_auc_chart.setMinimumHeight(300)
-        # Click on the Summary chart → drive the same _set_selected_timepoint
-        # path used by the stats-panel/table updates so every view stays
-        # in sync.
-        self._summary_auc_chart.timepoint_clicked.connect(self._set_selected_timepoint)
+        # Inspection-only: a click on the all-decoder overlay is ambiguous
+        # (which decoder?). Per-decoder selection happens in the roster or
+        # the individual decoder tabs, so this chart has no click-to-set.
         body.addWidget(self._summary_auc_chart, 1)
         return card
 
     def _build_stats_panel(self) -> QWidget:
-        """Right-side stats card.
+        """Right-side per-decoder roster — the control center.
 
-        Order (top → bottom):
-          • Suggested timepoint hint.
-          • AUC PER DECODER mini-table (header row + body rows + Avg).
-          • SELECTED TIMEPOINT value + amber deviation hint (hidden ≤ ±50 ms).
-          • Confirm Timepoint button (toggles blue ↔ green) + Reset.
+        One row per decoder: ``[name] [timepoint spinbox (ms)] [peak (ms)]
+        [AUC @ t] [Confirm]``. Each decoder is pre-filled with its own
+        suggested peak and edited/confirmed independently; the read-only
+        ``peak`` column shows that decoder's own peak for comparison. A
+        caption line above shows the cross-task suggested timepoint (peak of
+        the mean AUC curve). Footer shows an ``N / M confirmed`` status and a
+        ``Reset all to suggested`` button.
 
-        All child labels carry ``background: transparent`` so when the
-        card or row hovers another colour the labels don't punch
-        white rectangles through.
+        All child labels carry ``background: transparent`` so when the card
+        or a row hovers another colour the labels don't punch white
+        rectangles through.
         """
         card = QFrame()
         card.setObjectName("stats_card")
@@ -474,158 +542,112 @@ class EvaluationView(QWidget):
             f"border: 1px solid {BORDER_GRAY}; border-radius: 2px; }}"
             "QFrame#stats_card QLabel { background: transparent; }"
         )
-        card.setFixedWidth(240)
+        card.setFixedWidth(380)
         card.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
 
         body = QVBoxLayout(card)
         body.setContentsMargins(12, 12, 12, 12)
         body.setSpacing(8)
 
-        # ─── Suggested hint ────────────────────────────────────────────────
-        self._stats_suggested_hint_lbl = QLabel("Suggested: — ms (avg peak)")
-        self._stats_suggested_hint_lbl.setStyleSheet(
-            f"color: {TEXT_MUTED}; font-size: 10px;"
-        )
-        body.addWidget(self._stats_suggested_hint_lbl)
-
-        # ─── AUC PER DECODER mini-table ────────────────────────────────────
-        auc_cap = QLabel("AUC PER DECODER")
-        auc_cap.setStyleSheet(
+        cap = QLabel("DECODER TIMEPOINTS")
+        cap.setStyleSheet(
             f"color: {TEXT_MUTED}; font-size: 10px; font-weight: 700; "
             "letter-spacing: 0.6px;"
         )
-        body.addWidget(auc_cap)
-        body.addWidget(self._build_auc_minitable_header())
+        body.addWidget(cap)
 
-        self._stats_decoder_rows_layout = QVBoxLayout()
-        self._stats_decoder_rows_layout.setSpacing(2)
-        self._stats_decoder_rows_layout.setContentsMargins(0, 0, 0, 0)
-        body.addLayout(self._stats_decoder_rows_layout)
+        # Cross-task suggestion line — peak of the mean AUC curve (NOT a plain
+        # average of the per-decoder peaks). Text + a circular info badge; the
+        # full multiline explanation is in the shared tooltip.
+        sug_row = QHBoxLayout()
+        sug_row.setContentsMargins(0, 0, 0, 0)
+        sug_row.setSpacing(5)
+        self._roster_suggested_lbl = QLabel("Suggested · peak of mean AUC")
+        self._roster_suggested_lbl.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-size: 10px;"
+        )
+        self._roster_suggested_lbl.setToolTip(_SUGGESTED_TOOLTIP)
+        sug_row.addWidget(self._roster_suggested_lbl)
+        sug_row.addWidget(self._build_info_badge(_SUGGESTED_TOOLTIP))
+        sug_row.addStretch()
+        body.addLayout(sug_row)
 
-        # Avg row sits inside the mini-table visually, separated by a
-        # thin top border + bolder type. Built as a two-cell row so the
-        # value column lines up with the per-decoder AUCs above.
-        self._stats_avg_row = QFrame()
-        self._stats_avg_row.setObjectName("auc_minitable_avg")
-        self._stats_avg_row.setStyleSheet(
-            "QFrame#auc_minitable_avg { background: transparent; "
-            f"border-top: 1px solid {BORDER_GRAY}; }}"
-            "QFrame#auc_minitable_avg QLabel { background: transparent; }"
-        )
-        avg_h = QHBoxLayout(self._stats_avg_row)
-        avg_h.setContentsMargins(0, 4, 0, 2)
-        avg_h.setSpacing(6)
-        avg_left = QLabel("Avg")
-        avg_left.setStyleSheet(
-            f"color: {TEXT_PRIMARY}; font-size: 11px; font-weight: 700;"
-        )
-        avg_h.addWidget(avg_left, 1)
-        self._stats_avg_lbl = QLabel("—")
-        self._stats_avg_lbl.setStyleSheet(
-            f"color: {TEXT_PRIMARY}; font-size: 11px; font-weight: 700;"
-        )
-        self._stats_avg_lbl.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
-        avg_h.addWidget(self._stats_avg_lbl)
-        self._stats_avg_row.hide()
-        body.addWidget(self._stats_avg_row)
+        body.addWidget(self._build_roster_header())
+
+        # Rows are (re)built per eval run in ``_rebuild_roster``.
+        self._roster_rows_layout = QVBoxLayout()
+        self._roster_rows_layout.setSpacing(4)
+        self._roster_rows_layout.setContentsMargins(0, 0, 0, 0)
+        body.addLayout(self._roster_rows_layout)
 
         body.addStretch()
 
-        # ─── SELECTED TIMEPOINT ───────────────────────────────────────────
-        sel_cap = QLabel("SELECTED TIMEPOINT")
-        sel_cap.setStyleSheet(
-            f"color: {TEXT_MUTED}; font-size: 10px; font-weight: 700; "
-            "letter-spacing: 0.6px;"
+        # ─── Footer: status + reset-all ───────────────────────────────────
+        self._roster_status_lbl = QLabel("0 / 0 confirmed")
+        self._roster_status_lbl.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-size: 11px; font-weight: 600;"
         )
-        body.addWidget(sel_cap)
+        body.addWidget(self._roster_status_lbl)
 
-        # Typed adjustment is allowed — operator can edit the integer ms
-        # value directly. ``editingFinished`` snaps to the nearest sample
-        # in ``self._result["times"]`` so the displayed AUC always
-        # matches a real backend score. Range + step are filled in when
-        # the eval result arrives.
-        self._stats_selected_input = QSpinBox()
-        f = self._stats_selected_input.font()
-        f.setPointSize(14)
-        f.setWeight(QFont.Weight.Bold)
-        self._stats_selected_input.setFont(f)
-        # The "ms" suffix lives outside the box (a separate QLabel) since
-        # it's a static unit, not editable text.
-        self._stats_selected_input.setRange(-9999, 9999)  # widened later
-        self._stats_selected_input.setSingleStep(10)
-        self._stats_selected_input.setKeyboardTracking(False)
-        self._stats_selected_input.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        self._stats_selected_input.setCursor(Qt.CursorShape.IBeamCursor)
-        self._apply_selected_input_style(PRIMARY_BLUE)
-        self._stats_selected_input.editingFinished.connect(
-            self._on_selected_input_committed
-        )
-        # editingFinished only fires on Enter / focus-loss, but the
-        # arrow buttons emit valueChanged immediately — pick that up too.
-        self._stats_selected_input.valueChanged.connect(
-            lambda _v: self._on_selected_input_committed()
-        )
-
-        selected_row = QHBoxLayout()
-        selected_row.setContentsMargins(0, 0, 0, 0)
-        selected_row.setSpacing(6)
-        selected_row.addWidget(self._stats_selected_input)
-        ms_lbl = QLabel("ms")
-        ms_lbl.setStyleSheet(
-            f"color: {TEXT_MUTED}; font-size: 12px; font-weight: 600;"
-        )
-        selected_row.addWidget(ms_lbl)
-        selected_row.addStretch()
-        body.addLayout(selected_row)
-
-        self._stats_dev_lbl = QLabel("")
-        self._stats_dev_lbl.setStyleSheet(f"color: {AMBER}; font-size: 10px;")
-        self._stats_dev_lbl.hide()
-        body.addWidget(self._stats_dev_lbl)
-
-        # ─── Buttons ─────────────────────────────────────────────────────
-        self._stats_confirm_btn = QPushButton("Confirm Timepoint")
-        self._stats_confirm_btn.setEnabled(False)
-        self._stats_confirm_btn.clicked.connect(self._toggle_confirm)
-        body.addWidget(self._stats_confirm_btn)
-        # Style applied here — and re-applied (with the same inline rule)
-        # by _refresh_confirm_button on every confirm/unconfirm toggle.
-        self._refresh_confirm_button()
-
-        self._stats_reset_btn = QPushButton("Reset to suggested")
-        self._stats_reset_btn.setProperty("class", "secondary")
-        self._stats_reset_btn.clicked.connect(self._reset_to_suggested)
-        # Always visible — gating is via setEnabled so the row keeps a
-        # stable height and the panel doesn't shift when selected ↔
-        # suggested.
-        self._stats_reset_btn.setEnabled(False)
-        body.addWidget(self._stats_reset_btn)
+        self._roster_reset_btn = QPushButton("Reset all to suggested")
+        self._roster_reset_btn.setProperty("class", "secondary")
+        self._roster_reset_btn.clicked.connect(self._reset_all_to_suggested)
+        self._roster_reset_btn.setEnabled(False)
+        body.addWidget(self._roster_reset_btn)
 
         return card
 
-    def _build_auc_minitable_header(self) -> QWidget:
+    @staticmethod
+    def _build_info_badge(tooltip: str) -> QLabel:
+        """A small circular 'i' badge that shows ``tooltip`` on hover.
+
+        Rendered as a 14px outlined circle with an italic 'i', which reads as
+        a proper info affordance instead of a raw ⓘ glyph stuck in the text.
+        """
+        badge = QLabel("i")
+        badge.setFixedSize(14, 14)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge.setToolTip(tooltip)
+        badge.setCursor(Qt.CursorShape.WhatsThisCursor)
+        badge.setStyleSheet(
+            "QLabel { "
+            f"color: {TEXT_MUTED}; "
+            f"border: 1px solid {TEXT_MUTED}; "
+            "border-radius: 7px; "
+            "font-size: 9px; font-weight: 700; font-style: italic; "
+            "font-family: Georgia, 'Times New Roman', serif; "
+            "} "
+            f"QLabel:hover {{ color: {PRIMARY_BLUE}; border-color: {PRIMARY_BLUE}; }}"
+        )
+        return badge
+
+    def _build_roster_header(self) -> QWidget:
         header = QFrame()
-        header.setObjectName("auc_minitable_header")
+        header.setObjectName("roster_header")
         header.setStyleSheet(
-            "QFrame#auc_minitable_header { background: transparent; "
+            "QFrame#roster_header { background: transparent; "
             f"border-bottom: 1px solid {BORDER_GRAY}; }}"
-            "QFrame#auc_minitable_header QLabel { background: transparent; }"
+            "QFrame#roster_header QLabel { background: transparent; }"
         )
         h = QHBoxLayout(header)
         h.setContentsMargins(0, 2, 0, 2)
         h.setSpacing(6)
-        for text, stretch, align in (
-            ("Decoder", 1, Qt.AlignmentFlag.AlignLeft),
-            ("AUC", 0, Qt.AlignmentFlag.AlignRight),
-        ):
+        cols = (
+            ("Decoder", 1, Qt.AlignmentFlag.AlignLeft, 0),
+            ("ms", 0, Qt.AlignmentFlag.AlignLeft, _ROSTER_SPIN_W),
+            ("peak", 0, Qt.AlignmentFlag.AlignRight, _ROSTER_PEAK_W),
+            ("AUC", 0, Qt.AlignmentFlag.AlignRight, _ROSTER_AUC_W),
+            ("", 0, Qt.AlignmentFlag.AlignRight, _ROSTER_CONFIRM_W),
+        )
+        for text, stretch, align, width in cols:
             lbl = QLabel(text)
             lbl.setStyleSheet(
                 f"color: {TEXT_MUTED}; font-size: 9px; font-weight: 700; "
                 "letter-spacing: 0.4px;"
             )
             lbl.setAlignment(align | Qt.AlignmentFlag.AlignVCenter)
+            if width:
+                lbl.setFixedWidth(width)
             h.addWidget(lbl, stretch)
         return header
 
@@ -692,8 +714,9 @@ class EvaluationView(QWidget):
         TIMEPOINT spinbox + AUC@selected + Peak AUC + Peak time, laid
         out as cells across the row.
 
-        Picking a timepoint anywhere routes through the same global
-        ``_selected_timepoint`` everything else already syncs to.
+        Picking a timepoint here (spinbox or chart click) sets ONLY this
+        decoder via ``_set_decoder_timepoint`` and stays in sync with its
+        Summary-roster row.
         """
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -714,7 +737,10 @@ class EvaluationView(QWidget):
 
         auc = AUCChart(show_legend=False)
         auc.setMinimumHeight(360)
-        auc.timepoint_clicked.connect(self._set_selected_timepoint)
+        # Click sets ONLY this decoder's timepoint (capture task_name).
+        auc.timepoint_clicked.connect(
+            lambda t, _n=task_name: self._set_decoder_timepoint(_n, t)
+        )
         self._decoder_auc_charts[task_name] = auc
         charts_row.addWidget(auc, 1)
 
@@ -735,7 +761,9 @@ class EvaluationView(QWidget):
         tgm_body.addWidget(tgm_caption)
         tgm = TGMChart()
         tgm.setMinimumHeight(360)
-        tgm.timepoint_clicked.connect(self._set_selected_timepoint)
+        tgm.timepoint_clicked.connect(
+            lambda t, _n=task_name: self._set_decoder_timepoint(_n, t)
+        )
         self._decoder_tgm_charts[task_name] = tgm
         tgm_body.addWidget(tgm, 1)
         charts_row.addWidget(tgm_card, 1)
@@ -753,8 +781,8 @@ class EvaluationView(QWidget):
         Lays out four cells across the full-width card — SELECTED
         TIMEPOINT spinbox + AUC@selected + Peak AUC + Peak time. Each
         cell mirrors the same small-caps label / value pair used in the
-        Summary stats panel. The spinbox edits the *global*
-        ``_selected_timepoint`` (no per-decoder override).
+        Summary roster. The spinbox edits ONLY this decoder's timepoint
+        and stays in sync with its Summary-roster row.
         """
         card = QFrame()
         card.setObjectName("decoder_stats_card")
@@ -847,53 +875,106 @@ class EvaluationView(QWidget):
 
     # ── populate helpers (called by _populate_results) ───────────────────────
 
-    def _rebuild_stats_decoder_rows(self, tasks_result: dict[str, dict]) -> None:
-        layout = self._stats_decoder_rows_layout
+    def _rebuild_roster(self, tasks_result: dict[str, dict]) -> None:
+        """(Re)build the Summary-tab per-decoder roster rows.
+
+        Each row owns that decoder's timepoint spinbox, AUC@t label and
+        Confirm button. Cleared and rebuilt on every fresh eval run.
+        """
+        layout = self._roster_rows_layout
         assert layout is not None
-        # Wipe any existing rows from a previous run.
         while layout.count():
             item = layout.takeAt(0)
             w = item.widget()
             if w is not None:
                 w.deleteLater()
-        self._stats_auc_lbls.clear()
+        self._roster_spins.clear()
+        self._roster_auc_lbls.clear()
+        self._roster_confirm_btns.clear()
 
-        for name in tasks_result:
+        for i, name in enumerate(tasks_result):
             wrapper = QFrame()
-            wrapper.setObjectName("auc_minitable_row")
+            wrapper.setObjectName("roster_row")
             wrapper.setStyleSheet(
-                "QFrame#auc_minitable_row { background: transparent; }"
-                "QFrame#auc_minitable_row QLabel { background: transparent; }"
+                "QFrame#roster_row { background: transparent; }"
+                "QFrame#roster_row QLabel { background: transparent; }"
             )
             row = QHBoxLayout(wrapper)
-            row.setContentsMargins(0, 2, 0, 2)
+            row.setContentsMargins(0, 1, 0, 1)
             row.setSpacing(6)
-            name_lbl = QLabel(name)
-            name_lbl.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 11px;")
+
+            # Colour dot + name.
+            name_lbl = QLabel(f"● {name}")
+            name_lbl.setStyleSheet(
+                f"color: {chart_line_color(i)}; font-size: 11px; font-weight: 600;"
+            )
             name_lbl.setSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
             )
+            name_lbl.setToolTip(name)
             row.addWidget(name_lbl, 1)
-            # AUC value is rewritten on every selected-timepoint change
-            # by ``_update_per_decoder_aucs`` — it always reads AUC@t,
-            # not the per-decoder peak (which is shown in the table's
-            # Peak (ms) column instead).
+
+            # Timepoint spinbox (this decoder only).
+            spin = QSpinBox()
+            sf = spin.font()
+            sf.setPointSize(11)
+            sf.setWeight(QFont.Weight.Bold)
+            spin.setFont(sf)
+            spin.setFixedWidth(_ROSTER_SPIN_W)
+            spin.setRange(-9999, 9999)  # widened on result arrival
+            spin.setSingleStep(10)
+            spin.setKeyboardTracking(False)
+            spin.setAlignment(Qt.AlignmentFlag.AlignLeft)
+            spin.setCursor(Qt.CursorShape.IBeamCursor)
+            self._apply_spinbox_input_style(spin, PRIMARY_BLUE)
+            spin.editingFinished.connect(
+                lambda _n=name: self._on_roster_input_committed(_n)
+            )
+            spin.valueChanged.connect(
+                lambda _v, _n=name: self._on_roster_input_committed(_n)
+            )
+            self._roster_spins[name] = spin
+            row.addWidget(spin, 0)
+
+            # This decoder's own suggested peak (read-only, static per run).
+            peak_s = self._suggested_timepoints.get(name)
+            peak_lbl = QLabel(f"{peak_s * 1000.0:.0f}" if peak_s is not None else "—")
+            peak_lbl.setFixedWidth(_ROSTER_PEAK_W)
+            peak_lbl.setStyleSheet(
+                f"color: {TEXT_MUTED}; font-size: 11px;"
+            )
+            peak_lbl.setAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
+            peak_lbl.setToolTip("This decoder's own peak-AUC timepoint")
+            row.addWidget(peak_lbl, 0)
+
+            # AUC @ this decoder's timepoint.
             auc_lbl = QLabel("—")
+            auc_lbl.setFixedWidth(_ROSTER_AUC_W)
             auc_lbl.setStyleSheet(
                 f"color: {TEXT_PRIMARY}; font-size: 11px; font-weight: 600;"
             )
             auc_lbl.setAlignment(
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
             )
-            row.addWidget(auc_lbl)
-            self._stats_auc_lbls[name] = auc_lbl
+            self._roster_auc_lbls[name] = auc_lbl
+            row.addWidget(auc_lbl, 0)
+
+            # Per-decoder Confirm button (fixed width → no reflow on toggle).
+            confirm_btn = QPushButton("Confirm")
+            confirm_btn.setFixedWidth(_ROSTER_CONFIRM_W)
+            confirm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            confirm_btn.clicked.connect(
+                lambda _checked=False, _n=name: self._toggle_confirm(_n)
+            )
+            self._roster_confirm_btns[name] = confirm_btn
+            row.addWidget(confirm_btn, 0)
+
             layout.addWidget(wrapper)
 
-        if (
-            self._stats_avg_row is not None
-            and tasks_result
-        ):
-            self._stats_avg_row.show()
+        if self._roster_reset_btn is not None:
+            self._roster_reset_btn.setEnabled(bool(tasks_result))
 
     def _rebuild_summary_table(
         self, tasks_result: dict[str, dict], _suggested_s: float
@@ -939,8 +1020,8 @@ class EvaluationView(QWidget):
     ) -> tuple[QWidget, QLabel]:
         """Return the row widget AND the AUC value label.
 
-        Caller stashes the AUC label so ``_update_per_decoder_aucs``
-        can rewrite it whenever the selected timepoint changes.
+        Caller stashes the AUC label so ``_update_decoder_auc`` can rewrite
+        it whenever that decoder's timepoint changes.
         """
         row = QFrame()
         row.setObjectName("table_row")
@@ -974,7 +1055,7 @@ class EvaluationView(QWidget):
         h.addWidget(self._chip_strip(positives, kind="pos"), 2)
         h.addWidget(self._chip_strip(negatives, kind="neg"), 2)
 
-        # AUC text + colour rewritten in _update_per_decoder_aucs.
+        # AUC text + colour rewritten in _update_decoder_auc.
         auc_lbl = QLabel("—")
         auc_lbl.setStyleSheet(
             "font-family: monospace; font-size: 11px; "
@@ -1028,179 +1109,177 @@ class EvaluationView(QWidget):
         h.addStretch()
         return wrap
 
-    def _set_selected_timepoint(self, t_seconds: float) -> None:
-        """Update the Selected display + deviation hint + button states.
+    def _set_decoder_timepoint(self, task_name: str, t_seconds: float) -> None:
+        """Set ONE decoder's selected timepoint and sync just that decoder.
 
-        Called once when results arrive (with the suggested timepoint),
-        and by the AUC charts on operator click.
-
-        Picking a new timepoint **unconfirms** any previous commitment —
-        the operator has to re-press Confirm to re-lock.
+        Snaps to the nearest sample, writes ``_selected_timepoints[name]``,
+        and updates only its spinboxes (roster + tab), AUC labels, chart
+        markers, amber styling and confirm button. A *genuine* change
+        unconfirms that decoder; re-selecting the same sample keeps the
+        lock. Other decoders are untouched.
         """
-        self._selected_timepoint = t_seconds
-        if (
-            self._confirmed_timepoint is not None
-            and abs(self._confirmed_timepoint - t_seconds) > 1e-9
-        ):
-            self._confirmed_timepoint = None
+        t_seconds = self._snap_to_sample(t_seconds)
+        prev = self._selected_timepoints.get(task_name)
+        self._selected_timepoints[task_name] = t_seconds
+        # Only a genuine change unlocks — a no-op re-select keeps the lock.
+        if prev is None or abs(prev - t_seconds) > 1e-9:
+            self._confirmed[task_name] = False
 
-        suggested = (
-            float(self._result["suggested_timepoint"]) if self._result else t_seconds
-        )
+        suggested = self._suggested_timepoints.get(task_name, t_seconds)
         sel_ms = t_seconds * 1000.0
         dev_ms = abs(sel_ms - suggested * 1000.0)
+        warn = dev_ms > _DEVIATION_WARN_MS
+        color = AMBER if warn else PRIMARY_BLUE
 
-        if self._stats_selected_input is not None:
-            warn = dev_ms > _DEVIATION_WARN_MS
-            # Block signals around the programmatic setValue to avoid
-            # bouncing back through ``_on_selected_input_committed``
-            # (which would re-enter ``_set_selected_timepoint``).
-            self._stats_selected_input.blockSignals(True)
-            self._stats_selected_input.setValue(int(round(sel_ms)))
-            self._stats_selected_input.blockSignals(False)
-            self._apply_selected_input_style(AMBER if warn else PRIMARY_BLUE)
-
-        if self._stats_dev_lbl is not None:
-            if dev_ms > _DEVIATION_WARN_MS:
-                self._stats_dev_lbl.setText(f"±{dev_ms:.0f} ms from suggested")
-                self._stats_dev_lbl.show()
-            else:
-                self._stats_dev_lbl.hide()
-
-        if self._stats_reset_btn is not None:
-            # Always rendered (avoids layout shifts) — disabled at suggested.
-            self._stats_reset_btn.setEnabled(dev_ms > 1e-6)
-
-        # Mirror the new value into every per-decoder timepoint spinbox.
-        # ``blockSignals`` prevents the setValue from re-entering
-        # ``_on_decoder_input_committed`` → ``_set_selected_timepoint``.
-        for spin in self._all_timepoint_spinboxes():
-            if spin is self._stats_selected_input:
-                continue  # already updated above
+        # Mirror into both of this decoder's spinboxes (roster + tab card).
+        # ``blockSignals`` prevents setValue from re-entering the committed
+        # handlers → ``_set_decoder_timepoint``.
+        for spin in self._decoder_spinboxes(task_name):
             spin.blockSignals(True)
             spin.setValue(int(round(sel_ms)))
             spin.blockSignals(False)
-            self._apply_spinbox_input_style(spin, AMBER if warn else PRIMARY_BLUE)
+            self._apply_spinbox_input_style(spin, color)
+            spin.setToolTip(
+                f"±{dev_ms:.0f} ms from suggested ({suggested * 1000.0:.0f} ms)"
+                if warn else ""
+            )
 
-        self._update_per_decoder_aucs(t_seconds)
-        self._sync_chart_markers(t_seconds)
-        self._refresh_confirm_button()
+        self._update_decoder_auc(task_name, t_seconds)
+        # This decoder's chart markers only.
+        auc = self._decoder_auc_charts.get(task_name)
+        if auc is not None:
+            auc.set_selected_timepoint(t_seconds)
+        tgm = self._decoder_tgm_charts.get(task_name)
+        if tgm is not None:
+            tgm.set_selected_timepoint(t_seconds)
+
+        self._refresh_confirm_button(task_name)
+        self._refresh_roster_status()
         self._update_ready_state()
 
-    def _sync_chart_markers(self, t_seconds: float) -> None:
-        """Move the selected-timepoint marker / crosshair on every chart."""
-        if self._summary_auc_chart is not None:
-            self._summary_auc_chart.set_selected_timepoint(t_seconds)
-        for chart in self._decoder_auc_charts.values():
-            chart.set_selected_timepoint(t_seconds)
-        for chart in self._decoder_tgm_charts.values():
-            chart.set_selected_timepoint(t_seconds)
-
-    def _update_per_decoder_aucs(self, t_seconds: float) -> None:
-        """Rewrite the per-decoder AUC values to show AUC @ ``t_seconds``.
-
-        The "AUC PER DECODER" mini-table and the summary table's AUC
-        column always read **AUC at the selected timepoint**, never the
-        per-decoder peak (which is shown separately as ``Peak (ms)`` in
-        the summary table). Avg row = mean across decoders at ``t_seconds``.
-        """
+    def _update_decoder_auc(self, task_name: str, t_seconds: float) -> None:
+        """Rewrite one decoder's AUC@t labels — roster row, summary table
+        row, and per-decoder tab card — to show AUC at ``t_seconds``."""
         if self._result is None:
             return
         times = self._result.get("times")
-        tasks_result = self._result.get("tasks", {})
-        if times is None or not tasks_result:
+        task = self._result.get("tasks", {}).get(task_name)
+        if times is None or task is None:
             return
         import numpy as np
         idx = int(np.argmin(np.abs(np.asarray(times) - t_seconds)))
+        diag = task.get("diagonal_auc")
+        if diag is None or len(diag) <= idx:
+            return
+        v = float(diag[idx])
+        text = f"{v:.2f}"
+        colour = "#16A34A" if v >= 0.70 else "#DC2626"
 
-        aucs_at_t: list[float] = []
-        for name, task in tasks_result.items():
-            diag = task.get("diagonal_auc")
-            if diag is None or len(diag) <= idx:
-                continue
-            v = float(diag[idx])
-            aucs_at_t.append(v)
-            text = f"{v:.2f}"
-            colour = "#16A34A" if v >= 0.70 else "#DC2626"
-            stats_lbl = self._stats_auc_lbls.get(name)
-            if stats_lbl is not None:
-                stats_lbl.setText(text)
-            tbl_lbl = self._table_auc_lbls.get(name)
-            if tbl_lbl is not None:
-                tbl_lbl.setText(text)
-                tbl_lbl.setStyleSheet(
-                    "font-family: monospace; font-size: 11px; "
-                    f"font-weight: 600; color: {colour};"
-                )
-            # Per-decoder tab's stats card — same value as the Summary
-            # mini-table's row for this decoder.
-            decoder_stats = self._decoder_stats.get(name)
-            if decoder_stats is not None:
-                self._set_stat_value(decoder_stats["auc_at_t"], text)
+        roster_lbl = self._roster_auc_lbls.get(task_name)
+        if roster_lbl is not None:
+            roster_lbl.setText(text)
+            roster_lbl.setStyleSheet(
+                f"color: {colour}; font-size: 11px; font-weight: 600;"
+            )
+        tbl_lbl = self._table_auc_lbls.get(task_name)
+        if tbl_lbl is not None:
+            tbl_lbl.setText(text)
+            tbl_lbl.setStyleSheet(
+                "font-family: monospace; font-size: 11px; "
+                f"font-weight: 600; color: {colour};"
+            )
+        decoder_stats = self._decoder_stats.get(task_name)
+        if decoder_stats is not None:
+            self._set_stat_value(decoder_stats["auc_at_t"], text)
 
-        if self._stats_avg_lbl is not None and aucs_at_t:
-            self._stats_avg_lbl.setText(f"{sum(aucs_at_t) / len(aucs_at_t):.2f}")
+    def _on_roster_input_committed(self, task_name: str) -> None:
+        """Summary-roster spinbox edit handler — sets this decoder only."""
+        spin = self._roster_spins.get(task_name)
+        if not isinstance(spin, QSpinBox):
+            return
+        self._set_decoder_timepoint(task_name, spin.value() / 1000.0)
 
     def _on_decoder_input_committed(self, task_name: str) -> None:
-        """Per-decoder SELECTED TIMEPOINT spinbox edit handler.
-
-        Same snap rule as ``_on_selected_input_committed`` but reads
-        the typed value off the per-decoder spinbox, then routes through
-        the shared ``_set_selected_timepoint`` so everything (Summary
-        spinbox, chart marker, sibling decoder tabs) stays in sync.
-        """
-        if self._result is None:
-            return
+        """Per-decoder tab spinbox edit handler — sets this decoder only,
+        synced with its Summary-roster row via ``_set_decoder_timepoint``."""
         stats = self._decoder_stats.get(task_name)
         if stats is None:
             return
         spin = stats.get("timepoint")
         if not isinstance(spin, QSpinBox):
             return
-        times = self._result.get("times")
-        if times is None or len(times) == 0:
-            return
-        import numpy as np
-        typed_s = spin.value() / 1000.0
-        idx = int(np.argmin(np.abs(np.asarray(times) - typed_s)))
-        snapped = float(times[idx])
-        if abs(snapped - (self._selected_timepoint or 0.0)) < 1e-9:
-            # No-op: just snap the displayed value (e.g. 205 → 200).
-            spin.blockSignals(True)
-            spin.setValue(int(round(snapped * 1000.0)))
-            spin.blockSignals(False)
-            return
-        self._set_selected_timepoint(snapped)
+        self._set_decoder_timepoint(task_name, spin.value() / 1000.0)
 
-    def _toggle_confirm(self) -> None:
-        """Lock / unlock the currently selected timepoint locally.
+    def _toggle_confirm(self, task_name: str) -> None:
+        """Lock / unlock one decoder's timepoint.
 
-        Doesn't advance to Node 5 by itself — that's the job of the
-        journey-panel "Approve && Continue" button, which is gated by
-        ``_confirmed_timepoint is not None``. Re-clicking the in-panel
-        button unconfirms.
+        Doesn't advance to Node 5 by itself — that's the journey-panel
+        "Approve && Continue" button, gated by ``_all_confirmed()``.
         """
-        if not self._done or self._selected_timepoint is None:
+        if not self._done or task_name not in self._selected_timepoints:
             return
-        if (
-            self._confirmed_timepoint is not None
-            and abs(self._confirmed_timepoint - self._selected_timepoint) < 1e-9
-        ):
-            self._confirmed_timepoint = None
-        else:
-            self._confirmed_timepoint = self._selected_timepoint
-        self._refresh_confirm_button()
+        self._confirmed[task_name] = not self._confirmed.get(task_name, False)
+        self._refresh_confirm_button(task_name)
+        self._refresh_roster_status()
         self._update_ready_state()
 
-    def _apply_selected_input_style(self, text_color: str) -> None:
-        """Re-style the Summary tab's SELECTED TIMEPOINT spinbox."""
-        if self._stats_selected_input is None:
+    def _refresh_confirm_button(self, task_name: str) -> None:
+        """Flip one decoder's Confirm button between blue and success-green.
+
+        Inline stylesheet for both states (Qt doesn't re-polish class-based
+        QSS on its own). Fixed width keeps the row from reflowing on toggle.
+        """
+        btn = self._roster_confirm_btns.get(task_name)
+        if btn is None:
             return
-        self._apply_spinbox_input_style(self._stats_selected_input, text_color)
+        confirmed = self._confirmed.get(task_name, False)
+        btn.setEnabled(self._done)
+        if confirmed:
+            btn.setText("Locked ✓")
+            btn.setStyleSheet(
+                f"QPushButton {{ background: {SUCCESS_GREEN}; color: white; "
+                "border: none; border-radius: 2px; padding: 4px 8px; "
+                "font-size: 11px; font-weight: 600; }"
+            )
+        else:
+            btn.setText("Confirm")
+            btn.setStyleSheet(
+                f"QPushButton {{ background: {PRIMARY_BLUE}; color: white; "
+                "border: none; border-radius: 2px; padding: 4px 8px; "
+                "font-size: 11px; font-weight: 600; }"
+                f"QPushButton:hover {{ background: {PRIMARY_BLUE_HOVER}; }}"
+                f"QPushButton:disabled {{ background: #D1D5DB; "
+                f"color: {TEXT_MUTED}; }}"
+            )
+
+    def _refresh_roster_status(self) -> None:
+        """Update the ``N / M confirmed`` footer; green once all confirmed."""
+        if self._roster_status_lbl is None:
+            return
+        names = list(self._selected_timepoints.keys())
+        n_done = sum(1 for x in names if self._confirmed.get(x, False))
+        self._roster_status_lbl.setText(f"{n_done} / {len(names)} confirmed")
+        all_done = bool(names) and n_done == len(names)
+        colour = SUCCESS_GREEN if all_done else TEXT_MUTED
+        self._roster_status_lbl.setStyleSheet(
+            f"color: {colour}; font-size: 11px; font-weight: 600;"
+        )
+
+    def _reset_all_to_suggested(self) -> None:
+        """Reset every decoder to its own suggested peak — a clean slate.
+
+        Explicitly unconfirms all decoders (unlike the per-edit guard in
+        ``_set_decoder_timepoint``), so a decoder already sitting at its
+        suggested value is also unlocked.
+        """
+        for name, t in self._suggested_timepoints.items():
+            self._confirmed[name] = False
+            self._set_decoder_timepoint(name, t)
+        self._refresh_roster_status()
 
     @staticmethod
     def _apply_spinbox_input_style(spin: QSpinBox, text_color: str) -> None:
-        """Style any SELECTED TIMEPOINT spinbox as a visible input field.
+        """Style any timepoint spinbox as a visible input field.
 
         Light border + padded background so the operator can tell the
         value is editable, plus a focused-state highlight + visible
@@ -1239,75 +1318,6 @@ class EvaluationView(QWidget):
             f"border-top: 5px solid {TEXT_MUTED}; "
             "} "
         )
-
-    def _refresh_confirm_button(self) -> None:
-        """Flip Confirm Timepoint between primary-blue and success-green.
-
-        Uses an inline stylesheet for **both** states. The first attempt
-        toggled `setProperty("class", ...)` and relied on the global
-        QSS to re-apply, but Qt doesn't re-polish on its own — the button
-        was left unstyled (invisible on the white card, but still
-        clickable) after unconfirming.
-        """
-        btn = self._stats_confirm_btn
-        if btn is None:
-            return
-        confirmed = (
-            self._confirmed_timepoint is not None
-            and self._selected_timepoint is not None
-            and abs(self._confirmed_timepoint - self._selected_timepoint) < 1e-9
-        )
-        btn.setEnabled(self._done)
-        if confirmed:
-            btn.setText("Timepoint Confirmed ✓")
-            btn.setStyleSheet(
-                f"QPushButton {{ background: {SUCCESS_GREEN}; color: white; "
-                "border: none; border-radius: 2px; padding: 6px 20px; "
-                "font-size: 13px; font-weight: 600; }"
-            )
-        else:
-            btn.setText("Confirm Timepoint")
-            btn.setStyleSheet(
-                f"QPushButton {{ background: {PRIMARY_BLUE}; color: white; "
-                "border: none; border-radius: 2px; padding: 6px 20px; "
-                "font-size: 13px; font-weight: 600; }"
-                f"QPushButton:hover {{ background: {PRIMARY_BLUE_HOVER}; }}"
-                f"QPushButton:disabled {{ background: #D1D5DB; "
-                f"color: {TEXT_MUTED}; }}"
-            )
-
-    def _reset_to_suggested(self) -> None:
-        if self._result is None:
-            return
-        self._set_selected_timepoint(float(self._result["suggested_timepoint"]))
-
-    def _on_selected_input_committed(self) -> None:
-        """Handle a typed/spinned change to the SELECTED TIMEPOINT input.
-
-        Snaps the entered ms to the nearest sample in ``times`` (same
-        rule chart-click uses) so the displayed AUC always matches a
-        real backend score. Programmatic ``setValue`` calls go through
-        ``blockSignals`` to keep this from re-entering when the chart
-        click drives a change.
-        """
-        if self._result is None or self._stats_selected_input is None:
-            return
-        times = self._result.get("times")
-        if times is None or len(times) == 0:
-            return
-        typed_s = self._stats_selected_input.value() / 1000.0
-        import numpy as np
-        idx = int(np.argmin(np.abs(np.asarray(times) - typed_s)))
-        snapped = float(times[idx])
-        # Avoid a no-op feedback loop if the spinbox value already
-        # matches the snapped sample.
-        if abs(snapped - (self._selected_timepoint or 0.0)) < 1e-9:
-            # Still snap the displayed value so e.g. "205" → "200".
-            self._stats_selected_input.blockSignals(True)
-            self._stats_selected_input.setValue(int(round(snapped * 1000.0)))
-            self._stats_selected_input.blockSignals(False)
-            return
-        self._set_selected_timepoint(snapped)
 
     def _jump_to_decoder_tab(self, task_name: str) -> None:
         tab = self._per_decoder_tabs.get(task_name)
@@ -1350,16 +1360,15 @@ class EvaluationView(QWidget):
         # Page 0 → trigger_run (ready when session set, preprocessing done,
         # nothing running)
         # Page 1 → trigger_confirm (ready once results are displayed AND
-        # the operator has locally confirmed a timepoint via the in-panel
-        # Confirm button — the journey-panel "Approve && Continue" stays
-        # disabled until this).
+        # EVERY decoder's timepoint has been confirmed in the roster — the
+        # journey-panel "Approve && Continue" stays disabled until then).
         page0_ready = (
             self._session is not None
             and self._preproc_done
             and not self._running
             and not self._done
         )
-        page1_ready = self._done and self._confirmed_timepoint is not None
+        page1_ready = self._done and self._all_confirmed()
         ready = page0_ready or page1_ready
         if ready != self._was_ready:
             self._was_ready = ready
