@@ -1,6 +1,8 @@
 # Data directory - raw data files should not be committed
 /data/
 
+/semester_a_data/
+
 # Debug-mode snapshots (joblib dumps from scripts/demo_seed_debug_snapshots).
 # Each developer regenerates their own; never commit. See
 # src/frontend/debug/README.md.

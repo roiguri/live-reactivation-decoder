@@ -27,7 +27,7 @@ Use this folder to answer:
 - [Historical Online System Architecture.md](Historical%20Online%20System%20Architecture.md): older target architecture and system context, kept for reference
 - [Lab Equipment & LSL.md](Lab%20Equipment%20%26%20LSL.md): confirmed lab-side operational facts and integration notes
 - [Phase2_Implementation_Plan.md](../../../docs/Phase2_Implementation_Plan.md): current implementation plan for the missing Phase 2 components
-- [Decoder Pipeline Investigation.md](Decoder%20Pipeline%20Investigation.md): end-to-end record of the offline/online parity investigation — root causes, fixes applied, before/after comparison, open questions for live deployment
+- [Decoder_Pipeline_Results.md](../../../docs/Decoder_Pipeline_Results.md): end-to-end record of the offline/online parity investigation (root causes, fixes, before/after) plus the semester-A cross-subject reproduction
 
 ## How To Use These Together
 
