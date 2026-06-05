@@ -147,7 +147,10 @@ class TestRunEvaluation:
         assert set(result["tasks"].keys()) == expected
 
     def test_per_task_keys(self, result, evaluator_settings):
-        required = {"diagonal_auc", "tgm_matrix", "peak_auc", "chance_level"}
+        required = {
+            "diagonal_auc", "tgm_matrix", "peak_auc", "peak_timepoint",
+            "chance_level",
+        }
         for task_data in result["tasks"].values():
             assert set(task_data.keys()) == required
 
@@ -164,6 +167,13 @@ class TestRunEvaluation:
     def test_peak_auc_equals_max_diagonal(self, result):
         for task_data in result["tasks"].values():
             assert task_data["peak_auc"] == pytest.approx(np.max(task_data["diagonal_auc"]))
+
+    def test_peak_timepoint_is_diagonal_argmax_time(self, result):
+        times = result["times"]
+        for task_data in result["tasks"].values():
+            expected = float(times[int(np.argmax(task_data["diagonal_auc"]))])
+            assert task_data["peak_timepoint"] == pytest.approx(expected)
+            assert task_data["peak_timepoint"] in times
 
     def test_chance_level_is_half(self, result):
         for task_data in result["tasks"].values():

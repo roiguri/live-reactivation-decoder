@@ -360,6 +360,33 @@ class TestRunTraining:
         assert "spatial_patterns" in result
         assert "mne_info" in result
 
+    def test_dict_timepoints_used_verbatim_with_mean_representative(
+        self, tmp_path: Path, synthetic_epochs: mne.EpochsArray, evaluator_settings: dict
+    ) -> None:
+        """An explicit per-task dict is stored verbatim; the singular
+        ``decoding_timepoint`` becomes the mean (no auto-derivation)."""
+        sm = MagicMock()
+        sm.get_decoder_settings.return_value = evaluator_settings
+        orc = _make_orchestrator(tmp_path, sm)
+        _attach_preprocessor_stub(orc)
+        orc._epochs = synthetic_epochs
+        task_names = [t["name"] for t in evaluator_settings["tasks"]]
+        _attach_eval_results_stub(orc, synthetic_epochs, task_names)
+
+        # Distinct per-decoder timepoints (the whole point of the feature).
+        chosen = {
+            name: float(synthetic_epochs.times[5 + 3 * i])
+            for i, name in enumerate(task_names)
+        }
+        orc.run_training(chosen)
+
+        spec = orc._live_artifact_spec
+        assert spec is not None
+        assert spec.metadata.decoding_timepoints == pytest.approx(chosen)
+        assert spec.metadata.decoding_timepoint == pytest.approx(
+            float(np.mean(list(chosen.values())))
+        )
+
 
 # ── TestGetLiveArtifactSpec ───────────────────────────────────────────────────
 

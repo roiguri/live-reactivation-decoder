@@ -220,18 +220,27 @@ class OfflineOrchestrator:
         )
         return self._eval_results
 
-    def run_training(self, timepoint: float) -> dict[str, Any]:
+    def run_training(self, timepoints: float | dict[str, float]) -> dict[str, Any]:
         """
-        Train one classifier per task, each at ITS OWN cross-validated peak
-        timepoint (Step C). The ``timepoint`` arg is kept as the representative
-        / shared-suggestion value and stored in metadata for backward
-        compatibility; the per-task peaks come from
-        ``self._eval_results['tasks'][name]['diagonal_auc']``.
+        Train one classifier per task, each at its own timepoint.
+
+        Two calling conventions:
+
+        * ``dict[str, float]`` — an explicit per-task ``{task_name: time_s}`` map
+          (the operator-chosen timepoints from the Evaluation UI). Used directly;
+          the representative ``decoding_timepoint`` becomes the mean of the values.
+        * ``float`` — a single representative time. Each task is auto-assigned its
+          own cross-validated peak via ``_derive_per_task_timepoints`` (argmax of
+          its ``diagonal_auc``), falling back to this value if a task has none.
+
+        TODO(stage5-cleanup): drop the ``float`` convention (and
+        ``_derive_per_task_timepoints``) once the UI + seed always pass an explicit
+        per-task dict; signature becomes ``dict[str, float]`` only. See
+        docs/feature_plans/per_decoder_timepoint_selection.md.
 
         Args:
-            timepoint: Representative time in seconds (e.g. the cross-decoder
-                CV-average peak). Used as the metadata's ``decoding_timepoint``
-                and as a fallback if a task has no diagonal_auc entry.
+            timepoints: Either a per-task ``{name: seconds}`` dict, or a single
+                representative time in seconds.
 
         Returns:
             {
@@ -248,11 +257,20 @@ class OfflineOrchestrator:
         if self._eval_results is None:
             raise RuntimeError("Call run_evaluation() before run_training().")
 
-        per_task_timepoints = self._derive_per_task_timepoints(
-            eval_results=self._eval_results,
-            fallback_timepoint=timepoint,
-            task_configs=self._settings.get_decoder_settings()["tasks"],
-        )
+        if isinstance(timepoints, dict):
+            per_task_timepoints = {k: float(v) for k, v in timepoints.items()}
+            # Representative value kept for the backward-compatible singular
+            # ``decoding_timepoint`` metadata field.
+            representative = float(np.mean(list(per_task_timepoints.values())))
+        else:
+            # TODO(stage5-cleanup): legacy single-float path — remove with
+            # _derive_per_task_timepoints once all callers pass a dict.
+            representative = float(timepoints)
+            per_task_timepoints = self._derive_per_task_timepoints(
+                eval_results=self._eval_results,
+                fallback_timepoint=representative,
+                task_configs=self._settings.get_decoder_settings()["tasks"],
+            )
 
         trainer = ModelTrainer(self._epochs, self._settings.get_decoder_settings())
         training_results = trainer.run_training(per_task_timepoints)
@@ -263,7 +281,10 @@ class OfflineOrchestrator:
             online_state=preprocessor_state,
             metadata=DecoderPipelineMetadata(
                 feature_width=len(preprocessor_state["eeg_chunk_indices"]),
-                decoding_timepoint=timepoint,
+                # TODO(stage5-cleanup): ``decoding_timepoint`` (singular) is the
+                # backward-compatible representative; the per-task dict below is
+                # authoritative. Keep until consumers stop reading the singular.
+                decoding_timepoint=representative,
                 decoding_timepoints=per_task_timepoints,
             ),
         )
@@ -292,6 +313,11 @@ class OfflineOrchestrator:
         evaluator output and return the time corresponding to ``argmax``. Tasks
         that lack a diagonal_auc fall back to ``fallback_timepoint`` (the
         shared cross-decoder average).
+
+        TODO(stage5-cleanup): only the legacy ``float`` ``run_training`` path
+        uses this. The evaluator now exposes ``tasks[name]['peak_timepoint']``
+        (the same argmax), so this can be removed once that path is dropped.
+        See docs/feature_plans/per_decoder_timepoint_selection.md.
         """
         times = np.asarray(eval_results["times"], dtype=float)
         per_task_results = eval_results.get("tasks", {})
