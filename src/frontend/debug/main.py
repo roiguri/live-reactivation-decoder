@@ -5,22 +5,29 @@ Builds the production app with :class:`DebugPhase1Screen` instead of
 unaffected** and imports nothing from this package.
 
 CLI flags:
-* (no flag) — opens the Phase 1 debug walkthrough.
-* ``--phase2`` — opens :class:`Phase2Screen` directly with a session
-  built from the default config + the snapshot training step's
-  decoder pipeline. Skips the whole Phase 1 click-through.
+* (no flag) — opens the Phase 1 debug walkthrough for the default profile.
+* ``--phase2`` — opens :class:`Phase2Screen` directly with a session built
+  from the profile's config + its ``models/decoder_pipeline.joblib``. Skips
+  the whole Phase 1 click-through.
+* ``--profile <name>`` — selects a debug profile (see
+  ``frontend.debug.profiles``); applies to both entry points. Defaults to a
+  profile named ``default``, or the sole profile if only one exists.
+* ``--list-profiles`` — print the discovered profiles and exit.
+* ``--config`` / ``--data`` — override the profile's config / raw-data path.
 """
 from __future__ import annotations
 
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 import mne
 from PyQt6.QtWidgets import QApplication
 
 from frontend.debug.phase1_screen_debug import DebugPhase1Screen
 from frontend.debug.phase2_screen_debug import build_debug_phase2
+from frontend.debug.profiles import list_profiles, resolve_profile
 from frontend.main_window import MainWindow
 from frontend.styles.theme import GLOBAL_QSS
 
@@ -53,12 +60,38 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Skip the Phase 1 walkthrough and open Phase 2 directly.",
     )
+    parser.add_argument(
+        "--profile",
+        default=None,
+        help="Debug profile name (default: 'default', or the sole profile).",
+    )
+    parser.add_argument(
+        "--list-profiles",
+        action="store_true",
+        help="Print the discovered debug profiles and exit.",
+    )
+    parser.add_argument(
+        "--config", type=Path, default=None,
+        help="Override the profile's experiment config path.",
+    )
+    parser.add_argument(
+        "--data", type=Path, default=None,
+        help="Override the profile's raw-data directory.",
+    )
     return parser.parse_args(argv)
 
 
 def main() -> None:
     args = _parse_args(sys.argv[1:])
     _configure_logging()
+
+    if args.list_profiles:
+        names = list_profiles()
+        print("\n".join(names) if names else "(no profiles — run the seeder)")
+        return
+
+    profile = resolve_profile(args.profile, config=args.config, data=args.data)
+
     _select_mne_browser_backend()
 
     app = QApplication(sys.argv)
@@ -66,9 +99,9 @@ def main() -> None:
 
     window = MainWindow()
     if args.phase2:
-        window.show_screen(build_debug_phase2())
+        window.show_screen(build_debug_phase2(profile))
     else:
-        window.show_screen(DebugPhase1Screen())
+        window.show_screen(DebugPhase1Screen(profile))
     window.show()
 
     sys.exit(app.exec())

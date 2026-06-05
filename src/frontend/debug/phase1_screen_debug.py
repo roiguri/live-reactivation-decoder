@@ -38,6 +38,7 @@ from PyQt6.QtWidgets import (
 )
 
 from backend.session import AppSession
+from frontend.debug.profiles import DebugProfile, resolve_profile
 from frontend.debug.snapshots import load_snapshot
 from frontend.screens.phase1_screen import Phase1Screen, _NODE_TITLES
 from frontend.styles.theme import (
@@ -47,12 +48,6 @@ from frontend.styles.theme import (
 logger = logging.getLogger(__name__)
 
 _DEBUG_PREFIX = "[DEBUG] "
-_DEFAULT_CONFIG = Path("debug_snapshots/experiment_config.yaml")
-_DEFAULT_OUTPUT = Path("debug_snapshots")
-_DEFAULT_DATA = Path("data/subject_101/split/functional_localizer")
-_PREPROC_SNAPSHOT = _DEFAULT_OUTPUT / "preproc_done.joblib"
-_EVAL_SNAPSHOT = _DEFAULT_OUTPUT / "eval_done.joblib"
-_TRAIN_SNAPSHOT = _DEFAULT_OUTPUT / "train_done.joblib"
 
 
 @dataclass
@@ -64,9 +59,12 @@ class _Step:
 class DebugPhase1Screen(Phase1Screen):
     """Phase1Screen + Next/Prev walkthrough toolbar."""
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, profile: DebugProfile | None = None, parent=None) -> None:
         super().__init__(parent)
 
+        self._profile: DebugProfile = (
+            profile if profile is not None else resolve_profile()
+        )
         self._step_idx: int = 0
         self._steps: list[_Step] = [
             _Step("Load config",              self._step_load_config),
@@ -233,10 +231,10 @@ class DebugPhase1Screen(Phase1Screen):
 
     def _step_load_config(self) -> None:
         """1: build an AppSession ourselves, populate SettingsView's display."""
-        session = AppSession(_DEFAULT_CONFIG)
+        session = AppSession(self._profile.config_path)
         self._fake_picker(
             self._settings_view._config_picker,
-            str(_DEFAULT_CONFIG.resolve()),
+            str(self._profile.config_path),
         )
         # _on_config_loaded sets _temp_session + _config_path and populates
         # the read-only display fields — same effect as the ConfigLoaderWorker
@@ -245,8 +243,8 @@ class DebugPhase1Screen(Phase1Screen):
 
     def _step_pick_output(self) -> None:
         """2: fake the output-directory picker."""
-        _DEFAULT_OUTPUT.mkdir(parents=True, exist_ok=True)
-        path = str(_DEFAULT_OUTPUT.resolve())
+        self._profile.root_dir.mkdir(parents=True, exist_ok=True)
+        path = str(self._profile.root_dir.resolve())
         self._fake_picker(self._settings_view._output_picker, path)
         self._settings_view._on_output_dir_selected(path)
 
@@ -256,7 +254,7 @@ class DebugPhase1Screen(Phase1Screen):
 
     def _step_pick_data(self) -> None:
         """4: fake the demo data folder pick."""
-        path = str(_DEFAULT_DATA.resolve())
+        path = str(self._profile.raw_data_dir)
         self._fake_picker(self._load_data_view._picker, path)
         self._load_data_view._on_dir_selected(path)
 
@@ -274,9 +272,10 @@ class DebugPhase1Screen(Phase1Screen):
 
     def _step_skip_preproc(self) -> bool | None:
         """7: load preproc snapshot + force Preprocessing view into Complete state."""
-        if not self._require_snapshot(_PREPROC_SNAPSHOT):
+        preproc_snap = self._profile.snapshot_paths["preproc"]
+        if not self._require_snapshot(preproc_snap):
             return False
-        load_snapshot(self.session.offline, _PREPROC_SNAPSHOT)
+        load_snapshot(self.session.offline, preproc_snap)
         pre = self.session.offline._preprocessor
         epochs = self.session.offline._epochs
         n_epochs = len(epochs) if epochs is not None else 0
@@ -299,15 +298,16 @@ class DebugPhase1Screen(Phase1Screen):
 
     def _step_skip_eval(self) -> bool | None:
         """9: load eval snapshot + populate Evaluation results."""
-        if not self._require_snapshot(_EVAL_SNAPSHOT):
+        eval_snap = self._profile.snapshot_paths["eval"]
+        if not self._require_snapshot(eval_snap):
             return False
-        snap = load_snapshot(self.session.offline, _EVAL_SNAPSHOT)
+        snap = load_snapshot(self.session.offline, eval_snap)
         eval_results = snap.get("_eval_results")
         if eval_results is None:
             QMessageBox.warning(
                 self,
                 "Bad snapshot",
-                f"{_EVAL_SNAPSHOT} has no '_eval_results'; re-run the seeder.",
+                f"{eval_snap} has no '_eval_results'; re-run the seeder.",
             )
             return False
         self._evaluation_view._preproc_done = True
@@ -326,15 +326,16 @@ class DebugPhase1Screen(Phase1Screen):
         with a fake result dict shaped exactly like ``run_training``
         returns.
         """
-        if not self._require_snapshot(_TRAIN_SNAPSHOT):
+        train_snap = self._profile.snapshot_paths["train"]
+        if not self._require_snapshot(train_snap):
             return False
-        load_snapshot(self.session.offline, _TRAIN_SNAPSHOT)
+        load_snapshot(self.session.offline, train_snap)
         ui_state = self.session.offline._ui_state or {}
         spec = self.session.offline._live_artifact_spec
         # In a real run the file is written before _on_train_done; the
         # walkthrough fakes the same string so the path field has
         # something to show.
-        fake_path = _DEFAULT_OUTPUT / "models" / "decoder_pipeline.joblib"
+        fake_path = self._profile.pipeline_path
         result = {
             "model_filepath": fake_path,
             "spatial_patterns": ui_state.get("spatial_patterns", {}),

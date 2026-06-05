@@ -17,14 +17,35 @@ M1 shipped the Phase 2 live-inference POC on branch `feat/phase2-live-ui` (13 co
 - `LiveProbabilityChart`: 10 s rolling window, 30 Hz repaint, ring-buffered, chance + threshold + NOW reference lines.
 - Start/Halt button with three visual states. One-shot session rebuild on restart.
 - `prediction_ready` signal forwarded to the chart via `QueuedConnection`.
+- **LSL Stream Picker** (Goal 3) — header-launched `TargetSelectionDialog` with manual refresh.
+- **Event markers on the probability graph** (Goal 2) — trigger codes resolved against the configured event map and rendered as labelled vertical lines.
 - 14 headless lifecycle tests covering button states, error paths, close cleanup, prediction forwarding.
 
 **What does not work or is unverified:**
-- The XDF recording used for testing (`scripts/recordings/eeg_recording_with_trigger.xdf`) contains no stimulus events (trigger codes 31-110, but no 11/12/13 for red/green/yellow). Predictions on this data are noise — we have not yet seen the online pipeline produce meaningful class-correlated predictions.
-- `OnlinePreprocessor.lsl_to_si_scale=1e-6` converts LSL microvolts to SI volts. Verified by z-score analysis against the fitted scaler, but not yet validated end-to-end against the offline pipeline on data with known labels.
-- ~~`markers` from `prediction_ready` are emitted but ignored by the UI.~~ Now rendered as cue lines on the chart (Goal 2) — pending manual replay verification.
-- `latency_ready` signal is emitted but not consumed by the UI.
-- No back button, no exit confirmation, no decision settings, no logging.
+- **Pipeline fidelity is the open blocker.** Online predictions have never been validated against the offline pipeline on labeled data. A known ~60 ms pipeline group delay plus a causal-vs-zero-phase filter mismatch (see `online-inference-fidelity-bug`, diagnosed 2026-05-30) makes live inference *look* dead even when it is recoverable. **Goal 18 (Group Delay Deep Dive) characterizes this before any further UI work assumes the predictions are trustworthy.**
+- The XDF recording used for early testing (`scripts/recordings/eeg_recording_with_trigger.xdf`) contains no stimulus events (trigger codes 31-110, but no 11/12/13 for red/green/yellow). Predictions on that data are noise. Validation must replay actual training data (`.vhdr`) via `scripts/replay_vhdr_to_lsl.py`.
+- `latency_ready` is emitted by `StreamWorker` but consumed by nobody.
+- `PredictionLogger` exists but is never wired: `build_live_stream_session(log_path=None)`.
+- No back button, no exit confirmation, no decision settings.
+
+---
+
+## Priority Sequence (revised 2026-06-05)
+
+M2 is re-sequenced around one principle: **nothing downstream is meaningful until live predictions are proven trustworthy.** The first four items below build the diagnostic scaffolding, diagnose the fidelity bug, capture the evidence, and close the validation gate. The frozen event graph is the first "real" feature that rides on validated predictions. After that, the backlog resumes as originally planned.
+
+| Seq | Goal | What it unlocks |
+|-----|------|-----------------|
+| **1** | Goal 17 — Debug Profiles | Repeatable runs with different settings + debug data; prerequisite for every diagnostic below |
+| **2** | Goal 18 — Group Delay Deep Dive | Characterizes the ~60 ms delay + filter mismatch; produces a delay constant the next steps consume |
+| **3** | Goal 7 — System Logging (prediction + latency timepoints) | Persists the evidence validation needs |
+| **4** | Goal 1 — Pipeline Validation (Steps 2-4) | Closes the trust gate using profiles (1), the delay model (2), and logs (3) |
+| **5** | Goal 9 — Frozen Event Graph | First UI feature on validated predictions |
+| backlog | Goals 4, 5, 6, 8, 10, 11, 13, 14, 15, 16 | Resume original plan |
+
+> **Phase 1 cross-cutting note — per-decoder training timepoint selection.** Each decoder is trained at a **single** timepoint, and the backend **already supports a *different* timepoint per decoder**: `ModelTrainer.run_training()` accepts `dict[str, float]` (task → one timepoint), the trained feature stays `n_channels` wide, and `DecoderPipelineMetadata.decoding_timepoints` carries the per-task values. This is *not* multi-timepoint/multi-slice training — there is no `n_channels × k` feature and **no online impact**: `LiveInferenceEngine.predict()` runs every decoder on the same sliding `feature_width` window, and each fires when its pattern slides through.
+>
+> The **only** missing piece is the **Phase 1 (offline) UI** to let the operator *choose/override* each decoder's timepoint. Today `OfflineOrchestrator.run_training()` auto-fills the per-task dict from `argmax` of each task's `diagonal_auc` (`_derive_per_task_timepoints`); the evaluation step already computes those per-task curves, so the UI work is to surface them and pass an **operator-selected** dict instead of the auto-derived one. **Deliberately out of M2 (Phase-2 UI) scope** — tracked here only as the cross-reference; the actual work belongs in a Phase 1 plan.
 
 ---
 
@@ -32,9 +53,9 @@ M1 shipped the Phase 2 live-inference POC on branch `feat/phase2-live-ui` (13 co
 
 | Issue | Status | Notes |
 |-------|--------|-------|
+| Online/offline pipeline fidelity (group delay + filter mismatch) | Open — Goal 18 | ~60 ms group delay + causal-vs-zero-phase mismatch makes live inference look dead. Recoverable with delay compensation. See `online-inference-fidelity-bug`. |
 | LSL unit scaling removed | Open — lab validation needed | The `lsl_to_si_scale=1e-6` factor was removed: VHDR replay via `PlayerLSL` streams in SI volts (MNE converts on load), so the scaling was incorrect for replay. Whether NeurOne's LSL proxy outputs µV or V is unverified — test in the lab and re-add scaling if needed. |
-| No pipeline validation | Open | Online predictions have never been verified against offline on the same labeled data. |
-| XDF test recording has no stimulus events | Open | Current replay file is from a non-task block. Need to replay actual training data (.vhdr) to validate. |
+| XDF test recording has no stimulus events | Open | Current replay file is from a non-task block. Validation replays actual training data (.vhdr). |
 | Proxy auto-launch during discovery | Open — [#3] | `discover_streams` / `start_stream_source` always launch `LSLProxy.exe`; redundant and risks a `NeuroneStream` name collision when an external stream is already publishing. |
 | Stream-source locking model | Open — [#1] | `AppSession`'s coarse lock around the stream source held across the blocking proxy launch — revisit. |
 
@@ -55,30 +76,96 @@ Work from `feat/phase2-stream-selection` lands several M2 items early and change
 
 ## Goals
 
-| # | Goal | Status |
-|---|------|--------|
-| 1 | Pipeline Validation | Step 1 (replay script) done; validation pending |
-| 2 | Event Markers on Probability Graph | In progress — rendering done; manual replay verification pending |
-| 3 | LSL Stream Picker | ✅ Done (stream-selection branch) |
-| 4 | Trigger Log | Not started |
-| 5 | Decision History Strip | Not started |
-| 6 | Latency Display + Buffer Health | Not started |
-| 7 | Subject-Folder Log Paths | Not started |
-| 8 | Decision Settings UI | Not started |
-| 9 | Frozen Event Graph | Not started |
-| 10 | Back Button + Exit Flow | Not started |
-| 11 | Past Events Dropdown | Not started |
-| 12 | Unified Source Picker (XDF Replay) | Revised — replay via external script; in-app picker descoped |
-| 13 | Modular Graph Layouts | Not started |
-| 14 | Per-Decoder Colour Picker | Not started |
-| 15 | Probability Graph Window Length | Not started |
-| 16 | Probability Graph History View | Not started — needs UX discussion |
+| # | Goal | Status | Seq |
+|---|------|--------|-----|
+| 17 | Debug Profiles | ✅ Done (1 profile seeded; validation profile pending) | **1** |
+| 18 | Group Delay Deep Dive | Not started | **2** |
+| 7 | System Logging (prediction + latency timepoints) | Not started | **3** |
+| 1 | Pipeline Validation | Step 1 (replay script) done; Steps 2-4 pending | **4** |
+| 9 | Frozen Event Graph | Not started | **5** |
+| 2 | Event Markers on Probability Graph | ✅ Done | — |
+| 3 | LSL Stream Picker | ✅ Done (stream-selection branch) | — |
+| 4 | Trigger Log | Not started | backlog |
+| 5 | Decision History Strip | Not started | backlog |
+| 6 | Latency Display + Buffer Health | Not started | backlog |
+| 8 | Decision Settings UI | Not started | backlog |
+| 10 | Back Button + Exit Flow | Not started | backlog |
+| 11 | Past Events Dropdown | Not started | backlog |
+| 12 | Unified Source Picker (XDF Replay) | Revised — replay via external script; in-app picker descoped | — |
+| 13 | Modular Graph Layouts | Not started | backlog |
+| 14 | Per-Decoder Colour Picker | Not started | backlog |
+| 15 | Probability Graph Window Length | Not started | backlog |
+| 16 | Probability Graph History View | Not started — needs UX discussion | backlog |
+| 19 | Per-Decoder Timepoint Selection (Phase 1 offline UI) | Not started — backend ready | Phase 1 |
 
 ---
 
-## Goal 1 — Pipeline Validation
+# Critical Path
 
-Prove that the online pipeline produces meaningful, class-correlated predictions on data with known labels. This is the foundation — all subsequent UI work assumes the predictions are trustworthy.
+## Goal 17 — Debug Profiles (Seq 1) — ✅ Done
+
+`python -m frontend.debug.main --phase2` was hardcoded to one config and one pipeline. Diagnosing the fidelity bug and validating the pipeline both need to swap *settings*, *trained artifact*, and *replay recording* together, repeatably. A **debug profile** bundles those so a single flag selects a known scenario.
+
+Implemented as **self-describing directories** (not a central registry): each `debug_snapshots/<name>/` carries a minimal `manifest.yaml` (`name`, copied-in `config`, `raw_data_dir` path-only) plus the snapshots, `models/`, and `epochs/` it produces. Discovery lists subdirs with a manifest. Self-contained in `src/frontend/debug/`; production `frontend.main` stays byte-for-byte unaffected. Full design + usage: [docs/features/debug_profiles.md](features/debug_profiles.md) and `src/frontend/debug/README.md`.
+
+- [x] `DebugProfile` (`src/frontend/debug/profiles.py`) — resolved paths from a 3-field manifest. *Trimmed from the original sketch: no central registry, no `stream_name`/`notes`/explicit `pipeline` fields (snapshot/pipeline/epochs paths are conventions); add back if needed.*
+- [x] `frontend.debug.main` gains `--profile <name>`, `--list-profiles`, and `--config` / `--data` overrides (pipeline path is a convention, so no `--pipeline`)
+- [x] `build_debug_phase2(profile)` resolves config + pipeline from the profile; **also** `DebugPhase1Screen(profile)` (the Phase 1 walkthrough is now profile-driven too — beyond the original Phase-2-only scope)
+- [x] Each profile records the recording (`raw_data_dir`) the operator replays via `scripts/replay_vhdr_to_lsl.py` (app stays a pure consumer; replay out-of-process per Goal 12)
+- [ ] **Pending:** a second labeled-training-data profile for validation (Goal 1). One profile (`default`) is seeded so far.
+- [x] `scripts/demo_seed_debug_snapshots.py` is profile-aware (bootstrap copies the config in + writes the manifest; re-seed reuses it) and writes the snapshots inside the profile dir
+- [x] Verified: `--list-profiles` prints the registry; the `default` artifact loads with all 3 decoders + online_state + metadata; 14 `test_debug_profiles` tests pass. *GUI launch against the profile left to the operator.*
+
+---
+
+## Goal 18 — Group Delay Deep Dive (Seq 2)
+
+**The fidelity gate.** Before logging or validation, characterize *why* live inference looks dead. The known diagnosis (`online-inference-fidelity-bug`, 2026-05-30): a ~60 ms pipeline group delay plus a causal (online, `lfilter`-style) vs zero-phase (offline, `filtfilt`) filter mismatch. Offline features are computed from a centred, non-causal window; online features come from a causal sliding window, so the same neural event appears **later and differently shaped** online. The goal is a written characterization and a concrete delay/compensation model the downstream steps consume — not a UI change.
+
+Existing diagnostic assets to build on: `scripts/preproc_parity_check.py`, `scripts/offline_inference_check.py`, `scripts/full_recording_live_inference_check.py`, `scripts/inspect_decoder_internals.py`, and `knowledge_base/01_timeline/03_online_stage_design/Decoder Pipeline Investigation.md`.
+
+**Characterize:**
+- [ ] Drive a known signal (impulse / labeled epoch) through `OnlinePreprocessor` and `OfflinePreprocessor` and measure the time lag of matching features (cross-correlation peak)
+- [ ] Decompose the delay per stage: causal highpass, notch, lowpass, decimation/`final_resample` — quantify each contribution and the total
+- [ ] Quantify shape distortion (not just lag): correlation and scale of the causal vs zero-phase feature at the aligned timepoint
+- [ ] Confirm whether the offline decoders' training timepoints (`decoding_timepoints`) sit where the causal pipeline can actually reach them in real time
+
+**Decide compensation strategy (pick and document):**
+- [ ] (a) **Alignment-only** — treat the delay as a constant `group_delay_ms`; shift marker/prediction timestamps by it when logging/comparing (cheapest; no signal change)
+- [ ] (b) **Filter-matched** — redesign online filters (e.g. shorter causal filters, or a min-phase design) to reduce the delay/distortion, trading fidelity for latency
+- [ ] (c) **Accept + document** — if classification survives the delay, record the gap as a known characteristic
+
+**Output (consumed by Goals 7 and 1):**
+- [ ] A written characterization committed under `knowledge_base/` (extend the Decoder Pipeline Investigation note)
+- [ ] A single `group_delay_ms` constant (and its provenance) that System Logging stamps and Pipeline Validation uses for offline/online alignment
+- [ ] A go/no-go call on whether the online preprocessor needs adjustment before validation, or whether alignment compensation is sufficient
+
+---
+
+## Goal 7 — System Logging (prediction + latency timepoints) (Seq 3)
+
+Wire persistent logging so the validation step has hard evidence and live sessions are auditable. `PredictionLogger` already writes `timestamp, marker_code, <per-task probs>` to CSV but is **never instantiated** (`build_live_stream_session(log_path=None)`). `StreamWorker.latency_ready` emits a full per-batch timing breakdown (pull / accumulation / preprocessing / inference / emit ms, plus `pending_samples`) that **no one consumes**. This goal connects both, and stamps the `group_delay_ms` from Goal 18 so logged prediction timepoints are interpretable against marker times.
+
+**Prediction log (extends Goal 7's original "Subject-Folder Log Paths"):**
+- [ ] Determine the per-subject/session directory layout for Phase 2 logs (per PRD directory structure)
+- [ ] `Phase2Screen` / `AppSession` resolves the log path from the current subject/session
+- [ ] `build_live_stream_session(log_path=...)` passes a real path instead of `None`
+- [ ] CSV logging starts on Start, file closes on Halt
+- [ ] Each prediction row carries the wall-clock prediction timepoint and the marker-aligned timepoint (apply `group_delay_ms` from Goal 18)
+
+**Latency / timing log:**
+- [ ] A second sink consumes `latency_ready` and persists per-batch timing (or rolling p50/p95) + backlog (`pending_samples`)
+- [ ] Throttle/aggregate so the ~25 Hz `latency_ready` stream does not bloat the log (rolling summary, not every batch)
+
+- [ ] Verified: after a live replay session, a prediction CSV and a timing log exist at the expected paths with correct columns, and prediction timepoints line up with replayed markers once the group delay is applied
+
+> Goals 4 (Trigger Log) and 6 (Latency Display + Buffer Health) are the **UI views** of this same data and remain in the backlog; this goal is the persistence/backend half they will later surface.
+
+---
+
+## Goal 1 — Pipeline Validation (Seq 4)
+
+Prove that the online pipeline produces meaningful, class-correlated predictions on data with known labels. With Goal 18's delay model and Goal 7's logs in hand, this becomes a measurement rather than a guess.
 
 ### Step 1: VHDR-to-LSL replay script — ✅ Done
 
@@ -94,28 +181,28 @@ Prove that the online pipeline produces meaningful, class-correlated predictions
 
 ### Step 2: End-to-end validation on training data
 
-Run the full app from Phase 1 (offline evaluation, timepoint selection, training) through to Phase 2 live inference — all on the same subject data.
+Run the full app from Phase 1 (offline evaluation, timepoint selection, training) through to Phase 2 live inference — all on the same subject data, driven by a Goal 17 debug profile.
 
 - [ ] Run Phase 1 offline pipeline on `subject_102_quarter` data: preprocess, evaluate, select timepoint, train
 - [ ] Export `decoder_pipeline.joblib`
-- [ ] Transition to Phase 2 via Go Live
+- [ ] Transition to Phase 2 via Go Live (or the matching debug profile)
 - [ ] Start VHDR replay of the same subject data
-- [ ] Observe: do decoder probabilities correlate with stimulus events? (red decoder rises after red stimuli, yellow after yellow, both low after green)
-- [ ] Document findings (screenshots or logged predictions vs markers)
+- [ ] Observe: do decoder probabilities correlate with stimulus events, **after applying `group_delay_ms`**? (red decoder rises after red stimuli, yellow after yellow, both low after green)
+- [ ] Document findings against the logged predictions vs markers (Goal 7 output)
 
 ### Step 3: Quantitative offline-vs-online comparison
 
-Compare online predictions against offline predictions on the same data segments.
+Compare online predictions against offline predictions on the same data segments, aligned by the Goal 18 delay model.
 
-- [ ] Script loads saved epochs, extracts features at training timepoint, runs `model.predict_proba()` — these are the offline ground-truth predictions
+- [ ] Script loads saved epochs, extracts features at each decoder's training timepoint, runs `model.predict_proba()` — these are the offline ground-truth predictions
 - [ ] Script replays the same raw data through `OnlinePreprocessor` + `LiveInferenceEngine` (headless, no UI)
-- [ ] Compare: correlation between offline and online predictions per task
-- [ ] Document expected gap (causal vs zero-phase filters) and whether it affects classification
-- [ ] Decide: is the gap acceptable, or does the online preprocessor need adjustment?
+- [ ] Compare: correlation between offline and online predictions per task, after shifting by `group_delay_ms`
+- [ ] Document the residual gap (causal vs zero-phase filters) and whether it affects classification
+- [ ] Decide: is the gap acceptable, or does the online preprocessor need adjustment (feeds back into Goal 18 strategy (b))?
 
 ### Step 4: Preprocessor numerical comparison (optional)
 
-If Step 3 shows a significant gap, drill into the preprocessor.
+If Step 3 shows a significant residual gap beyond the modeled delay, drill into the preprocessor.
 
 - [ ] Feed identical raw segment through `OfflinePreprocessor` and `OnlinePreprocessor`
 - [ ] Compare output at matching timepoints: correlation, scale, spatial pattern
@@ -123,41 +210,23 @@ If Step 3 shows a significant gap, drill into the preprocessor.
 
 ---
 
-## Goal 2 — Event Markers on Probability Graph
+## Goal 9 — Frozen Event Graph (Seq 5)
 
-Display trigger events as vertical lines on the live probability chart. The `markers` tuple is already emitted by `prediction_ready` but currently ignored in `Phase2Screen._on_predictions`.
+On marker detection, display a separate chart showing the prediction window around that event. The first "real" UI feature, now riding on validated predictions and rendered markers (Goal 2, done).
 
-- [x] `LiveProbabilityChart` gains an `append_markers(markers)` method (data-only; lines materialise in `_refresh`)
-- [x] Each trigger code is resolved against the configured event map; codes **not** in the map are filtered out
-- [x] Markers render as bold black vertical lines (width 2) at the correct timestamp (colour is decoupled from the event name)
-- [x] Markers scroll with the data (rebased onto the same `x = ts - latest_ts` axis as the curves; pruned when they leave the window)
-- [x] Marker label shows the configured event name via the line's `InfLineLabel` — bold black text in a solid white, black-bordered box for contrast
-- [ ] Verified: with VHDR replay, vertical lines appear at stimulus onset times (manual UI verification on Windows)
-
-**Implementation notes:**
-- `Phase2Screen` builds the `{code: name}` map by inverting `settings["event_mapping"]` (which `SettingsManager.get_settings()` exposes as `{name: id}`, flattened from `markers_mapping.events`) — tolerant of a missing map — and passes it to the chart constructor; `_on_predictions` now calls `append_markers(markers)` after `append_predictions`.
-- The receiver emits **every** non-zero trigger edge, not just configured events. `append_markers` drops any code absent from the event map, so only declared events are drawn.
-- Colour is intentionally **not** derived from the event name (names are arbitrary config labels, not colour hints). All markers are black; the label is the only per-event distinction.
-- **Label placement.** A headroom band above the curves (`_Y_RANGE` top `1.1`, Y ticks capped at `1.0` so the band reads as blank margin) lets labels sit clear of the data. Labels are pinned to one fixed side via identical `InfLineLabel` `anchors` — this disables pyqtgraph's default view-edge flip, which otherwise makes two markers straddling the view centre point their labels inward and collide. Trade-off: a label on a marker near the right (NOW) edge can clip; flip the anchor side or centre it if that reads poorly in the lab.
-- All marker scene mutation happens on the 30 Hz repaint tick (`_refresh_markers`), keeping `append_markers` off the scene like the prediction hot path. `_MAX_MARKERS` (128) backstops unbounded growth if the stream stalls.
+- [ ] New widget: `FrozenEventChart` — fixed-window chart (e.g. -0.2s to +1.0s around the event)
+- [ ] Triggered when a marker is detected in the prediction stream
+- [ ] Shows all decoder probabilities for that window with the event onset marked
+- [ ] Placed in the centre panel (exact position TBD — depends on Goal 13)
+- [ ] Verified: during replay, an event triggers a frozen snapshot that stays visible
 
 ---
 
-## Goal 3 — LSL Stream Picker — ✅ Done (stream-selection branch)
-
-Implemented as a **header-launched dialog** rather than an inline header dropdown.
-
-- [x] Header "Choose target…" button opens `TargetSelectionDialog`
-- [x] Manual **Refresh** runs `AppSession.discover_streams()` on a `StreamDiscoveryWorker` thread and populates a combo
-- [x] Operator selects a stream before Start; Start is guarded against no target
-- [x] Chosen `stream_name` is passed to `build_live_stream_session(stream_name=...)` (no `set_stream` call)
-- [ ] Caveat: discovery currently always launches `LSLProxy.exe` — see [#3]
-
----
+# Backlog (resume original plan)
 
 ## Goal 4 — Trigger Log
 
-Terminal-style scrolling log below the chart showing trigger events and system messages.
+Terminal-style scrolling log below the chart showing trigger events and system messages. (UI surface over the Goal 7 logging backend.)
 
 - [ ] New widget: `TriggerLog` (text-based, append-only, auto-scroll)
 - [ ] Receives markers from `prediction_ready` and formats them as timestamped log lines
@@ -181,7 +250,7 @@ Row of recent decoder decisions displayed above the chart in the centre panel.
 
 ## Goal 6 — Latency Display + Buffer Health
 
-Rolling latency readout and buffer-health indicator in the header. Deferred from M1 Commit 8.
+Rolling latency readout and buffer-health indicator in the header. (UI surface over the Goal 7 timing log.) Deferred from M1 Commit 8.
 
 - [ ] `Phase2Header` gains latency label (`Latency: p50 / p95 ms`) and buffer-health pill
 - [ ] `Phase2Screen` subscribes to `latency_ready`, buffers in `deque(maxlen=100)`
@@ -189,18 +258,6 @@ Rolling latency readout and buffer-health indicator in the header. Deferred from
 - [ ] Green pill when `pending_samples < batch_size * 2`, amber otherwise
 - [ ] Diagnostics clear on Halt
 - [ ] Verified: during replay, latency numbers update ~5x/sec with non-zero values
-
----
-
-## Goal 7 — Subject-Folder Log Paths
-
-Wire `PredictionLogger` with subject-folder-aware output paths.
-
-- [ ] Determine directory layout for Phase 2 logs (per PRD directory structure)
-- [ ] `Phase2Screen` or `AppSession` resolves the log path from the current subject/session
-- [ ] `build_live_stream_session(log_path=...)` passes a real path instead of `None`
-- [ ] CSV logging starts on Start, file closes on Halt
-- [ ] Verified: after a live session, a CSV exists at the expected path with correct columns
 
 ---
 
@@ -213,18 +270,6 @@ Wire the sidebar's Decision Settings section with functional controls.
 - [ ] Conflict-resolution select — behavior when multiple decoders cross threshold simultaneously
 - [ ] Settings are read from config if available, otherwise use defaults
 - [ ] Verified: adjusting the threshold slider moves the red dashed line on the chart in real time
-
----
-
-## Goal 9 — Frozen Event Graph
-
-On marker detection, display a separate chart showing the prediction window around that event.
-
-- [ ] New widget: `FrozenEventChart` — fixed-window chart (e.g. -0.2s to +1.0s around the event)
-- [ ] Triggered when a marker is detected in the prediction stream
-- [ ] Shows all decoder probabilities for that window with the event onset marked
-- [ ] Placed in the centre panel (exact position TBD — depends on Goal 13)
-- [ ] Verified: during replay, an event triggers a frozen snapshot that stays visible
 
 ---
 
@@ -314,3 +359,55 @@ Open questions:
 - [ ] Decide the mechanism (scroll/pan vs separate view vs fold into Goals 9/11) and the retention cap
 - [ ] Implement the chosen history buffer + live/paused state (if applicable)
 - [ ] Verified: operator can review earlier predictions and return to live without losing incoming data
+
+---
+
+# Phase 1 Cross-Cutting Work
+
+These items are **offline (Phase 1)** and have **no Phase-2 / online impact**. They are tracked here because they surfaced during M2 planning, but the work belongs to the Phase 1 surface — not on the Phase-2 critical path above. Move to a dedicated Phase 1 plan if/when one exists.
+
+## Goal 19 — Per-Decoder Timepoint Selection (Phase 1 offline UI)
+
+The backend already trains each decoder at its own **single** timepoint via `ModelTrainer.run_training(dict[str, float])`, and the artifact carries them in `DecoderPipelineMetadata.decoding_timepoints` (feature stays `n_channels` wide — no online change). Today the per-decoder dict is **auto-filled** from `argmax` of each task's `diagonal_auc` (`OfflineOrchestrator._derive_per_task_timepoints`); the operator cannot view or override it. This goal adds that UI.
+
+- [ ] Evaluation/training screen surfaces each decoder's `diagonal_auc` curve with its auto-derived peak (`argmax`) pre-selected as the default
+- [ ] Operator can adjust each decoder's timepoint independently (per-decoder slider/input, or click-on-curve), pre-filled with the suggested peak
+- [ ] Selected timepoints are collected into a `dict[str, float]` (task → one timepoint)
+- [ ] `OfflineOrchestrator` passes the **operator-selected** dict to `run_training(...)` instead of the auto-derived one (keep `_derive_per_task_timepoints` as the default/fallback when the operator makes no change)
+- [ ] Out-of-bounds timepoints are caught and surfaced as a UI error **before** training (the trainer already raises `ValueError` for timepoints outside `[tmin, tmax]`)
+- [ ] `decoding_timepoints` in the exported artifact reflects the operator's choices; the representative `decoding_timepoint` stays the shared/mean value for backward compatibility
+- [ ] Verified: changing a decoder's timepoint in the UI changes which time-slice that decoder trains on, reflected in the exported `decoding_timepoints`
+
+---
+
+# Completed Goals
+
+## Goal 2 — Event Markers on Probability Graph — ✅ Done
+
+Trigger events render as vertical lines on the live probability chart. The `markers` tuple from `prediction_ready` is resolved against the configured event map and drawn by `LiveProbabilityChart`.
+
+- [x] `LiveProbabilityChart` gains an `append_markers(markers)` method (data-only; lines materialise in `_refresh`)
+- [x] Each trigger code is resolved against the configured event map; codes **not** in the map are filtered out
+- [x] Markers render as bold black vertical lines (width 2) at the correct timestamp (colour is decoupled from the event name)
+- [x] Markers scroll with the data (rebased onto the same `x = ts - latest_ts` axis as the curves; pruned when they leave the window)
+- [x] Marker label shows the configured event name via the line's `InfLineLabel` — bold black text in a solid white, black-bordered box for contrast
+- [x] Verified with VHDR replay: vertical lines appear at stimulus onset times
+
+**Implementation notes:**
+- `Phase2Screen` builds the `{code: name}` map by inverting `settings["event_mapping"]` (which `SettingsManager.get_settings()` exposes as `{name: id}`, flattened from `markers_mapping.events`) — tolerant of a missing map — and passes it to the chart constructor; `_on_predictions` now calls `append_markers(markers)` after `append_predictions`.
+- The receiver emits **every** non-zero trigger edge, not just configured events. `append_markers` drops any code absent from the event map, so only declared events are drawn.
+- Colour is intentionally **not** derived from the event name (names are arbitrary config labels, not colour hints). All markers are black; the label is the only per-event distinction.
+- **Label placement.** A headroom band above the curves (`_Y_RANGE` top `1.1`, Y ticks capped at `1.0` so the band reads as blank margin) lets labels sit clear of the data. Labels are pinned to one fixed side via identical `InfLineLabel` `anchors` — this disables pyqtgraph's default view-edge flip, which otherwise makes two markers straddling the view centre point their labels inward and collide. Trade-off: a label on a marker near the right (NOW) edge can clip; flip the anchor side or centre it if that reads poorly in the lab.
+- All marker scene mutation happens on the 30 Hz repaint tick (`_refresh_markers`), keeping `append_markers` off the scene like the prediction hot path. `_MAX_MARKERS` (128) backstops unbounded growth if the stream stalls.
+
+---
+
+## Goal 3 — LSL Stream Picker — ✅ Done (stream-selection branch)
+
+Implemented as a **header-launched dialog** rather than an inline header dropdown.
+
+- [x] Header "Choose target…" button opens `TargetSelectionDialog`
+- [x] Manual **Refresh** runs `AppSession.discover_streams()` on a `StreamDiscoveryWorker` thread and populates a combo
+- [x] Operator selects a stream before Start; Start is guarded against no target
+- [x] Chosen `stream_name` is passed to `build_live_stream_session(stream_name=...)` (no `set_stream` call)
+- [ ] Caveat: discovery currently always launches `LSLProxy.exe` — see [#3]
