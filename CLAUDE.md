@@ -27,7 +27,7 @@ online_decoder/
 │   ├── notebooks/      — Manual validation notebooks
 │   ├── offline_phase/  — Offline phase unit tests (preprocessor, evaluator, trainer)
 │   ├── online_phase/   — LSLReceiver unit and opt-in replay integration tests
-│   └── test_phase2_lifecycle.py — Phase 2 screen lifecycle tests (headless)
+│   └── frontend/       — Headless UI tests (Phase 2 lifecycle, EvaluationView)
 ├── tools/lslproxy/     — LSLProxy.exe and Windows DLLs (hardware interface)
 └── docs/               — Backend status and architecture notes
 ```
