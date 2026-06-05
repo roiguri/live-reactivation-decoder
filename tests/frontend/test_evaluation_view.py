@@ -122,6 +122,13 @@ def test_changing_timepoint_unconfirms_only_that_decoder(view: EvaluationView) -
     assert view._selected_timepoints["red"] == pytest.approx(float(other))
 
 
+def test_suggested_caption_shows_cross_task_timepoint(view: EvaluationView) -> None:
+    # _make_result sets suggested_timepoint = times[7] = 0.5 s → 500 ms.
+    text = view._roster_suggested_lbl.text()
+    assert "500" in text and "mean AUC" in text
+    assert view._roster_suggested_lbl.toolTip()  # explanatory tooltip present
+
+
 def test_reselecting_same_timepoint_keeps_lock(view: EvaluationView) -> None:
     view._toggle_confirm("red")
     view._toggle_confirm("green")

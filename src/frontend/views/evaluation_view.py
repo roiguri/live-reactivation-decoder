@@ -21,8 +21,21 @@ _DEVIATION_WARN_MS = 50.0  # |selected − suggested| above this → amber hint 
 
 # Summary-roster column widths (px) — header + rows share them so cells line up.
 _ROSTER_SPIN_W = 78
+_ROSTER_PEAK_W = 42
 _ROSTER_AUC_W = 36
 _ROSTER_CONFIRM_W = 84
+
+# Tooltip explaining the cross-task suggested timepoint (not a plain average).
+_SUGGESTED_TOOLTIP = (
+    "Suggested timepoint = peak of the mean AUC curve.\n"
+    "\n"
+    "The single moment where decoding accuracy, averaged across all\n"
+    "decoders, is highest - the best shared timepoint if one had to\n"
+    "serve every decoder.\n"
+    "\n"
+    "This is NOT the mean of the per-decoder peaks. Each decoder\n"
+    "below is pre-filled with its own peak instead."
+)
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +93,7 @@ class EvaluationView(QWidget):
         # timepoint spinbox, AUC@t label and Confirm button. Built when the
         # eval result lands (task names known then).
         self._roster_rows_layout: Optional[QVBoxLayout] = None
+        self._roster_suggested_lbl: Optional[QLabel] = None
         self._roster_spins: dict[str, QSpinBox] = {}
         self._roster_auc_lbls: dict[str, QLabel] = {}
         self._roster_confirm_btns: dict[str, QPushButton] = {}
@@ -244,6 +258,13 @@ class EvaluationView(QWidget):
             tab = self._build_decoder_tab(task_name)  # also fills the per-decoder dicts
             self._per_decoder_tabs[task_name] = tab
             self._tabs.addTab(tab, task_name)
+
+        # Cross-task suggestion line (peak of the mean AUC curve).
+        if self._roster_suggested_lbl is not None:
+            suggested_ms = float(result.get("suggested_timepoint", 0.0)) * 1000.0
+            self._roster_suggested_lbl.setText(
+                f"Suggested {suggested_ms:.0f} ms · peak of mean AUC"
+            )
 
         # Build the roster + table + chart widgets BEFORE the per-decoder
         # sync loop below — that loop writes into the labels and moves the
@@ -502,10 +523,13 @@ class EvaluationView(QWidget):
     def _build_stats_panel(self) -> QWidget:
         """Right-side per-decoder roster — the control center.
 
-        One row per decoder: ``[name] [timepoint spinbox (ms)] [AUC @ t]
-        [Confirm]``. Each decoder is pre-filled with its own suggested peak
-        and edited/confirmed independently. Footer shows an ``N / M
-        confirmed`` status and a ``Reset all to suggested`` button.
+        One row per decoder: ``[name] [timepoint spinbox (ms)] [peak (ms)]
+        [AUC @ t] [Confirm]``. Each decoder is pre-filled with its own
+        suggested peak and edited/confirmed independently; the read-only
+        ``peak`` column shows that decoder's own peak for comparison. A
+        caption line above shows the cross-task suggested timepoint (peak of
+        the mean AUC curve). Footer shows an ``N / M confirmed`` status and a
+        ``Reset all to suggested`` button.
 
         All child labels carry ``background: transparent`` so when the card
         or a row hovers another colour the labels don't punch white
@@ -518,7 +542,7 @@ class EvaluationView(QWidget):
             f"border: 1px solid {BORDER_GRAY}; border-radius: 2px; }}"
             "QFrame#stats_card QLabel { background: transparent; }"
         )
-        card.setFixedWidth(340)
+        card.setFixedWidth(380)
         card.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
 
         body = QVBoxLayout(card)
@@ -531,6 +555,23 @@ class EvaluationView(QWidget):
             "letter-spacing: 0.6px;"
         )
         body.addWidget(cap)
+
+        # Cross-task suggestion line — peak of the mean AUC curve (NOT a plain
+        # average of the per-decoder peaks). Text + a circular info badge; the
+        # full multiline explanation is in the shared tooltip.
+        sug_row = QHBoxLayout()
+        sug_row.setContentsMargins(0, 0, 0, 0)
+        sug_row.setSpacing(5)
+        self._roster_suggested_lbl = QLabel("Suggested · peak of mean AUC")
+        self._roster_suggested_lbl.setStyleSheet(
+            f"color: {TEXT_MUTED}; font-size: 10px;"
+        )
+        self._roster_suggested_lbl.setToolTip(_SUGGESTED_TOOLTIP)
+        sug_row.addWidget(self._roster_suggested_lbl)
+        sug_row.addWidget(self._build_info_badge(_SUGGESTED_TOOLTIP))
+        sug_row.addStretch()
+        body.addLayout(sug_row)
+
         body.addWidget(self._build_roster_header())
 
         # Rows are (re)built per eval run in ``_rebuild_roster``.
@@ -556,6 +597,30 @@ class EvaluationView(QWidget):
 
         return card
 
+    @staticmethod
+    def _build_info_badge(tooltip: str) -> QLabel:
+        """A small circular 'i' badge that shows ``tooltip`` on hover.
+
+        Rendered as a 14px outlined circle with an italic 'i', which reads as
+        a proper info affordance instead of a raw ⓘ glyph stuck in the text.
+        """
+        badge = QLabel("i")
+        badge.setFixedSize(14, 14)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge.setToolTip(tooltip)
+        badge.setCursor(Qt.CursorShape.WhatsThisCursor)
+        badge.setStyleSheet(
+            "QLabel { "
+            f"color: {TEXT_MUTED}; "
+            f"border: 1px solid {TEXT_MUTED}; "
+            "border-radius: 7px; "
+            "font-size: 9px; font-weight: 700; font-style: italic; "
+            "font-family: Georgia, 'Times New Roman', serif; "
+            "} "
+            f"QLabel:hover {{ color: {PRIMARY_BLUE}; border-color: {PRIMARY_BLUE}; }}"
+        )
+        return badge
+
     def _build_roster_header(self) -> QWidget:
         header = QFrame()
         header.setObjectName("roster_header")
@@ -570,6 +635,7 @@ class EvaluationView(QWidget):
         cols = (
             ("Decoder", 1, Qt.AlignmentFlag.AlignLeft, 0),
             ("ms", 0, Qt.AlignmentFlag.AlignLeft, _ROSTER_SPIN_W),
+            ("peak", 0, Qt.AlignmentFlag.AlignRight, _ROSTER_PEAK_W),
             ("AUC", 0, Qt.AlignmentFlag.AlignRight, _ROSTER_AUC_W),
             ("", 0, Qt.AlignmentFlag.AlignRight, _ROSTER_CONFIRM_W),
         )
@@ -869,6 +935,19 @@ class EvaluationView(QWidget):
             )
             self._roster_spins[name] = spin
             row.addWidget(spin, 0)
+
+            # This decoder's own suggested peak (read-only, static per run).
+            peak_s = self._suggested_timepoints.get(name)
+            peak_lbl = QLabel(f"{peak_s * 1000.0:.0f}" if peak_s is not None else "—")
+            peak_lbl.setFixedWidth(_ROSTER_PEAK_W)
+            peak_lbl.setStyleSheet(
+                f"color: {TEXT_MUTED}; font-size: 11px;"
+            )
+            peak_lbl.setAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
+            peak_lbl.setToolTip("This decoder's own peak-AUC timepoint")
+            row.addWidget(peak_lbl, 0)
 
             # AUC @ this decoder's timepoint.
             auc_lbl = QLabel("—")
