@@ -351,15 +351,7 @@ class DebugPhase1Screen(Phase1Screen):
         # snapshot also carries them via the spec's metadata. Set them
         # explicitly so TrainView's ready-gating doesn't block.
         if spec is not None:
-            timepoints = dict(spec.metadata.decoding_timepoints)
-            if not timepoints:
-                # Legacy snapshot (no per-decoder dict): fall back to the
-                # representative timepoint for every trained decoder.
-                timepoints = {
-                    name: float(spec.metadata.decoding_timepoint)
-                    for name in spec.models
-                }
-            self._train_view.set_timepoints(timepoints)
+            self._train_view.set_timepoints(dict(spec.metadata.decoding_timepoints))
         self._train_view._on_train_done(result)  # noqa: SLF001 — dev tooling
         return None
 

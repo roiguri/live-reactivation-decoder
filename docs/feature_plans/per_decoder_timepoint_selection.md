@@ -157,21 +157,39 @@ snapshot carries genuinely per-decoder `decoding_timepoints`.
 
 ---
 
-## Stage 5 — Full cleanup of legacy single-timepoint paths (separate, after everything works)
+## Stage 5 — Full cleanup of legacy single-timepoint paths (done)
 
 Done last so development never breaks the float path:
-- **`orchestrator.py`**: `run_training` signature → `dict[str, float]` only; remove the float
+- **`orchestrator.py`**: `run_training` signature → `dict[str, float]` only; removed the float
   branch and `_derive_per_task_timepoints` (the UI/seed now supply explicit per-decoder dicts and
-  the evaluator's `peak_timepoint` is the single suggestion source). `decoding_timepoint` stays as
-  `mean(values)` for back-compat.
-- **`ModelTrainer.run_training`**: keep the `float | dict` union — it's the low-level API and is
-  directly unit-tested (`tests/offline_phase/test_trainer.py`); no churn needed.
-- **`evaluator.py`**: decide whether to drop the now-unused cross-task `suggested_timepoint`; keep
-  if any hint still references it, else remove.
-- **Tests**: update `tests/offline_phase/test_orchestrator.py` calls that pass a bare float
-  (`run_training(0.350)` etc.) to per-decoder dicts.
-- **Docs**: mark Goal 19 done in `docs/Phase2_UI_Plan_M2.md`; note the per-decoder UI + dict
-  training path; update `docs/backend_architecture.md` if it describes `run_training`'s signature.
+  the evaluator's `peak_timepoint` is the single suggestion source). Dropped the now-unused
+  `numpy` import.
+- **`artifact_models.py`**: **removed** the singular `decoding_timepoint` field entirely;
+  `decoding_timepoints` is now the authoritative **required** field (`min_length=1`). (Originally
+  we planned to keep `decoding_timepoint` as a representative mean, but it had no production
+  consumer beyond the single-timepoint diagnostics, so it was removed.)
+- **`phase1_screen_debug.py`**: dropped the legacy-snapshot fallback that read the singular field.
+- **`ModelTrainer.run_training`**: kept the `float | dict` union — low-level API, directly
+  unit-tested (`tests/offline_phase/test_trainer.py`); its missing-key `ValueError` is now the
+  orchestrator's guard.
+- **`evaluator.py`**: `suggested_timepoint` (cross-task avg) **kept** — still drives the
+  EvaluationView summary-overlay reference line (a *separate* calculation from
+  `decoding_timepoint`).
+- **Tests**: `tests/offline_phase/test_orchestrator.py` float call-sites → per-decoder dicts;
+  removed the `decoding_timepoint` assertions.
+
+### Deferred follow-up — diagnostic scripts left stale
+The four single-timepoint diagnostic scripts still read the now-removed `metadata["decoding_timepoint"]`:
+`preproc_parity_check.py` (subscript → **KeyError** on new artifacts), `offline_inference_check.py`,
+`inspect_decoder_internals.py`, `full_recording_live_inference_check.py` (`.get(...)` → `None`).
+They were **left untouched on purpose** to avoid conflicts with in-flight Goal-18 work. They still
+run against *existing* artifacts (which carry the old key) but break on any artifact trained after
+Stage 5. **Fix when picked up:** replace the read with the local mean of `decoding_timepoints`,
+e.g. `float(sum(d.values()) / len(d))`.
+
+### Remaining docs wrap-up (not yet done)
+- Mark Goal 19 done in `docs/Phase2_UI_Plan_M2.md`; note the per-decoder UI + dict training path.
+- Update `docs/backend_architecture.md` if it describes `run_training`'s signature.
 
 ---
 

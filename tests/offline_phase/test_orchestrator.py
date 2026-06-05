@@ -289,7 +289,7 @@ class TestRunTraining:
     def test_raises_if_no_epochs(self, tmp_path: Path) -> None:
         orc = _make_orchestrator(tmp_path)
         with pytest.raises(RuntimeError, match="run_evaluation"):
-            orc.run_training(0.350)
+            orc.run_training({"red decoder": 0.350})
 
     def test_saves_joblib_to_disk(
         self, tmp_path: Path, synthetic_epochs: mne.EpochsArray, evaluator_settings: dict
@@ -303,8 +303,11 @@ class TestRunTraining:
             orc, synthetic_epochs, [t["name"] for t in evaluator_settings["tasks"]]
         )
 
-        timepoint = float(synthetic_epochs.times[10])
-        result = orc.run_training(timepoint)
+        timepoints = {
+            t["name"]: float(synthetic_epochs.times[10])
+            for t in evaluator_settings["tasks"]
+        }
+        result = orc.run_training(timepoints)
 
         expected_path = tmp_path / "models" / "decoder_pipeline.joblib"
         assert expected_path.exists()
@@ -321,8 +324,9 @@ class TestRunTraining:
         task_names = [t["name"] for t in evaluator_settings["tasks"]]
         _attach_eval_results_stub(orc, synthetic_epochs, task_names)
 
-        timepoint = float(synthetic_epochs.times[10])
-        orc.run_training(timepoint)
+        t10 = float(synthetic_epochs.times[10])
+        timepoints = {name: t10 for name in task_names}
+        orc.run_training(timepoints)
 
         spec = orc._live_artifact_spec
         assert spec is not None
@@ -331,9 +335,8 @@ class TestRunTraining:
         assert "eeg_chunk_indices" in spec.online_state
         assert "bad_indices" in spec.online_state
         assert "ch_names" not in spec.online_state
-        assert spec.metadata.decoding_timepoint == timepoint
-        # Step C: per-task timepoints derived from _eval_results.
-        assert set(spec.metadata.decoding_timepoints.keys()) == set(task_names)
+        # Per-task timepoints stored verbatim (the authoritative field).
+        assert spec.metadata.decoding_timepoints == pytest.approx(timepoints)
         for name in task_names:
             assert isinstance(spec.metadata.decoding_timepoints[name], float)
 
@@ -354,17 +357,19 @@ class TestRunTraining:
             orc, synthetic_epochs, [t["name"] for t in evaluator_settings["tasks"]]
         )
 
-        timepoint = float(synthetic_epochs.times[10])
-        result = orc.run_training(timepoint)
+        timepoints = {
+            t["name"]: float(synthetic_epochs.times[10])
+            for t in evaluator_settings["tasks"]
+        }
+        result = orc.run_training(timepoints)
 
         assert "spatial_patterns" in result
         assert "mne_info" in result
 
-    def test_dict_timepoints_used_verbatim_with_mean_representative(
+    def test_dict_timepoints_used_verbatim(
         self, tmp_path: Path, synthetic_epochs: mne.EpochsArray, evaluator_settings: dict
     ) -> None:
-        """An explicit per-task dict is stored verbatim; the singular
-        ``decoding_timepoint`` becomes the mean (no auto-derivation)."""
+        """An explicit per-task dict is stored verbatim (no auto-derivation)."""
         sm = MagicMock()
         sm.get_decoder_settings.return_value = evaluator_settings
         orc = _make_orchestrator(tmp_path, sm)
@@ -383,9 +388,6 @@ class TestRunTraining:
         spec = orc._live_artifact_spec
         assert spec is not None
         assert spec.metadata.decoding_timepoints == pytest.approx(chosen)
-        assert spec.metadata.decoding_timepoint == pytest.approx(
-            float(np.mean(list(chosen.values())))
-        )
 
 
 # ── TestGetLiveArtifactSpec ───────────────────────────────────────────────────
@@ -409,8 +411,11 @@ class TestGetLiveArtifactSpec:
             orc, synthetic_epochs, [t["name"] for t in evaluator_settings["tasks"]]
         )
 
-        timepoint = float(synthetic_epochs.times[10])
-        orc.run_training(timepoint)
+        timepoints = {
+            t["name"]: float(synthetic_epochs.times[10])
+            for t in evaluator_settings["tasks"]
+        }
+        orc.run_training(timepoints)
 
         spec = orc.get_live_artifact_spec()
         assert spec is orc._live_artifact_spec
@@ -445,4 +450,4 @@ class TestStateOrdering:
     def test_training_before_evaluation(self, tmp_path: Path) -> None:
         orc = _make_orchestrator(tmp_path)
         with pytest.raises(RuntimeError):
-            orc.run_training(0.350)
+            orc.run_training({"red decoder": 0.350})
