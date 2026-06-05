@@ -187,9 +187,12 @@ run against *existing* artifacts (which carry the old key) but break on any arti
 Stage 5. **Fix when picked up:** replace the read with the local mean of `decoding_timepoints`,
 e.g. `float(sum(d.values()) / len(d))`.
 
-### Remaining docs wrap-up (not yet done)
-- Mark Goal 19 done in `docs/Phase2_UI_Plan_M2.md`; note the per-decoder UI + dict training path.
-- Update `docs/backend_architecture.md` if it describes `run_training`'s signature.
+### Docs wrap-up (done)
+- Goal 19 marked ✅ Done in `docs/Phase2_UI_Plan_M2.md`; the deferred follow-ups (stale
+  diagnostic scripts; optional sklearn `penalty`→`l1_ratio` migration) are tracked there too so
+  they survive after this feature plan is closed.
+- `docs/backend_architecture.md` `run_training` signature + `decoding_timepoints` references updated
+  (light targeted touch; the doc has broader pre-existing drift left untouched).
 
 ---
 

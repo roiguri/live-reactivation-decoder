@@ -47,8 +47,8 @@ Because EEG processing and live inference are computationally demanding, mixing 
 4. UI calls `orchestrator.set_bad_channels(raw.info["bads"])`, then `orchestrator.run_step1b_fit_ica()`. Returns `(ica, epochs, suggested)`; the UI pops `ica.plot_sources(epochs, block=True)` (suggestions pre-filled by ICLabel).
 5. UI calls `orchestrator.run_step2_apply_and_save(exclude_components)`. Preprocessor applies ICA, finishes, and saves; orchestrator stores `epochs` internally.
 6. UI calls `orchestrator.run_evaluation()`. Internally calls `ModelEvaluator`. Returns AUC/TGM arrays for plotting.
-7. The researcher clicks a specific timepoint on the graph.
-8. UI calls `orchestrator.run_training(timepoint)`. Internally calls `ModelTrainer`, bundles models with preprocessor's `online_state`, and saves `decoder_pipeline.joblib`. Returns spatial patterns and `mne.Info` for topomap display.
+7. The researcher picks and confirms each decoder's timepoint in the roster.
+8. UI calls `orchestrator.run_training(timepoints)` (per-decoder `{task: seconds}` dict). Internally calls `ModelTrainer`, bundles models with preprocessor's `online_state`, and saves `decoder_pipeline.joblib`. Returns spatial patterns and `mne.Info` for topomap display.
 
 ### Component Map
 #### **1. Configuration Schema (`config_models.py`)**
@@ -495,12 +495,13 @@ class ModelTrainer:
         self.settings = decoder_settings
         self.times: np.ndarray = epochs.times
 
-    def run_training(self, timepoint: float) -> Dict[str, Any]:
+    def run_training(self, timepoints: float | dict[str, float]) -> Dict[str, Any]:
         """
-        Train one classifier per task at the given timepoint.
+        Train one classifier per task, each at its own timepoint.
 
         Args:
-            timepoint: Time in seconds to extract features from (e.g. 0.350).
+            timepoints: A per-task ``{task_name: seconds}`` dict (each decoder
+                its own timepoint), or a single float applied to every task.
 
         Returns:
             {
@@ -546,8 +547,8 @@ class OfflineOrchestrator:
         # user reviews ICA components, selects excluded_components
         stats = run_step2_finish_pipeline(excluded_components)
         eval_results = run_evaluation()
-        # user clicks timepoint on TGM plot
-        result = run_training(timepoint)
+        # operator picks + confirms each decoder's timepoint in the UI
+        result = run_training(timepoints)   # {task_name: seconds}
         online_state = get_online_state_for_live_phase()
     """
 
@@ -634,9 +635,9 @@ and an `.eeg` symlink).
         """
         pass
 
-    def run_training(self, timepoint: float) -> dict[str, Any]:
+    def run_training(self, timepoints: dict[str, float]) -> dict[str, Any]:
         """
-        Train classifiers at the given timepoint, bundle online state, save joblib.
+        Train each decoder at its own timepoint, bundle online state, save joblib.
 
         Returns:
             {"model_filepath": Path, "spatial_patterns": dict, "mne_info": mne.Info}
@@ -690,7 +691,7 @@ responsibilities:
 - `models`: fitted decoder models for `LiveInferenceEngine`
 - `online_state`: preprocessing state for `OnlinePreprocessor`
 - `metadata`: model-facing runtime metadata such as `feature_width` and
-  `decoding_timepoint`
+  `decoding_timepoints` (per-decoder `{task_name: seconds}`)
 
 `OfflineOrchestrator.run_training()` constructs the artifact via
 `DecoderPipelineArtifactSpec` (`backend/core/artifact_models.py`), which
@@ -1493,7 +1494,7 @@ online_decoder/
 | Node 2 step 1 | `run_step1_prepare_ica()` → returns `(ica_obj, suggested_components)` |
 | Node 2 step 2 | `run_step2_finish_pipeline(excluded_components)` → returns `{"n_epochs": int}` |
 | Node 3 | `run_evaluation()` → returns `{times, suggested_timepoint, tasks}` |
-| Node 4 | `run_training(timepoint)` → returns `{"model_filepath", "spatial_patterns", "mne_info"}` |
+| Node 4 | `run_training(timepoints)` (per-decoder `{task: seconds}` dict) → returns `{"model_filepath", "spatial_patterns", "mne_info"}` |
 
 ---
 
