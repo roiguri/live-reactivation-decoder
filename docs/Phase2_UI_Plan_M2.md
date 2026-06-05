@@ -96,7 +96,7 @@ Work from `feat/phase2-stream-selection` lands several M2 items early and change
 | 14 | Per-Decoder Colour Picker | Not started | backlog |
 | 15 | Probability Graph Window Length | Not started | backlog |
 | 16 | Probability Graph History View | Not started — needs UX discussion | backlog |
-| 19 | Per-Decoder Timepoint Selection (Phase 1 offline UI) | ✅ Done (branch `feat/per-decoder-timepoints`) | Phase 1 |
+| 19 | Per-Decoder Timepoint Selection (Phase 1 offline UI) | ✅ Done (merged, PR #7) | Phase 1 |
 
 ---
 
@@ -383,11 +383,11 @@ Each decoder is now operator-selectable at its own timepoint, end-to-end. Shippe
 ### Goal 19 — Deferred follow-ups (tracked here; feature otherwise complete)
 
 - [ ] **Diagnostic scripts left stale.** Four single-timepoint diagnostics still read the removed `metadata["decoding_timepoint"]` — `scripts/preproc_parity_check.py` (subscript → **KeyError** on artifacts trained after the change), `offline_inference_check.py`, `inspect_decoder_internals.py`, `full_recording_live_inference_check.py` (`.get(...)` → `None`). They still work against *existing* artifacts but break on newly-trained ones. **Fix:** replace the read with the local mean of `decoding_timepoints`, e.g. `float(sum(d.values()) / len(d))`. (Left untouched on purpose to avoid conflicts with in-flight Goal-18 work.)
-- [x] **sklearn `penalty` → `l1_ratio` migration.** ✅ Done (branch `fix/sklearn-penalty-l1-ratio-migration`). scikit-learn 1.8 deprecated `LogisticRegression(penalty=...)` (removed in 1.10); `penalty: "l1"` emitted a `FutureWarning` per fit. **Fix applied:** `_CLASSIFIER_DEFAULTS["Logistic"]` `penalty: "l1"` → `l1_ratio: 1` and `_VALID_PARAMS_BY_MODEL["Logistic"]` now lists `l1_ratio` (and **drops** `penalty` — Option A, so stale configs fail loudly). `build_classifier` forwards `**params`, no change. **Caveats discovered during the fix (the original sketch was incomplete):** (1) `solver: "liblinear"` **must stay** — `l1_ratio=1` with the default `lbfgs` solver raises `ValueError`; (2) `l1_ratio=1` produces **bit-identical coefficients** to `penalty="l1"` (no model drift); (3) `experiment_config.full.yaml` migrated `penalty: l2` → `l1_ratio: 0`; (4) `requirements.txt` floor bumped `scikit-learn>=1.4` → `>=1.8` (the liblinear `l1_ratio` spelling only exists in 1.8+; on older sklearn it is silently ignored → L2). LDA/SVM unaffected.
+- [x] **sklearn `penalty` → `l1_ratio` migration.** ✅ Done — merged to `main` (PR #8, merge commit `f532011`; branch deleted). scikit-learn 1.8 deprecated `LogisticRegression(penalty=...)` (removed in 1.10); `penalty: "l1"` emitted a `FutureWarning` per fit. **Fix applied:** `_CLASSIFIER_DEFAULTS["Logistic"]` `penalty: "l1"` → `l1_ratio: 1` and `_VALID_PARAMS_BY_MODEL["Logistic"]` now lists `l1_ratio` (and **drops** `penalty` — Option A, so stale configs fail loudly). `build_classifier` forwards `**params`, no change. **Caveats discovered during the fix (the original sketch was incomplete):** (1) `solver: "liblinear"` **must stay** — `l1_ratio=1` with the default `lbfgs` solver raises `ValueError`; (2) `l1_ratio=1` produces **bit-identical coefficients** to `penalty="l1"` (no model drift); (3) `experiment_config.full.yaml` migrated `penalty: l2` → `l1_ratio: 0`; (4) `requirements.txt` floor bumped `scikit-learn>=1.4` → `>=1.8` (the liblinear `l1_ratio` spelling only exists in 1.8+; on older sklearn it is silently ignored → L2). LDA/SVM unaffected.
 
 ### Goal 19 — Remaining wrap-up
 - [x] `docs/backend_architecture.md` `run_training` signature reflects `dict[str, float]` (light targeted touch; doc has broader pre-existing drift)
-- [ ] Merge `feat/per-decoder-timepoints` to `main`
+- [x] Merge `feat/per-decoder-timepoints` to `main` (PR #7, merge commit `e09817a`; branch deleted)
 
 ---
 
