@@ -9,13 +9,21 @@ Sub-widgets composed by :class:`Phase2Screen`:
   slot for the Start/Halt action button.
 * :class:`~frontend.widgets.phase2.start_halt_button.StartHaltButton`
   — the action button itself: idle / connecting / live states.
+* :class:`~frontend.widgets.phase2.frozen_event_chart.FrozenEventChart`
+  — fixed-window, event-locked probability snapshot.
+* :class:`~frontend.widgets.phase2.frozen_event_view.FrozenEventView`
+  — the chart plus a dropdown to browse past event snapshots.
 """
+from frontend.widgets.phase2.frozen_event_chart import FrozenEventChart
+from frontend.widgets.phase2.frozen_event_view import FrozenEventView
 from frontend.widgets.phase2.header import Phase2Header
 from frontend.widgets.phase2.settings_panel import Phase2SettingsPanel
 from frontend.widgets.phase2.start_halt_button import StartHaltButton
 from frontend.widgets.phase2.target_dialog import TargetSelectionDialog
 
 __all__ = [
+    "FrozenEventChart",
+    "FrozenEventView",
     "Phase2Header",
     "Phase2SettingsPanel",
     "StartHaltButton",
