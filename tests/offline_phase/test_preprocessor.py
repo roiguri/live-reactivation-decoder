@@ -145,6 +145,46 @@ class TestStage3Filter:
         p.run_step1a_filter()
         assert p.raw.info["sfreq"] == synthetic_raw.info["sfreq"]
 
+    def test_resample_epochs_returns_consistent_times(
+        self, make_preprocessor, preprocessing_settings
+    ):
+        """_resample on Epochs must return epochs whose time vector matches the
+        decimated data. Regression: the late path previously left a stale
+        full-rate `times` (data 121 samples but len(times) 1201)."""
+        p = make_preprocessor
+        p.settings = preprocessing_settings  # final_resample.target_rate == 100
+
+        # Full-rate (1000 Hz) epochs: 4 trials, 8 ch, 600 samples (-0.1..0.5 s).
+        sfreq, n_times, n_trials = 1000.0, 600, 4
+        ch_names = [f"EEG{i:03d}" for i in range(8)]
+        data = np.random.default_rng(0).standard_normal(
+            (n_trials, len(ch_names), n_times)
+        ) * 1e-5
+        info = mne.create_info(ch_names, sfreq, "eeg")
+        events = np.column_stack(
+            [np.arange(n_trials), np.zeros(n_trials, int), np.ones(n_trials, int)]
+        )
+        epochs = mne.EpochsArray(
+            data, info, events=events, tmin=-0.1, event_id={"x": 1}, verbose=False
+        )
+
+        out = p._resample(epochs)
+
+        assert out.info["sfreq"] == 100.0
+        assert len(out.times) == out.get_data().shape[-1]  # the bug
+        assert out.get_data().shape[0] == n_trials         # trials preserved
+        assert out.times[0] == pytest.approx(-0.1)         # tmin preserved
+
+    def test_resample_raw_returns_consistent_times(
+        self, make_preprocessor, synthetic_raw, preprocessing_settings
+    ):
+        """_resample on Raw returns a decimated Raw with consistent times."""
+        p = make_preprocessor
+        p.settings = preprocessing_settings
+        out = p._resample(synthetic_raw.copy())
+        assert out.info["sfreq"] == 100.0
+        assert len(out.times) == out.get_data().shape[-1]
+
 
 # ── Stage 4: Bad channels ─────────────────────────────────────────────────
 

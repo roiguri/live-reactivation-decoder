@@ -86,7 +86,7 @@ class OfflinePreprocessor:
         self._notch()
         if self._stage == "early":
             self._lowpass(self.raw)
-            self._resample(self.raw)
+            self.raw = self._resample(self.raw)
         logger.info(
             "Step 1A complete (stage=%s, sfreq=%.1f Hz).",
             self._stage, self.raw.info["sfreq"],
@@ -157,7 +157,7 @@ class OfflinePreprocessor:
 
         if self._stage == "late":
             self._lowpass(self.epochs)
-            self._resample(self.epochs)
+            self.epochs = self._resample(self.epochs)
 
         self._save(Path(output_dir))
         # Raw has done its job (filtered/resampled in place, epoched into
@@ -258,17 +258,22 @@ class OfflinePreprocessor:
             phase="forward", verbose=False,
         )
 
-    def _resample(self, inst) -> None:
+    def _resample(self, inst):
         """Causal anti-alias FIR + integer decimation, mirroring online ``_decimate``.
 
         MNE's built-in ``inst.resample()`` uses a zero-phase polyphase resampler;
         the streaming OnlinePreprocessor cannot. Using the same causal FIR
         recipe here keeps training and inference features aligned.
+
+        Returns the resampled instance (a fresh ``Raw``/``Epochs`` when
+        decimation happened, else ``inst`` unchanged). Callers must rebind, e.g.
+        ``self.epochs = self._resample(self.epochs)`` — building a new object is
+        what keeps the time vector consistent with the decimated data.
         """
         target = float(self.settings["final_resample"]["target_rate"])
         current = float(inst.info["sfreq"])
         if current <= target:
-            return
+            return inst
         if int(current) % int(target) != 0:
             raise RuntimeError(
                 f"causal decimate requires an integer ratio; got "
@@ -311,13 +316,13 @@ class OfflinePreprocessor:
         if isinstance(inst, mne.io.BaseRaw):
             new_raw = mne.io.RawArray(decimated, new_info, verbose=False)
             new_raw.set_annotations(inst.annotations.copy())
-            inst._data = new_raw._data
-            inst.info = new_raw.info
-            inst._first_samps = new_raw._first_samps
-            inst._last_samps = new_raw._last_samps
-            inst.set_annotations(new_raw.annotations)
-        elif isinstance(inst, mne.BaseEpochs):
-            new_epochs = mne.EpochsArray(
+            return new_raw
+        if isinstance(inst, mne.BaseEpochs):
+            # Return a fresh EpochsArray so its time vector is rebuilt from the
+            # decimated data. Copying only _data/info onto `inst` left a stale
+            # full-rate `times` (1201 entries on 121-sample data), which
+            # corrupted the late-stage pipeline (wrong timepoints, unreadable fif).
+            return mne.EpochsArray(
                 decimated,
                 new_info,
                 events=inst.events,
@@ -326,12 +331,9 @@ class OfflinePreprocessor:
                 baseline=None,
                 verbose=False,
             )
-            inst._data = new_epochs._data
-            inst.info = new_epochs.info
-        else:
-            raise TypeError(
-                f"_resample expects Raw or Epochs; got {type(inst).__name__}"
-            )
+        raise TypeError(
+            f"_resample expects Raw or Epochs; got {type(inst).__name__}"
+        )
 
     # ── Private: bad channels ─────────────────────────────────────────────────
 
