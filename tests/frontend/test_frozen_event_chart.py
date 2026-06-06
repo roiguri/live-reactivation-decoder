@@ -326,6 +326,79 @@ def test_view_pin_latest_deactivates_follow(qapp) -> None:
     assert view._latest_btn.property("active") is True
 
 
+# ── event filter (display-only) ───────────────────────────────────────────────
+
+
+def test_filter_hides_events_but_keeps_history(qapp) -> None:
+    chart = _make_chart()
+    _stream(chart, 0, 0.6)
+    chart.append_markers([(0.30, 11), (0.70, 12)])  # red, green
+    _stream(chart, 0.6, 1.8)
+    chart._maybe_freeze()
+    assert len(chart.visible_history()) == 2
+    assert chart.frozen_event["name"] == "green"  # newest
+
+    # Filter to red only: green (the shown, newest) is hidden → jump to red.
+    chart.set_event_filter({"red"})
+    vis = chart.visible_history()
+    assert len(vis) == 1 and "red" in vis[0][1]
+    assert chart.frozen_event["name"] == "red"
+    assert len(chart._history) == 2  # nothing dropped — display-only
+
+    # Clearing the filter restores both (history was retained).
+    chart.set_event_filter(None)
+    assert len(chart.visible_history()) == 2
+
+
+def test_filter_autofollow_tracks_newest_visible(qapp) -> None:
+    chart = _make_chart()
+    chart.set_event_filter({"red"})  # only red is presented
+    # A green event arrives — captured into history but not visible.
+    _stream(chart, 0, 0.6)
+    chart.append_markers([(0.30, 12)])
+    _stream(chart, 0.6, 1.8)
+    chart._maybe_freeze()
+    assert chart.current_index is None  # nothing visible → blank
+    assert len(chart.visible_history()) == 0
+    assert len(chart._history) == 1  # still captured
+
+    # A red event arrives — auto-follow lands on it.
+    chart.append_markers([(2.0, 11)])
+    _stream(chart, 1.8, 3.2)
+    chart._maybe_freeze()
+    assert chart.frozen_event["name"] == "red"
+    assert len(chart.visible_history()) == 1
+
+
+def test_view_filter_button_toggles_presented_events(qapp) -> None:
+    view = _make_view()
+    _feed_view(view, 0, 60)
+    view.append_markers([(0.10, 11), (0.50, 12)])  # red, green
+    _feed_view(view, 60, 180)
+    view.chart._maybe_freeze()
+    assert view._combo.count() == 2
+    assert view._filter_btn is not None
+    assert view._filter_btn.property("active") is False
+
+    # Uncheck "green" → only red presented; filter button reflects the subset.
+    view._event_actions["green"].setChecked(False)
+    assert view._combo.count() == 1
+    assert "red" in view._combo.currentText()
+    assert view.chart.frozen_event["name"] == "red"
+    assert view._filter_btn.property("active") is True
+    assert "1/2" in view._filter_btn.text()
+
+    # Clear all → nothing matches; combo disabled.
+    view._clear_all_events()
+    assert not view._combo.isEnabled()
+    assert view.chart.current_index is None
+
+    # Select all → both back (history retained), filter no longer active.
+    view._select_all_events()
+    assert view._combo.count() == 2
+    assert view._filter_btn.property("active") is False
+
+
 def test_view_reset_clears_combo(qapp) -> None:
     view = _make_view()
     view.append_predictions(

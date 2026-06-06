@@ -1,28 +1,32 @@
 """Browsable wrapper around :class:`FrozenEventChart` (Goals 9 + 11).
 
 The chart epochs the live stream around each trigger event and keeps a
-newest-first history of snapshots. This view adds the **browsing control**: an
-event dropdown, older/newer step buttons, and a "Latest" button that doubles as
-a **live toggle**. The Latest button is *active* (filled green) while
-live-following; clicking it then **deactivates** follow, pinning the current
-event in place so incoming events no longer advance the view. Clicking it while
-inactive goes live again — jump to the newest event and resume following. The
-step buttons' enabled/disabled state marks the ends of the history.
+newest-first history of snapshots. This view adds the **browsing controls**:
 
-Auto-follow lives in the chart (``following``): while on, a new event replaces
-the on-screen one; with it off (either by picking an older event or by pinning
-the newest), incoming events lengthen the history without yanking the display
-away. This view only mirrors that state into its controls — the chart is the
-single source of truth for what's shown and whether it's live.
+* an event dropdown + older/newer step buttons to walk the history;
+* a "Latest" button that doubles as a **live toggle** — active (filled green)
+  while live-following; clicking it deactivates follow (pinning the current
+  event so incoming events no longer advance the view), and clicking it while
+  inactive goes live again;
+* an **event filter** button: a small menu of the configured event types with
+  Select-all / Clear-all, choosing which events the dropdown presents.
+
+Filtering is **display-only** — every event is still captured into the chart's
+history. The dropdown shows the filtered subset, and auto-follow tracks the
+newest *visible* event, so toggling a type re-reveals or hides past events
+without losing anything. The chart owns history + the filter + follow state;
+this view maps each dropdown row back to its history index.
 """
 
 from __future__ import annotations
 
 import numpy as np
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
+    QMenu,
     QPushButton,
     QSizePolicy,
     QToolButton,
@@ -33,14 +37,15 @@ from PyQt6.QtWidgets import (
 from frontend.styles.theme import (
     BORDER_GRAY,
     CARD_WHITE,
+    PRIMARY_BLUE,
     SUCCESS_GREEN,
     TEXT_MUTED,
     TEXT_PRIMARY,
 )
 from frontend.widgets.phase2.frozen_event_chart import FrozenEventChart
 
-# Shared control height so the combo, step buttons, Latest button, and status
-# pill all line up. Matches the secondary-button visual weight elsewhere.
+# Shared control height so the combo, step buttons, filter, and Latest button
+# all line up. Matches the secondary-button visual weight elsewhere.
 _CONTROL_H = 30
 
 _COMBO_QSS = f"""
@@ -63,8 +68,7 @@ QComboBox::drop-down {{
 """
 
 # Compact square step buttons (older / newer). A QToolButton with a native
-# arrow type centres the glyph perfectly regardless of font metrics — the
-# previous text chevrons sat slightly off-centre.
+# arrow type centres the glyph perfectly regardless of font metrics.
 _STEP_QSS = f"""
 QToolButton {{
     background: {CARD_WHITE};
@@ -75,10 +79,31 @@ QToolButton:hover:enabled {{ background: #F3F4F6; }}
 QToolButton:disabled {{ background: #F3F4F6; }}
 """
 
-# The Latest button doubles as the current-vs-past indicator. "Active" =
-# the newest event is on screen (filled green, matching the header's LIVE
-# colour). "Normal" = reviewing an earlier event, so it's an outlined,
-# actionable button that jumps back to the latest.
+# Filter button. Outlined normally; tinted blue when a filter is active (some
+# event types hidden) so the operator sees at a glance that not everything is
+# shown. ``menu-indicator: none`` — we put a ▾ in the text instead.
+_FILTER_BASE = (
+    "border-radius: 2px; padding: 0px 8px; font-size: 12px; font-weight: 600;"
+)
+_FILTER_QSS = f"""
+QToolButton {{
+    background: {CARD_WHITE}; color: {TEXT_PRIMARY};
+    border: 1px solid {BORDER_GRAY}; {_FILTER_BASE}
+}}
+QToolButton:hover {{ background: #F3F4F6; }}
+QToolButton::menu-indicator {{ image: none; width: 0px; }}
+"""
+_FILTER_ACTIVE_QSS = f"""
+QToolButton {{
+    background: #EFF6FF; color: {PRIMARY_BLUE};
+    border: 1px solid {PRIMARY_BLUE}; {_FILTER_BASE}
+}}
+QToolButton::menu-indicator {{ image: none; width: 0px; }}
+"""
+
+# The Latest button doubles as the live indicator + toggle. "Active" = the view
+# is live-following (filled green, matching the header's LIVE colour). "Normal"
+# = paused/reviewing — outlined and actionable to go live again.
 _LATEST_ACTIVE_QSS = f"""
 QPushButton {{
     background: {SUCCESS_GREEN};
@@ -104,12 +129,25 @@ QPushButton:hover {{ background: #F3F4F6; }}
 """
 
 
+class _StayOpenMenu(QMenu):
+    """A QMenu that does not close when a "keep-open" action is clicked, so the
+    operator can toggle several event filters (and Select/Clear all) in one
+    visit. Actions opt in via ``action.setData("keepopen")``."""
+
+    def mouseReleaseEvent(self, event):  # noqa: N802 (Qt override)
+        action = self.activeAction()
+        if action is not None and action.isEnabled() and action.data() == "keepopen":
+            action.trigger()
+            return  # swallow the release so the menu stays open
+        super().mouseReleaseEvent(event)
+
+
 class FrozenEventView(QWidget):
-    """Dropdown-browsable event-locked chart.
+    """Dropdown-browsable, filterable event-locked chart.
 
     Forwards the data hot paths (``append_predictions`` / ``append_markers``)
     and lifecycle (``set_task_visible`` / ``reset_buffers``) straight to the
-    inner :class:`FrozenEventChart`; owns only the browsing UI.
+    inner :class:`FrozenEventChart`; owns only the browsing + filter UI.
     """
 
     def __init__(
@@ -132,6 +170,12 @@ class FrozenEventView(QWidget):
             threshold=threshold,
             event_names=event_names,
         )
+        # Distinct configured event names, for the filter menu.
+        self._event_filter_names = sorted(set((event_names or {}).values()))
+        # Combo rows for the current filter: (history_index, label), newest-first.
+        self._visible: list[tuple[int, str]] = []
+        self._event_actions: dict[str, QAction] = {}
+        self._filter_btn: QToolButton | None = None
 
         self._combo = QComboBox()
         self._combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -157,6 +201,10 @@ class FrozenEventView(QWidget):
         controls.setContentsMargins(0, 0, 0, 0)
         controls.setSpacing(6)
         controls.addWidget(self._combo, 1)
+        # Filter sits just right of the dropdown; only useful with >1 type.
+        if len(self._event_filter_names) >= 2:
+            self._filter_btn = self._build_filter_button()
+            controls.addWidget(self._filter_btn)
         controls.addWidget(self._older_btn)
         controls.addWidget(self._newer_btn)
         controls.addWidget(self._latest_btn)
@@ -168,7 +216,7 @@ class FrozenEventView(QWidget):
         layout.addWidget(self._chart, 1)
 
         self._chart.event_captured.connect(self._on_event_captured)
-        self._sync_controls()  # initial empty state
+        self._rebuild_combo()  # initial empty state
 
     # ── forwarded data / lifecycle API ──────────────────────────────────────────
 
@@ -190,31 +238,40 @@ class FrozenEventView(QWidget):
         self._chart.set_task_visible(name, visible)
 
     def reset_buffers(self) -> None:
+        # The event filter is an operator preference — keep it across Start.
         self._chart.reset_buffers()
-        self._combo.blockSignals(True)
-        self._combo.clear()
-        self._combo.addItem("No events yet")
-        self._combo.blockSignals(False)
-        self._sync_controls()
+        self._rebuild_combo()
 
     # ── browsing wiring ─────────────────────────────────────────────────────────
 
-    def _on_event_captured(self, current_index: int) -> None:
-        """A new event was frozen. Rebuild the dropdown from the chart's
-        history and reflect the index the chart is now showing — without
-        re-triggering a render (the chart already drew the right snapshot)."""
-        labels = self._chart.history_labels()
+    def _on_event_captured(self, _current_index: int) -> None:
+        """A new event was frozen (or the filter changed). Rebuild the dropdown
+        from the chart's filtered history and reflect what the chart is showing
+        — the chart already drew the right snapshot, so this only syncs the UI.
+        """
+        self._rebuild_combo()
+
+    def _rebuild_combo(self) -> None:
+        self._visible = self._chart.visible_history()
         self._combo.blockSignals(True)
         self._combo.clear()
-        self._combo.addItems(labels)
-        self._combo.setCurrentIndex(current_index)
+        if self._visible:
+            self._combo.addItems([label for _, label in self._visible])
+            pos = self._position_of(self._chart.current_index)
+            self._combo.setCurrentIndex(pos if pos is not None else 0)
+            self._combo.setEnabled(True)
+        else:
+            # Distinguish "nothing captured yet" from "everything filtered out".
+            empty = "No events yet" if not self._chart.history_labels() else "No matching events"
+            self._combo.addItem(empty)
+            self._combo.setEnabled(False)
         self._combo.blockSignals(False)
         self._sync_controls()
 
-    def _on_combo_changed(self, index: int) -> None:
-        if index < 0 or not self._chart._history:
+    def _on_combo_changed(self, pos: int) -> None:
+        if pos < 0 or not self._visible:
             return
-        self._chart.show_event(index)
+        self._chart.show_event(self._visible[pos][0])
         self._sync_controls()
 
     def _show_older(self) -> None:
@@ -224,52 +281,125 @@ class FrozenEventView(QWidget):
         self._select(self._combo.currentIndex() - 1)
 
     def _on_latest_clicked(self) -> None:
-        """Toggle live-follow. When active (following the newest event),
-        clicking *deactivates* — the current event stays put and incoming
-        events no longer advance the view. When inactive, clicking goes live:
-        jump to the newest event and resume following."""
+        """Toggle live-follow. Active → deactivate (pin the current event so
+        incoming events don't advance the view). Inactive → go live: jump to
+        the newest visible event and resume following."""
         if self._chart.following:
-            self._chart.set_following(False)  # pin: stay on current event
+            self._chart.set_following(False)  # pin
             self._sync_controls()
         else:
             self._jump_to_latest()
 
     def _jump_to_latest(self) -> None:
-        """Go live: show the newest event and resume auto-follow. Used by the
-        Latest button (inactive state) and available as the public 'home'."""
+        """Go live: show the newest visible event and resume auto-follow."""
         self._chart.follow_latest()
-        self._combo.blockSignals(True)
-        self._combo.setCurrentIndex(0)
-        self._combo.blockSignals(False)
+        self._reflect_position()
         self._sync_controls()
 
-    def _select(self, index: int) -> None:
-        if 0 <= index < self._combo.count():
-            self._combo.setCurrentIndex(index)  # fires _on_combo_changed
+    def _select(self, pos: int) -> None:
+        if self._visible and 0 <= pos < len(self._visible):
+            self._combo.setCurrentIndex(pos)  # fires _on_combo_changed
+
+    def _reflect_position(self) -> None:
+        """Set the combo to the row showing the chart's current event, without
+        re-triggering a render."""
+        pos = self._position_of(self._chart.current_index)
+        self._combo.blockSignals(True)
+        self._combo.setCurrentIndex(pos if pos is not None else 0)
+        self._combo.blockSignals(False)
+
+    def _position_of(self, history_index: int | None) -> int | None:
+        if history_index is None:
+            return None
+        for pos, (hi, _) in enumerate(self._visible):
+            if hi == history_index:
+                return pos
+        return None
 
     def _sync_controls(self) -> None:
-        """Reflect the chart's current index into the controls: enable/disable
-        the step buttons and put the Latest button into its active (on-newest)
-        or normal (reviewing) state."""
-        n = len(self._chart._history)
+        """Enable/disable the step buttons by position within the visible list
+        and put the Latest button into its active (live) or normal state."""
+        n = len(self._visible)
         has_events = n > 0
-        index = self._combo.currentIndex() if has_events else -1
-        # Active = live-following. This can differ from "on the newest event":
-        # the operator can pin the newest event (follow off while index == 0).
+        pos = self._combo.currentIndex() if has_events else -1
+        # Active = live-following (can differ from "newest event": the newest
+        # can be pinned, follow off while on it).
         active = has_events and self._chart.following
 
-        self._combo.setEnabled(has_events)
-        self._older_btn.setEnabled(has_events and index < n - 1)
-        self._newer_btn.setEnabled(has_events and index > 0)
+        self._older_btn.setEnabled(has_events and pos < n - 1)
+        self._newer_btn.setEnabled(has_events and pos > 0)
 
-        # Latest button = the live indicator + toggle. Active (filled green)
-        # while following; normal + actionable otherwise (resume / go live).
         self._latest_btn.setEnabled(has_events)
         self._latest_btn.setProperty("active", active)
         self._latest_btn.setText("● Latest" if active else "⤓ Latest")
         self._latest_btn.setStyleSheet(
             _LATEST_ACTIVE_QSS if active else _LATEST_NORMAL_QSS
         )
+
+    # ── event filter ─────────────────────────────────────────────────────────────
+
+    def _build_filter_button(self) -> QToolButton:
+        menu = _StayOpenMenu(self)
+        for name in self._event_filter_names:
+            act = QAction(name, menu)
+            act.setCheckable(True)
+            act.setChecked(True)
+            act.setData("keepopen")
+            act.toggled.connect(self._on_filter_changed)
+            menu.addAction(act)
+            self._event_actions[name] = act
+        menu.addSeparator()
+        for label, slot in (
+            ("Select all", self._select_all_events),
+            ("Clear all", self._clear_all_events),
+        ):
+            act = QAction(label, menu)
+            act.setData("keepopen")
+            act.triggered.connect(slot)
+            menu.addAction(act)
+
+        btn = QToolButton()
+        btn.setText("Filter ▾")
+        btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        btn.setMenu(menu)
+        btn.setFixedHeight(_CONTROL_H)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setStyleSheet(_FILTER_QSS)
+        btn.setProperty("active", False)  # all selected by default
+        return btn
+
+    def _on_filter_changed(self, _checked: bool = False) -> None:
+        allowed = {n for n, a in self._event_actions.items() if a.isChecked()}
+        # All selected → no filter (None) so the chart skips filtering work.
+        full = len(allowed) == len(self._event_actions)
+        self._chart.set_event_filter(None if full else allowed)
+        self._rebuild_combo()
+        self._update_filter_button()
+
+    def _select_all_events(self, _checked: bool = False) -> None:
+        self._set_all_events(True)
+
+    def _clear_all_events(self, _checked: bool = False) -> None:
+        self._set_all_events(False)
+
+    def _set_all_events(self, checked: bool) -> None:
+        for act in self._event_actions.values():
+            act.blockSignals(True)
+            act.setChecked(checked)
+            act.blockSignals(False)
+        self._on_filter_changed()
+
+    def _update_filter_button(self) -> None:
+        if self._filter_btn is None:
+            return
+        total = len(self._event_actions)
+        selected = sum(1 for a in self._event_actions.values() if a.isChecked())
+        filtering = selected != total
+        self._filter_btn.setText(
+            f"Filter ({selected}/{total}) ▾" if filtering else "Filter ▾"
+        )
+        self._filter_btn.setProperty("active", filtering)
+        self._filter_btn.setStyleSheet(_FILTER_ACTIVE_QSS if filtering else _FILTER_QSS)
 
     # ── helpers ─────────────────────────────────────────────────────────────────
 

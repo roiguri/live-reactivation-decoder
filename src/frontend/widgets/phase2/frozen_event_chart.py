@@ -150,10 +150,16 @@ class FrozenEventChart(pg.PlotWidget):
         self._pending: list[dict] = []
         self._history: list[dict] = []
         self._current_index: int | None = None  # index into _history on screen
-        # Auto-follow: True while the newest event is on screen. Browsing an
-        # older event clears it, so an incoming event no longer yanks the
-        # display away — it just lengthens the history behind the scenes.
+        # Auto-follow: True while the newest *visible* event is on screen.
+        # Browsing an older event clears it, so an incoming event no longer
+        # yanks the display away — it just lengthens the history behind the
+        # scenes.
         self._following: bool = True
+        # Display filter: set of event names to present, or None for "all".
+        # Filtering is a *display* concern — every event is still captured into
+        # history; this only governs what the browsing view shows and which
+        # events auto-follow tracks. Toggling it re-reveals/hides past events.
+        self._allowed: set[str] | None = None
 
         self._task_colors: dict[str, str] = {
             name: chart_line_color(i) for i, name in enumerate(self._task_names)
@@ -261,25 +267,44 @@ class FrozenEventChart(pg.PlotWidget):
             return None
         return self._history[self._current_index]
 
-    def history_labels(self) -> list[str]:
-        """Newest-first list of short labels for a browsing control, e.g.
-        ``"#3 · red · +12.3s"``. The time is **seconds since the stream
-        started** (this session), not the raw LSL clock. Index aligns with
-        :meth:`show_event`."""
+    def _label_for(self, index: int) -> str:
+        """Short label for one history entry, e.g. ``"#3 · red · +12.3s"``.
+        Numbering is by absolute capture order (``#k``) so an event keeps its
+        number regardless of the active filter. Time is seconds since the
+        stream started (this session), not the raw LSL clock."""
         n = len(self._history)
+        snap = self._history[index]
+        return f"#{n - index} · {snap['name']} · +{snap['t_rel']:.1f}s"
+
+    def history_labels(self) -> list[str]:
+        """Newest-first labels for **all** history entries (filter ignored)."""
+        return [self._label_for(i) for i in range(len(self._history))]
+
+    def visible_history(self) -> list[tuple[int, str]]:
+        """Newest-first ``(history_index, label)`` for entries that pass the
+        current event filter. The browsing view builds its dropdown from this,
+        mapping each row back to its history index."""
         return [
-            f"#{n - i} · {snap['name']} · +{snap['t_rel']:.1f}s"
+            (i, self._label_for(i))
             for i, snap in enumerate(self._history)
+            if self._is_allowed(snap["name"])
         ]
 
+    @property
+    def current_index(self) -> int | None:
+        """History index currently on screen, or ``None`` when nothing is shown
+        (no events, or all filtered out)."""
+        return self._current_index
+
     def show_event(self, index: int) -> None:
-        """Display the history snapshot at ``index`` (0 = newest). Out-of-range
-        indices are ignored. Re-renders from the stored snapshot, not the live
-        buffer, so old events stay viewable after their samples scroll away."""
+        """Display the history snapshot at ``index`` (a history index, not a
+        filtered position). Out-of-range indices are ignored. Re-renders from
+        the stored snapshot, not the live buffer, so old events stay viewable
+        after their samples scroll away."""
         if not (0 <= index < len(self._history)):
             return
         self._current_index = index
-        self._following = index == 0
+        self._following = index == self._newest_visible()
         self._render_snapshot(self._history[index])
 
     @property
@@ -297,12 +322,48 @@ class FrozenEventChart(pg.PlotWidget):
         self._following = bool(value)
 
     def follow_latest(self) -> None:
-        """Jump to the newest event and resume auto-follow ("go live")."""
-        if not self._history:
+        """Jump to the newest *visible* event and resume auto-follow."""
+        nv = self._newest_visible()
+        if nv is None:
             return
-        self._current_index = 0
+        self._current_index = nv
         self._following = True
-        self._render_snapshot(self._history[0])
+        self._render_snapshot(self._history[nv])
+
+    def set_event_filter(self, allowed: set[str] | None) -> None:
+        """Set which event names are presented (``None`` = all). Display-only:
+        history is untouched. If the on-screen event is filtered out, jump to
+        the newest visible event (or blank if none remain). Emits
+        ``event_captured`` so the browsing view rebuilds its list."""
+        self._allowed = set(allowed) if allowed is not None else None
+        nv = self._newest_visible()
+        showing_hidden = self._current_index is None or not self._is_allowed(
+            self._history[self._current_index]["name"]
+        )
+        if showing_hidden:
+            if nv is None:
+                self._current_index = None
+                self._following = True
+                self._blank()
+            else:
+                self._current_index = nv
+                self._following = True
+                self._render_snapshot(self._history[nv])
+        else:
+            self._following = self._current_index == nv
+        self.event_captured.emit(
+            self._current_index if self._current_index is not None else -1
+        )
+
+    def _is_allowed(self, name: str) -> bool:
+        return self._allowed is None or name in self._allowed
+
+    def _newest_visible(self) -> int | None:
+        """Lowest (newest) history index passing the filter, or ``None``."""
+        for i, snap in enumerate(self._history):
+            if self._is_allowed(snap["name"]):
+                return i
+        return None
 
     def reset_buffers(self) -> None:
         """Blank the backing buffer, drop any pending event, clear the history
@@ -375,15 +436,20 @@ class FrozenEventChart(pg.PlotWidget):
         # snapshot's index up by one.
         self._history.insert(0, snapshot)
         del self._history[_MAX_HISTORY:]
-        if self._following:
-            # Auto-follow: jump to and render the new event.
-            self._current_index = 0
-            self._render_snapshot(snapshot)
-        elif self._current_index is not None:
-            # Browsing an older event — keep it on screen (no re-render), just
-            # track its shifted index. Clamp in case the cap dropped the tail.
+        if self._current_index is not None:
+            # Everything shifted up by one; track the pinned/browsed event.
             self._current_index = min(self._current_index + 1, len(self._history) - 1)
-        self.event_captured.emit(self._current_index if self._current_index is not None else 0)
+        if self._following:
+            # Auto-follow tracks the newest *visible* event. If the new one is
+            # filtered out, the newest visible is unchanged (just re-indexed),
+            # so re-render only when it actually changes what's shown.
+            nv = self._newest_visible()
+            if nv is not None and nv != self._current_index:
+                self._current_index = nv
+                self._render_snapshot(self._history[nv])
+        self.event_captured.emit(
+            self._current_index if self._current_index is not None else -1
+        )
 
     def _render_snapshot(self, snap: dict) -> None:
         """Push a stored snapshot's curves + caption onto the scene."""
@@ -393,6 +459,13 @@ class FrozenEventChart(pg.PlotWidget):
         self.getPlotItem().setTitle(
             f"Event-locked: {snap['name']}", color=PRIMARY_BLUE, size="9pt"
         )
+
+    def _blank(self) -> None:
+        """Clear the curves + caption when no event is visible."""
+        for curve in self._curves.values():
+            curve.setData([], [])
+        self._onset_line.label.setFormat("")
+        self.getPlotItem().setTitle(_WAITING_TITLE, color=TEXT_MUTED, size="9pt")
 
     def _configure_axes(self) -> None:
         self.setYRange(*_Y_RANGE, padding=0)
