@@ -20,9 +20,11 @@ this view maps each dropdown row back to its history index.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QAction
+from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -47,6 +49,12 @@ from frontend.widgets.phase2.frozen_event_chart import FrozenEventChart
 # Shared control height so the combo, step buttons, filter, and Latest button
 # all line up. Matches the secondary-button visual weight elsewhere.
 _CONTROL_H = 30
+
+# Funnel icons for the filter button (normal dark + active blue), as SVG assets
+# alongside the app's other icons.
+_ASSETS = Path(__file__).resolve().parents[2] / "styles" / "assets"
+_FILTER_ICON = str(_ASSETS / "filter.svg")
+_FILTER_ICON_ACTIVE = str(_ASSETS / "filter_active.svg")
 
 _COMBO_QSS = f"""
 QComboBox {{
@@ -79,9 +87,10 @@ QToolButton:hover:enabled {{ background: #F3F4F6; }}
 QToolButton:disabled {{ background: #F3F4F6; }}
 """
 
-# Filter button. Outlined normally; tinted blue when a filter is active (some
-# event types hidden) so the operator sees at a glance that not everything is
-# shown. ``menu-indicator: none`` — we put a ▾ in the text instead.
+# Filter button (funnel icon). Outlined normally; tinted blue with a "k/n"
+# count when a filter is active (some event types hidden) so the operator sees
+# at a glance that not everything is shown. ``menu-indicator: none`` hides the
+# default popup arrow — the funnel icon already signals it opens a menu.
 _FILTER_BASE = (
     "border-radius: 2px; padding: 0px 8px; font-size: 12px; font-weight: 600;"
 )
@@ -359,10 +368,14 @@ class FrozenEventView(QWidget):
             menu.addAction(act)
 
         btn = QToolButton()
-        btn.setText("Filter ▾")
+        btn.setIcon(QIcon(_FILTER_ICON))
+        btn.setIconSize(QSize(15, 15))
+        btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        btn.setToolTip("Filter which events are shown")
         btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         btn.setMenu(menu)
         btn.setFixedHeight(_CONTROL_H)
+        btn.setMinimumWidth(_CONTROL_H)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setStyleSheet(_FILTER_QSS)
         btn.setProperty("active", False)  # all selected by default
@@ -395,11 +408,20 @@ class FrozenEventView(QWidget):
         total = len(self._event_actions)
         selected = sum(1 for a in self._event_actions.values() if a.isChecked())
         filtering = selected != total
-        self._filter_btn.setText(
-            f"Filter ({selected}/{total}) ▾" if filtering else "Filter ▾"
-        )
-        self._filter_btn.setProperty("active", filtering)
-        self._filter_btn.setStyleSheet(_FILTER_ACTIVE_QSS if filtering else _FILTER_QSS)
+        btn = self._filter_btn
+        if filtering:
+            # Blue funnel + a compact "k/n" count beside it so the operator
+            # sees a filter is active and how many types are shown.
+            btn.setIcon(QIcon(_FILTER_ICON_ACTIVE))
+            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            btn.setText(f"{selected}/{total}")
+            btn.setStyleSheet(_FILTER_ACTIVE_QSS)
+        else:
+            btn.setIcon(QIcon(_FILTER_ICON))
+            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            btn.setText("")
+            btn.setStyleSheet(_FILTER_QSS)
+        btn.setProperty("active", filtering)
 
     # ── helpers ─────────────────────────────────────────────────────────────────
 
