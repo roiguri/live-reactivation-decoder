@@ -45,7 +45,7 @@ pg.setConfigOptions(background="w", foreground="k", antialias=True)
 # empty band above the data where event-marker labels are drawn (so they sit
 # clear of the curves). _Y_TICK_MAX caps the labelled Y ticks at 1.0 so that
 # headroom reads as blank margin, not as "probability > 1".
-_Y_RANGE = (0.0, 1.1)
+_Y_RANGE = (0.0, 1.18)
 _Y_TICK_MAX = 1.0
 _CHANCE_LEVEL = 0.5
 _REFRESH_HZ = 30

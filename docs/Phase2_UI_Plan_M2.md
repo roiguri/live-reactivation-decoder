@@ -40,8 +40,8 @@ M2 is re-sequenced around one principle: **nothing downstream is meaningful unti
 | **2** | Goal 18 — Group Delay Deep Dive | Characterizes the ~60 ms delay + filter mismatch; produces a delay constant the next steps consume |
 | **3** | Goal 7 — System Logging (prediction + latency timepoints) | Persists the evidence validation needs |
 | **4** | Goal 1 — Pipeline Validation (Steps 2-4) | Closes the trust gate using profiles (1), the delay model (2), and logs (3) |
-| **5** | Goal 9 — Frozen Event Graph | First UI feature on validated predictions |
-| backlog | Goals 4, 5, 6, 8, 10, 11, 13, 14, 15, 16 | Resume original plan |
+| **5** | Goal 9 — Frozen Event Graph | ✅ Built early — anchored to delay-free markers, so it doesn't wait on validation (see Goal 9 note). Goal 11 (browsing) shipped with it. |
+| backlog | Goals 4, 5, 6, 8, 10, 13, 14, 15, 16 | Resume original plan |
 
 > **Phase 1 cross-cutting note — per-decoder training timepoint selection.** Each decoder is trained at a **single** timepoint, and the backend **already supports a *different* timepoint per decoder**: `ModelTrainer.run_training()` accepts `dict[str, float]` (task → one timepoint), the trained feature stays `n_channels` wide, and `DecoderPipelineMetadata.decoding_timepoints` carries the per-task values. This is *not* multi-timepoint/multi-slice training — there is no `n_channels × k` feature and **no online impact**: `LiveInferenceEngine.predict()` runs every decoder on the same sliding `feature_width` window, and each fires when its pattern slides through.
 >
@@ -83,7 +83,7 @@ Work from `feat/phase2-stream-selection` lands several M2 items early and change
 | 18 | Group Delay Deep Dive | Not started | **2** |
 | 7 | System Logging (prediction + latency timepoints) | Not started | **3** |
 | 1 | Pipeline Validation | Step 1 (replay script) done; Steps 2-4 pending | **4** |
-| 9 | Frozen Event Graph | Not started | **5** |
+| 9 | Frozen Event Graph | ✅ Done (built ahead of validation — delay-agnostic) | **5** |
 | 2 | Event Markers on Probability Graph | ✅ Done | — |
 | 3 | LSL Stream Picker | ✅ Done (stream-selection branch) | — |
 | 4 | Trigger Log | Not started | backlog |
@@ -91,7 +91,7 @@ Work from `feat/phase2-stream-selection` lands several M2 items early and change
 | 6 | Latency Display + Buffer Health | Not started | backlog |
 | 8 | Decision Settings UI | Not started | backlog |
 | 10 | Back Button + Exit Flow | Not started | backlog |
-| 11 | Past Events Dropdown | Not started | backlog |
+| 11 | Past Events Dropdown | ✅ Done (built with Goal 9) | backlog |
 | 12 | Unified Source Picker (XDF Replay) | Revised — replay via external script; in-app picker descoped | — |
 | 13 | Modular Graph Layouts | Not started | backlog |
 | 14 | Per-Decoder Colour Picker | Not started | backlog |
@@ -211,15 +211,24 @@ If Step 3 shows a significant residual gap beyond the modeled delay, drill into 
 
 ---
 
-## Goal 9 — Frozen Event Graph (Seq 5)
+## Goal 9 — Frozen Event Graph (Seq 5) — ✅ Done
 
-On marker detection, display a separate chart showing the prediction window around that event. The first "real" UI feature, now riding on validated predictions and rendered markers (Goal 2, done).
+On marker detection, display a separate chart showing the prediction window around that event.
 
-- [ ] New widget: `FrozenEventChart` — fixed-window chart (e.g. -0.2s to +1.0s around the event)
-- [ ] Triggered when a marker is detected in the prediction stream
-- [ ] Shows all decoder probabilities for that window with the event onset marked
-- [ ] Placed in the centre panel (exact position TBD — depends on Goal 13)
-- [ ] Verified: during replay, an event triggers a frozen snapshot that stays visible
+**Pulled forward ahead of the validation gate (deliberate).** The window is anchored to the **marker** — a trigger code pulled straight off the LSL stream, untouched by the preprocessing pipeline, hence delay-free. The decoder curves drawn inside the window still carry whatever pipeline group delay exists, but the widget makes **no** attempt to compensate it: it slices the fixed seconds around the event verbatim. So it's agnostic to prediction fidelity — if Goal 18/Goal 1 improve the online pipeline later, the response just moves earlier within the same window for free, no code change. It also doubles as a *diagnostic* for Goal 18: because the window is event-anchored, the lag between marker (x=0) and decoder response is directly visible.
+
+Shipped as `src/frontend/widgets/phase2/frozen_event_chart.py` (+ `frozen_event_view.py` for Goal 11).
+
+- [x] New widget: `FrozenEventChart` — fixed-window chart (**-0.2s to +1.0s** around the event, operator-confirmed window)
+- [x] Triggered when a marker is detected in the prediction stream (epochs the live stream: a **queue** of pending captures, each frozen once its post-event window has streamed in — so events closer together than 1 s each still land in history)
+- [x] Shows all decoder probabilities for that window with the event onset marked (bold onset line at x=0 labelled with the configured event name; shares the live chart's decoder palette + visibility toggles)
+- [x] Placed in the centre panel below the live chart (scratch stacked-card placement — final layout is Goal 13)
+- [x] Verified headless: 15 tests cover epoching, window bounds (onset at 0), unmapped-code drop, the pending queue, and reset. **Live replay verification (vertical snapshot stays visible during VHDR replay) remains an operator step on Windows.**
+
+**Design notes:**
+- Data discipline matches the live chart: `append_predictions` / `append_markers` are data-only (write a backing ring buffer / queue a pending capture); all scene mutation happens on a slow (`_CHECK_HZ = 15`) freeze-check `QTimer`.
+- The backing buffer spans `pre + post + 0.5 s` so a completed epoch is always still resident when its post-window finishes streaming.
+- A new event auto-renders onto screen **only while following** the latest (`_following`); see Goal 11 for the browse interaction.
 
 ---
 
@@ -287,15 +296,23 @@ Resolve back-flow semantics and implement exit confirmation.
 
 ---
 
-## Goal 11 — Past Events Dropdown
+## Goal 11 — Past Events Dropdown — ✅ Done (with Goal 9)
 
-Browse earlier event snapshots in the Frozen Event Graph.
+Browse earlier event snapshots in the Frozen Event Graph. Built alongside Goal 9 since the chart already had to retain snapshots — `FrozenEventView` (`src/frontend/widgets/phase2/frozen_event_view.py`) wraps `FrozenEventChart` with the browsing control.
 
-- [ ] Dropdown or navigation control above/beside the `FrozenEventChart`
-- [ ] Stores a rolling history of event snapshots (capped to a reasonable count)
-- [ ] Selecting a past event replaces the frozen chart content
-- [ ] Current (most recent) event is the default view
-- [ ] Verified: after multiple events, operator can navigate back to earlier ones
+- [x] Dropdown (`QComboBox`, newest-first) above the chart, plus older/newer step buttons (`‹` / `›`) and a "Latest" button to resume auto-follow
+- [x] Stores a rolling history of event snapshots, capped at `_MAX_HISTORY = 64` (oldest dropped first)
+- [x] Selecting a past event re-renders the frozen chart from the stored snapshot (works after the live samples have scrolled out of the backing buffer)
+- [x] Current (most recent) event is the default view — `_following` auto-jumps to each new event **until** the operator picks an older one, after which incoming events grow the history without yanking the display away (their index is tracked through the shift)
+- [x] Verified headless: combo populates on capture, selecting a past event shows it, step buttons + "Latest" navigate, the Latest button's active state flips, reset clears the controls
+
+**Controls / styling note:** the dropdown + filter + step buttons + Latest button share a uniform 30 px height and reuse the app's combo/secondary-button styling (no "Event" caption — the section header already says it). Step buttons are `QToolButton`s with native arrows (centred regardless of font). The **Latest button doubles as a live toggle + indicator** (no separate pill): it renders **active** (filled green, "● Latest") while live-following, and normal/outlined ("⤓ Latest") otherwise. Clicking it while active **deactivates follow** — pinning the current event so incoming events don't advance the view; clicking while inactive goes live again (jump to newest + resume). So "active" tracks *following*, which can differ from "on the newest event" (the newest event can be pinned). Step buttons disable at the ends of the history.
+
+**Event filter (display-only).** A "Filter ▾" button right of the dropdown opens a stay-open menu of the configured event types (checkable) with **Select all / Clear all**. Filtering is purely a *display* concern — every event is still captured into history; the dropdown shows the filtered subset and auto-follow tracks the newest *visible* event, so toggling a type re-reveals or hides past events without losing anything. The chart owns the filter (`set_event_filter`, `visible_history`, `_newest_visible`) so follow respects it; the view maps each dropdown row back to its history index. The button tints blue and shows `(k/n)` when a filter is active. Only shown when ≥ 2 event types are configured. The filter persists across Start.
+
+**Events-list time:** each entry reads `#n · <event> · +T.Ts`, where **T is seconds since the stream started this session** (first sample after Start), *not* the raw LSL `local_clock()` timestamp (an arbitrary ~uptime origin). The chart tracks `_session_t0` for this; the absolute marker timestamp is still kept on the snapshot (`ts`) for any future alignment work.
+
+**Interaction note:** follow-vs-browse state lives in the chart (`_following`), so the chart is the single source of truth for what's on screen; `FrozenEventView` only mirrors it into its controls (signals blocked during rebuild to avoid re-render loops).
 
 ---
 
@@ -442,7 +459,7 @@ Trigger events render as vertical lines on the live probability chart. The `mark
 - `Phase2Screen` builds the `{code: name}` map by inverting `settings["event_mapping"]` (which `SettingsManager.get_settings()` exposes as `{name: id}`, flattened from `markers_mapping.events`) — tolerant of a missing map — and passes it to the chart constructor; `_on_predictions` now calls `append_markers(markers)` after `append_predictions`.
 - The receiver emits **every** non-zero trigger edge, not just configured events. `append_markers` drops any code absent from the event map, so only declared events are drawn.
 - Colour is intentionally **not** derived from the event name (names are arbitrary config labels, not colour hints). All markers are black; the label is the only per-event distinction.
-- **Label placement.** A headroom band above the curves (`_Y_RANGE` top `1.1`, Y ticks capped at `1.0` so the band reads as blank margin) lets labels sit clear of the data. Labels are pinned to one fixed side via identical `InfLineLabel` `anchors` — this disables pyqtgraph's default view-edge flip, which otherwise makes two markers straddling the view centre point their labels inward and collide. Trade-off: a label on a marker near the right (NOW) edge can clip; flip the anchor side or centre it if that reads poorly in the lab.
+- **Label placement.** A headroom band above the curves (`_Y_RANGE` top `1.18`, Y ticks capped at `1.0` so the band reads as blank margin) lets labels sit clear of the data — the band was widened from `1.1` so labels no longer graze curves riding near `1.0`. Labels are pinned to one fixed side via identical `InfLineLabel` `anchors` — this disables pyqtgraph's default view-edge flip, which otherwise makes two markers straddling the view centre point their labels inward and collide. Trade-off: a label on a marker near the right (NOW) edge can clip; flip the anchor side or centre it if that reads poorly in the lab.
 - All marker scene mutation happens on the 30 Hz repaint tick (`_refresh_markers`), keeping `append_markers` off the scene like the prediction hot path. `_MAX_MARKERS` (128) backstops unbounded growth if the stream stalls.
 
 ---

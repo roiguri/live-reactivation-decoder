@@ -25,6 +25,7 @@ from frontend.styles.theme import (
 )
 from frontend.widgets.live_probability_chart import LiveProbabilityChart
 from frontend.widgets.phase2 import (
+    FrozenEventView,
     Phase2Header,
     Phase2SettingsPanel,
     StartHaltButton,
@@ -85,14 +86,27 @@ class Phase2Screen(QWidget):
             threshold=_DEFAULT_THRESHOLD,
             event_names=event_names,
         )
+        # Event-locked snapshot view (Goals 9 + 11): epochs each trigger
+        # event into a fixed window and keeps a browsable history. Shares the
+        # decoder palette + visibility with the live chart.
+        self._frozen = FrozenEventView(
+            task_names=task_names,
+            target_sfreq=target_sfreq,
+            threshold=_DEFAULT_THRESHOLD,
+            event_names=event_names,
+        )
         # Live target chosen by the operator via the header. None until a
         # target is selected; Start is guarded against a missing target.
         self._target: dict | None = None
         self._header = Phase2Header()
         self._header.choose_target_clicked.connect(self._on_choose_target)
         self._settings_panel = Phase2SettingsPanel(task_colors=self._chart.task_colors)
+        # Decoder show/hide drives both charts so they stay in sync.
         self._settings_panel.task_visibility_toggled.connect(
             self._chart.set_task_visible
+        )
+        self._settings_panel.task_visibility_toggled.connect(
+            self._frozen.set_task_visible
         )
 
         self._start_halt_button = StartHaltButton()
@@ -136,6 +150,8 @@ class Phase2Screen(QWidget):
     ) -> None:
         self._chart.append_predictions(predictions, out_ts)
         self._chart.append_markers(markers)
+        self._frozen.append_predictions(predictions, out_ts)
+        self._frozen.append_markers(markers)
 
     # ── target selection ───────────────────────────────────────────────────────
 
@@ -167,6 +183,7 @@ class Phase2Screen(QWidget):
         # Drop any frozen tail from the previous session so the new one
         # starts visually blank.
         self._chart.reset_buffers()
+        self._frozen.reset_buffers()
         self._start_halt_button.set_connecting()
         # Force the disabled "Connecting…" repaint before the blocking
         # LSL resolve so the operator sees the state change.
@@ -253,7 +270,29 @@ class Phase2Screen(QWidget):
         card_layout.setContentsMargins(0, 0, 0, 0)
         card_layout.addWidget(self._chart)
         layout.addWidget(chart_card)
-        # Stretch keeps the chart card pinned to the top at its
-        # intended height; leaves room below for future content.
+
+        # Event-locked snapshot, below the rolling chart. Scratch placement
+        # (a stacked second card) — final layout is Goal 13 (modular panels).
+        event_title = QLabel("EVENT-LOCKED VIEW")
+        etf = event_title.font()
+        etf.setPointSize(9)
+        etf.setWeight(QFont.Weight.DemiBold)
+        event_title.setFont(etf)
+        event_title.setStyleSheet(
+            f"color: {TEXT_MUTED}; background: transparent; letter-spacing: 1px;"
+        )
+        layout.addSpacing(8)
+        layout.addWidget(event_title)
+
+        event_card = QFrame()
+        event_card.setStyleSheet(
+            f"QFrame {{ background: {CARD_WHITE}; border: 1px solid {BORDER_GRAY}; }}"
+        )
+        event_card.setMaximumHeight(_CHART_MAX_HEIGHT)
+        event_card_layout = QVBoxLayout(event_card)
+        event_card_layout.setContentsMargins(8, 8, 8, 8)
+        event_card_layout.addWidget(self._frozen)
+        layout.addWidget(event_card)
+
         layout.addStretch(1)
         return panel
