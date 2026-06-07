@@ -165,6 +165,15 @@ class OfflineOrchestrator:
         logger.info("ICA fitted. %d component(s) suggested.", len(suggested))
         return ica, epochs, suggested
 
+    def ica_component_labels(self) -> list[tuple[str, float]] | None:
+        """Per-component ``(ICLabel category, confidence)``, aligned by ICA
+        component index, for the review UI to annotate ``plot_components``
+        titles. ``None`` if ICLabel is disabled or ICA has not been fitted.
+        Valid after ``run_step1b_fit_ica()``."""
+        if self._preprocessor is None:
+            return None
+        return self._preprocessor.component_labels
+
     def run_step2_apply_and_save(
         self, excluded_components: list[int]
     ) -> dict[str, Any]:

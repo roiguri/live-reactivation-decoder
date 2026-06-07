@@ -55,6 +55,11 @@ class OfflinePreprocessor:
         self._bad_channels: list[str] = []
         self._interp_weights: Optional[np.ndarray] = None
         self._suggested_exclude: list[int] = []
+        # Per-component (ICLabel category, confidence), aligned by component
+        # index. Populated by _iclabel_suggest(); None when ICLabel is
+        # disabled. Surfaced to the review UI so the operator sees what
+        # ICLabel thought each component was. See component_labels.
+        self._component_labels: Optional[list[tuple[str, float]]] = None
 
         # Positional channel bookkeeping for the online handoff.
         self._original_ch_names: list[str] = []   # pre-hygiene .vhdr order
@@ -453,6 +458,7 @@ class OfflinePreprocessor:
         """Pre-select components whose ICLabel class is in ``ica.iclabel.drop_labels``."""
         ic = self.settings["ica"].get("iclabel", {})
         if not ic.get("enabled", True):
+            self._component_labels = None
             return []
 
         from mne_icalabel import label_components
@@ -472,23 +478,24 @@ class OfflinePreprocessor:
         #       but that's a paper-deviation, not just a comfort fix.
         result = label_components(fit_epochs, self.ica, method="iclabel")
         labels = result["labels"]
-        # TODO(ui): the full ICLabel category list (one of brain / muscle /
-        # eye / heart / line_noise / channel_noise / other per component)
-        # is computed here and discarded — only the indices that fall into
-        # `drop_labels` are returned. MNE's plot_components shows component
-        # numbers only, so the operator can't see ICLabel's category in the
-        # review window. Options when we revisit:
-        #   (a) keep current state — ICLabel's categorisation is implicit
-        #       in the pre-fill of ica.exclude; greyed titles indicate
-        #       "ICLabel says reject", that's enough.
-        #   (b) surface labels through run_step1b_fit_ica → view → mutate
-        #       subplot titles after plot_components to append the
-        #       category (e.g. "ICA001 — eye blink").
-        #   (c) replace plot_components with a custom paginator that
-        #       renders titles with categories from the start (see git
-        #       history for an in-progress sketch that was reverted).
+        proba = result["y_pred_proba"]
+        # Keep the full per-component categorisation (category + the model's
+        # confidence in that category) so the review UI can append it to each
+        # plot_components subplot title — the operator sees "what ICLabel
+        # thought this is", not just an implicit greyed-out reject. Aligned by
+        # component index. See component_labels and PreprocessingView.
+        self._component_labels = [
+            (lbl, float(p)) for lbl, p in zip(labels, proba)
+        ]
         suggested = [i for i, lbl in enumerate(labels) if lbl in drop]
         return suggested
+
+    @property
+    def component_labels(self) -> Optional[list[tuple[str, float]]]:
+        """Per-component ``(ICLabel category, confidence)``, aligned by ICA
+        component index. ``None`` when ICLabel was disabled. Valid only after
+        ``run_step1b_fit_ica()`` (populated during the ICA fit)."""
+        return self._component_labels
 
     def _save(self, output_dir: Path) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)

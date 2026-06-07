@@ -213,6 +213,20 @@ class TestRunStep1bFitIca:
         assert (ica, epochs, suggested) == ("ica", "epochs", [0, 2])
         assert orc._epochs == "epochs"
 
+    def test_ica_component_labels_none_without_preprocessor(
+        self, tmp_path: Path
+    ) -> None:
+        orc = _make_orchestrator(tmp_path)
+        assert orc.ica_component_labels() is None
+
+    def test_ica_component_labels_delegates_to_preprocessor(
+        self, tmp_path: Path
+    ) -> None:
+        orc = _make_orchestrator(tmp_path)
+        stub = _attach_preprocessor_stub(orc)
+        stub.component_labels = [("brain", 0.9), ("eye", 0.99)]
+        assert orc.ica_component_labels() == [("brain", 0.9), ("eye", 0.99)]
+
 
 # ── TestRunStep2ApplyAndSave ──────────────────────────────────────────────────
 
