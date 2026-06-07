@@ -1,23 +1,25 @@
-import logging
+import argparse
 import sys
 
 import mne
 from PyQt6.QtWidgets import QApplication
 
+from backend.core.logging_setup import configure_logging
 from frontend.main_window import MainWindow
 from frontend.screens.phase1_screen import Phase1Screen
 from frontend.styles.theme import GLOBAL_QSS
 
 
-def _configure_logging() -> None:
-    """Surface backend logger.info / .warning messages in the terminal so the
-    operator can audit what the pipeline is doing (which bads were marked,
-    which ICA components were excluded, etc.)."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="frontend.main")
+    parser.add_argument(
+        "--log-level",
+        default=None,
+        help="Logging verbosity (DEBUG/INFO/WARNING/...). Overrides the "
+        "LRD_LOG_LEVEL env var; defaults to INFO.",
     )
+    # parse_known_args so unrelated Qt args on sys.argv don't trip the parser.
+    return parser.parse_known_args(argv)[0]
 
 
 def _select_mne_browser_backend() -> None:
@@ -41,7 +43,8 @@ def _select_mne_browser_backend() -> None:
 
 
 def main():
-    _configure_logging()
+    args = _parse_args(sys.argv[1:])
+    configure_logging(args.log_level)
     _select_mne_browser_backend()
 
     app = QApplication(sys.argv)

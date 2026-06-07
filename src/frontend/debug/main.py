@@ -18,27 +18,18 @@ CLI flags:
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 from pathlib import Path
 
 import mne
 from PyQt6.QtWidgets import QApplication
 
+from backend.core.logging_setup import configure_logging
 from frontend.debug.phase1_screen_debug import DebugPhase1Screen
 from frontend.debug.phase2_screen_debug import build_debug_phase2
 from frontend.debug.profiles import list_profiles, resolve_profile
 from frontend.main_window import MainWindow
 from frontend.styles.theme import GLOBAL_QSS
-
-
-def _configure_logging() -> None:
-    """Surface backend logger.info messages in the terminal."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
 
 
 def _select_mne_browser_backend() -> None:
@@ -78,12 +69,18 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "--data", type=Path, default=None,
         help="Override the profile's raw-data directory.",
     )
+    parser.add_argument(
+        "--log-level",
+        default=None,
+        help="Logging verbosity (DEBUG/INFO/WARNING/...). Overrides the "
+        "LRD_LOG_LEVEL env var; defaults to INFO.",
+    )
     return parser.parse_args(argv)
 
 
 def main() -> None:
     args = _parse_args(sys.argv[1:])
-    _configure_logging()
+    configure_logging(args.log_level)
 
     if args.list_profiles:
         names = list_profiles()
