@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
@@ -15,6 +16,8 @@ from frontend.views.preprocessing_view import PreprocessingView
 from frontend.views.evaluation_view import EvaluationView
 from frontend.views.train_view import TrainView
 from frontend.styles.theme import BG_LIGHT, BORDER_GRAY, CARD_WHITE, TEXT_PRIMARY
+
+logger = logging.getLogger(__name__)
 
 _NODE_TITLES = [
     "Pipeline Settings",
@@ -260,6 +263,7 @@ class Phase1Screen(QWidget):
             # Artifact load / live-stream construction failed. Keep the
             # operator on Phase 1 so they can re-train or pick a different
             # artifact rather than landing on a half-built screen.
+            logger.exception("Failed to open live inference (decoder pipeline load)")
             QMessageBox.critical(
                 self, "Could not open live inference",
                 f"Failed to load the decoder pipeline:\n{exc}",
@@ -280,13 +284,9 @@ class Phase1Screen(QWidget):
         out_dir = self._settings_view._output_dir
         cfg_name = Path(cfg_path).name if cfg_path else "—"
         out_name = Path(out_dir).name if out_dir else "—"
-        try:
-            settings = self.session.settings
-            model = settings["decoders"]["model"]
-            n_decoders = len(settings["decoders"].get("tasks", []))
-        except (AttributeError, KeyError, TypeError):
-            model = "—"
-            n_decoders = 0
+        settings = self.session.settings
+        model = settings["decoders"]["model"]
+        n_decoders = len(settings["decoders"].get("tasks", []))
         return (
             f"Config: {cfg_name}\n"
             f"Output: {out_name}\n"
