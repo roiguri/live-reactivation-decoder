@@ -14,14 +14,8 @@ class PreprocessingStep1AWorker(BaseWorker):
         super().__init__(parent)
         self._orchestrator = orchestrator
 
-    def run(self) -> None:
-        try:
-            raw = self._orchestrator.run_step1a_filter()
-            self.result_ready.emit(raw)
-        except Exception as exc:
-            self.error_occurred.emit(str(exc))
-        finally:
-            self.finished.emit()
+    def execute(self):
+        return self._orchestrator.run_step1a_filter()
 
 
 class PreprocessingStep1BWorker(BaseWorker):
@@ -35,14 +29,8 @@ class PreprocessingStep1BWorker(BaseWorker):
         super().__init__(parent)
         self._orchestrator = orchestrator
 
-    def run(self) -> None:
-        try:
-            ica, epochs, suggested = self._orchestrator.run_step1b_fit_ica()
-            self.result_ready.emit((ica, epochs, suggested))
-        except Exception as exc:
-            self.error_occurred.emit(str(exc))
-        finally:
-            self.finished.emit()
+    def execute(self):
+        return self._orchestrator.run_step1b_fit_ica()
 
 
 class PreprocessingStep2Worker(BaseWorker):
@@ -56,11 +44,5 @@ class PreprocessingStep2Worker(BaseWorker):
         self._orchestrator = orchestrator
         self._excluded = excluded
 
-    def run(self) -> None:
-        try:
-            result = self._orchestrator.run_step2_apply_and_save(self._excluded)
-            self.result_ready.emit(result)
-        except Exception as exc:
-            self.error_occurred.emit(str(exc))
-        finally:
-            self.finished.emit()
+    def execute(self):
+        return self._orchestrator.run_step2_apply_and_save(self._excluded)

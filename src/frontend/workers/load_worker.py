@@ -16,11 +16,6 @@ class LoadWorker(BaseWorker):
         super().__init__(parent)
         self._orchestrator = orchestrator
 
-    def run(self) -> None:
-        try:
-            self._orchestrator.load_raw_data()
-            self.result_ready.emit(None)
-        except Exception as exc:
-            self.error_occurred.emit(str(exc))
-        finally:
-            self.finished.emit()
+    def execute(self):
+        self._orchestrator.load_raw_data()
+        return None  # no payload; loaded data lives in the orchestrator
