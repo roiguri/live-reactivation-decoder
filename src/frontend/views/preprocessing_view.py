@@ -266,7 +266,9 @@ class PreprocessingView(QWidget):
             # block=True, which is a no-op inside QApplication.exec().
             fig = raw.plot(block=False)
             _WaitForClose(fig).wait()
-            bads = list(raw.info["bads"])
+            # Coerce numpy str_ → plain str so the value reads cleanly in logs
+            # and downstream (MNE treats them identically as channel names).
+            bads = [str(b) for b in raw.info["bads"]]
             logger.info(
                 "Bad-channel review closed; operator selected %d channel(s): %s",
                 len(bads), bads,
