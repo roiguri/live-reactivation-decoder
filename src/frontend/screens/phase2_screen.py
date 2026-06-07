@@ -176,12 +176,11 @@ class Phase2Screen(QWidget):
 
     def _on_start_clicked(self) -> None:
         if self._target is None:
-            QMessageBox.information(
-                self,
-                "No target selected",
-                "Choose a target before starting inference.",
-            )
-            return
+            # No stream picked yet — open the target picker instead of
+            # erroring, so Start doubles as "pick, then start".
+            self._on_choose_target()
+            if self._target is None:
+                return  # operator cancelled the picker
 
         # Drop any frozen tail from the previous session so the new one
         # starts visually blank.
