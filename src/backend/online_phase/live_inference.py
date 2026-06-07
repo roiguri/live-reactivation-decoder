@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from numbers import Integral
 from typing import Any
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 class LiveInferenceEngine:
@@ -25,6 +28,11 @@ class LiveInferenceEngine:
         self._models = models
         self._metadata = metadata
         self._feature_width = feature_width
+
+        logger.info(
+            "LiveInferenceEngine ready: %d decoder(s) %s, feature_width=%d",
+            len(self._models), list(self._models), self._feature_width,
+        )
 
     @property
     def models(self) -> dict[str, Any]:
