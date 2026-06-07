@@ -1330,10 +1330,7 @@ class EvaluationView(QWidget):
     def _decoder_task_config_by_name(self) -> dict[str, dict]:
         if self._session is None:
             return {}
-        try:
-            tasks = self._session.settings["decoders"]["tasks"]
-        except (KeyError, TypeError, AttributeError):
-            return {}
+        tasks = self._session.settings["decoders"]["tasks"]
         return {t["name"]: t for t in tasks}
 
     # ── tiny visual helpers ──────────────────────────────────────────────────
