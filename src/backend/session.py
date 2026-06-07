@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import shutil
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +19,8 @@ from backend.online_phase.online_preprocessor import OnlinePreprocessor
 from backend.online_phase.session_logger import LiveSessionLogger
 from backend.online_phase.stream_source import LslProxySource, StreamSource
 from backend.online_phase.stream_worker import StreamWorker
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -105,10 +109,35 @@ class AppSession:
     def configure_output(self, output_dir: str | Path) -> None:
         """Set the session workspace and create the OfflineOrchestrator.
 
+        Also drops a copy of the experiment config at the workspace root, so the
+        run is self-documenting. The copy happens once per distinct workspace:
+        re-configuring the same directory does not rewrite it (the config a run
+        was built with shouldn't change underfoot), while pointing at a new — or
+        a previously used — directory copies in (overwriting any stale copy).
+
         Must be called before session.offline is used.
         """
-        self.paths = SessionPaths(Path(output_dir))
+        new_paths = SessionPaths(Path(output_dir))
+        is_new_workspace = self.paths is None or self.paths.root != new_paths.root
+        self.paths = new_paths
         self.offline = OfflineOrchestrator(self._settings, self.paths)
+        if is_new_workspace:
+            self._copy_config_to_workspace()
+
+    def _copy_config_to_workspace(self) -> None:
+        """Copy the source config verbatim to ``paths.experiment_config_path``.
+
+        Copies the original YAML (preserving comments) rather than re-serialising
+        the parsed model. Best-effort: a copy failure must not block configuring
+        the workspace, so it is logged and swallowed.
+        """
+        assert self.paths is not None
+        dest = self.paths.experiment_config_path
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(self._settings.config_filepath, dest)
+        except OSError as exc:
+            logger.warning("Could not copy experiment config to %s: %s", dest, exc)
 
     def new_phase2_log_dir(self) -> Path | None:
         """Return (and create) a fresh run directory for Phase 2 logs, or ``None``.
