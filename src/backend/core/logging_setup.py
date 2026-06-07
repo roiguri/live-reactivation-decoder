@@ -71,7 +71,7 @@ _THIRD_PARTY: dict[str, int] = {
 _RESET = "\033[0m"
 _DIM = "\033[90m"  # bright black / grey — for recede-into-background metadata
 _LEVEL_COLORS = {
-    "DEBUG": "\033[90m",     # grey
+    "DEBUG": "\033[36m",     # cyan
     "INFO": "\033[32m",      # green
     "WARNING": "\033[33m",   # yellow
     "ERROR": "\033[31m",     # red
