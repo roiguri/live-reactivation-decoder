@@ -200,6 +200,47 @@ class PreprocessingView(QWidget):
         QApplication.processEvents()
 
     @staticmethod
+    def _annotate_ica_titles(figs, component_labels) -> None:
+        """Append each component's ICLabel category + confidence to its
+        ``plot_components`` subplot title (e.g. ``ICA001`` → ``ICA001 - eye 98%``).
+
+        ``component_labels`` is a per-index list of ``(category, confidence)``
+        (from ``AppSession.offline.ica_component_labels()``), or ``None`` when
+        ICLabel is disabled — in which case titles are left untouched.
+
+        Two MNE internals (mne/viz/topomap.py, plot_ica_components) make this
+        safe rather than fragile:
+          • The title-click toggle recovers the component index by parsing the
+            title text — ``int(title.split(" ")[0][-3:])``. We append *after a
+            space* so the first token stays ``ICAxyz`` and the parse still
+            yields the right index.
+          • On toggle MNE re-*colours* the title (gray = reject) but never
+            re-sets its text, so the appended category survives reject/keep
+            clicks. We mutate the Text in place (``set_text``) to preserve
+            MNE's existing colour/size rather than reset them via set_title.
+        """
+        if not component_labels:
+            return
+        for fig in (figs if isinstance(figs, (list, tuple)) else [figs]):
+            if fig is None:
+                continue
+            for ax in fig.axes:
+                title = ax.get_title()
+                if not title.startswith("ICA"):
+                    continue
+                try:
+                    idx = int(title.split(" ")[0][-3:])
+                except (ValueError, IndexError):
+                    continue
+                if 0 <= idx < len(component_labels):
+                    label, proba = component_labels[idx]
+                    ax.title.set_text(f"{title} - {label} {proba:.0%}")
+            try:
+                fig.canvas.draw_idle()
+            except Exception:
+                pass
+
+    @staticmethod
     def _close_figs(figs) -> None:
         """Close one or more matplotlib figures (idempotent)."""
         if figs is None:
@@ -257,13 +298,10 @@ class PreprocessingView(QWidget):
             #   • click the topomap     → open ica.plot_properties
             # We rely on those native interactions and wait for the
             # operator to close every figure to signal "done".
-            # TODO(ui): ICLabel's per-component category (brain / muscle /
-            # eye / …) isn't shown in this view — MNE's plot_components
-            # only puts the component index in subplot titles. The
-            # categorisation is implicit (ICLabel-suggested rejects come
-            # in greyed). Decision to make later: leave as-is, mutate the
-            # MNE subplot titles after the fact to append categories, or
-            # swap in a custom paginator widget (see preprocessor._iclabel_suggest).
+            # ICLabel's per-component category + confidence are appended to
+            # each subplot title below (after plot_components builds them) via
+            # _annotate_ica_titles, so the operator sees what ICLabel thought
+            # each component was — not just the implicit greyed-out reject.
             # TODO(ui): we deliberately do NOT show ica.plot_sources(epochs)
             # alongside the topomap grids. Time-series view sometimes
             # makes artifacts (blinks, heart) more obvious than the
@@ -283,6 +321,13 @@ class PreprocessingView(QWidget):
             nrows = max(1, math.ceil(n / ncols))
             topomap_figs = ica.plot_components(
                 inst=epochs, ncols=ncols, nrows=nrows, size=1.2,
+            )
+            # Append ICLabel category + confidence to each subplot title.
+            # Indexed by component, fetched from the orchestrator (populated
+            # during the ICA fit). None when ICLabel is disabled → titles
+            # stay as MNE drew them.
+            self._annotate_ica_titles(
+                topomap_figs, self._session.offline.ica_component_labels()
             )
             # Auto-maximize so all components are visible regardless of
             # screen size. The natural figure size (ncols×size inches)

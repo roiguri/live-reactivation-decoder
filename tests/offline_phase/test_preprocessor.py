@@ -302,10 +302,33 @@ class TestStage6ReferenceAndICA:
             "enabled": True, "drop_labels": ["eye", "muscle"],
         }
         p = self._epoch_and_ref(make_preprocessor, synthetic_raw_with_events, preprocessing_settings)
-        fake = {"labels": ["brain", "eye", "muscle", "brain"]}
+        fake = {
+            "labels": ["brain", "eye", "muscle", "brain"],
+            "y_pred_proba": np.array([0.91, 0.99, 0.85, 0.77]),
+        }
         with patch("mne_icalabel.label_components", return_value=fake):
             suggested = p._fit_ica()
         assert suggested == [1, 2]
+
+    def test_component_labels_populated_aligned_by_index(
+        self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings
+    ):
+        preprocessing_settings["ica"]["iclabel"] = {
+            "enabled": True, "drop_labels": ["eye"],
+        }
+        p = self._epoch_and_ref(make_preprocessor, synthetic_raw_with_events, preprocessing_settings)
+        fake = {
+            "labels": ["brain", "eye", "muscle", "brain"],
+            "y_pred_proba": np.array([0.91, 0.99, 0.85, 0.77]),
+        }
+        with patch("mne_icalabel.label_components", return_value=fake):
+            p._fit_ica()
+        assert p.component_labels == [
+            ("brain", pytest.approx(0.91)),
+            ("eye", pytest.approx(0.99)),
+            ("muscle", pytest.approx(0.85)),
+            ("brain", pytest.approx(0.77)),
+        ]
 
     def test_iclabel_disabled_returns_empty(
         self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings
@@ -313,6 +336,7 @@ class TestStage6ReferenceAndICA:
         p = self._epoch_and_ref(make_preprocessor, synthetic_raw_with_events, preprocessing_settings)
         # fixture default has iclabel disabled
         assert p._fit_ica() == []
+        assert p.component_labels is None
 
 
 # ── Stage 7: Apply + save ─────────────────────────────────────────────────
