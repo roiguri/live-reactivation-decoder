@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
 import numpy as np
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
+
+logger = logging.getLogger(__name__)
 
 
 class StreamWorker(QThread):
@@ -41,6 +44,7 @@ class StreamWorker(QThread):
         self._stop_requested = False
 
     def run(self) -> None:
+        logger.debug("Stream worker loop started")
         while not self._stop_requested:
             batch_processed = False
             pull_started = time.perf_counter()
@@ -112,12 +116,16 @@ class StreamWorker(QThread):
 
             if not batch_processed and not self._stop_requested:
                 time.sleep(self.poll_interval_sec)
+        logger.debug("Stream worker loop exited")
 
     def stop(self) -> None:
         self._stop_requested = True
 
     def _fail(self, stage: str, exc: Exception) -> None:
         self._stop_requested = True
+        # Called from within the run()-loop except blocks, so the active
+        # exception's traceback is still live and is captured here.
+        logger.exception("%s failed", stage)
         self.error_occurred.emit(f"{stage} failed: {type(exc).__name__}: {exc}")
 
     @property
