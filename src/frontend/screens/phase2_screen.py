@@ -194,7 +194,7 @@ class Phase2Screen(QWidget):
             # started during discovery — then build a fresh one-shot session
             # bound to the chosen stream and start it.
             self.session.start_stream_source()
-            log_dir = self.session.resolve_phase2_log_dir(self.decoder_pipeline_path)
+            log_dir = self.session.new_phase2_log_dir()
             self._live = self.session.build_live_stream_session(
                 self.decoder_pipeline_path,
                 log_dir=log_dir,

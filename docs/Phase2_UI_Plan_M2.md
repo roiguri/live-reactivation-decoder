@@ -99,6 +99,7 @@ Work from `feat/phase2-stream-selection` lands several M2 items early and change
 | 15 | Probability Graph Window Length | Not started | backlog |
 | 16 | Probability Graph History View | Not started — needs UX discussion | backlog |
 | 19 | Per-Decoder Timepoint Selection (Phase 1 offline UI) | ✅ Done (merged, PR #7) | Phase 1 |
+| 20 | Persist Evaluation Results (Phase 1 offline) | Not started | Phase 1 |
 
 ---
 
@@ -457,6 +458,20 @@ Each decoder is now operator-selectable at its own timepoint, end-to-end. Shippe
 ### Goal 19 — Remaining wrap-up
 - [x] `docs/backend_architecture.md` `run_training` signature reflects `dict[str, float]` (light targeted touch; doc has broader pre-existing drift)
 - [x] Merge `feat/per-decoder-timepoints` to `main` (PR #7, merge commit `e09817a`; branch deleted)
+
+---
+
+## Goal 20 — Persist Evaluation Results (Phase 1 offline)
+
+Today the offline evaluation (CV AUC curves, temporal-generalization matrices, per-task `peak_timepoint`) is computed and held **in memory** on `OfflineOrchestrator._eval_results` but **never written to disk** — only the operator's selected timepoints survive (baked into the trained artifact's `decoding_timepoints`). So a session's evaluation evidence is lost when the app closes, and there's nothing to compare a later run against. The PRD §5 layout reserves an `evaluation/` folder for exactly this, and `SessionPaths.evaluation_dir` (`<root>/evaluation/`) is already defined for it — it just has no writer.
+
+- [ ] Persist `_eval_results` to `SessionPaths.evaluation_dir` at the end of evaluation (CV diagonal AUC per task, TGM matrices, chance levels, time axis, per-task `peak_timepoint`)
+- [ ] Pick a format — numpy/`.npz` for the arrays (TGM/AUC) + a small JSON sidecar for scalars/metadata, mirroring the Phase 2 logger's split; or a single bundle. Decide alongside whether Phase 1 wants a manifest like Phase 2.
+- [ ] Record the operator's confirmed per-decoder timepoints next to the raw curves (so "what was chosen vs. the peak" is reconstructable)
+- [ ] `OfflineOrchestrator` owns the write (it already owns `evaluation_complete` / `_eval_results`); `AppSession.paths` provides the directory — no path inference
+- [ ] Verified: after a Phase 1 run, `<root>/evaluation/` holds the CV results with correct shapes, loadable for offline comparison (feeds Goal 1 validation and the `offline_inference_check.py` CV plots)
+
+> Offline-only, no Phase-2/online impact (tracked here because it surfaced during the session-paths refactor, which reserved `evaluation_dir`). Move to a dedicated Phase 1 plan if one is created.
 
 ---
 

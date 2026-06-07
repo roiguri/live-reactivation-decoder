@@ -94,7 +94,7 @@ class _StubAppSession:
         self.last_stream_name: str | None = None
         self.last_log_dir: Any = None
 
-    def resolve_phase2_log_dir(self, decoder_pipeline_path):
+    def new_phase2_log_dir(self):
         # Pure path; the fake session never writes, so no directory is created.
         return Path("/fake/phase2_live/20260607_000000")
 

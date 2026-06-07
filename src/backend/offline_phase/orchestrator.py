@@ -11,6 +11,7 @@ from backend.core.artifact_models import (
     DecoderPipelineArtifactSpec,
     DecoderPipelineMetadata,
 )
+from backend.core.session_paths import SessionPaths
 from backend.core.settings_manager import SettingsManager
 from backend.offline_phase.evaluator import ModelEvaluator
 from backend.offline_phase.preprocessor import OfflinePreprocessor
@@ -47,10 +48,10 @@ class OfflineOrchestrator:
     def __init__(
         self,
         settings_manager: SettingsManager,
-        output_dir: Path,
+        paths: SessionPaths,
     ) -> None:
         self._settings = settings_manager
-        self._output_dir = Path(output_dir)
+        self._paths = paths
 
         self._data_dir: Optional[Path] = None
         self._raw: Optional[mne.io.Raw] = None
@@ -187,7 +188,7 @@ class OfflineOrchestrator:
 
         result = self._preprocessor.run_step2_apply_and_save(
             exclude_components=excluded_components,
-            output_dir=self._output_dir / "epochs",
+            output_dir=self._paths.epochs_dir,
         )
         self._epochs = self._preprocessor.epochs
         # Preprocessor already dropped its raw handle; drop ours too so the
@@ -326,7 +327,7 @@ class OfflineOrchestrator:
     # ── Private: persistence ──────────────────────────────────────────────────
 
     def _save_to_disk(self) -> Path:
-        save_path = self._output_dir / "models" / "decoder_pipeline.joblib"
+        save_path = self._paths.decoder_pipeline_path
         save_path.parent.mkdir(parents=True, exist_ok=True)
         joblib.dump(self._live_artifact_spec.model_dump(), save_path)
         return save_path

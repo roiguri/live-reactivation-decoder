@@ -38,6 +38,7 @@ online_decoder/
 - Phase 2 session API: `AppSession.build_live_stream_session(...) -> LiveStreamSession`. `AppSession` remains the app-level composition boundary; do not introduce `OnlinePhase` or expose `session.online`.
 - `StreamWorker` owns only the injected-dependency micro-batch loop. It keeps references to receiver/preprocessor/inference objects for `run()`, but `LiveStreamSession` owns start/stop/cleanup for the receiver, worker, and optional logger.
 - Phase 1 surface: config models, `SettingsManager`, `OfflinePreprocessor`, `ModelEvaluator`, `ModelTrainer`, shared `utils.py` (`build_classifier`, `get_task_data`), `OfflineOrchestrator` (Phase 1 state machine, owns file I/O and `decoder_pipeline.joblib` export), and `AppSession` (`src/backend/session.py` — the single frontend entry point; owns `SettingsManager` lifetime and exposes `session.offline` for Phase 1).
+- **Session paths**: `SessionPaths` (`src/backend/core/session_paths.py`) is the single source of truth for the on-disk layout (`epochs/`, `models/decoder_pipeline.joblib`, `phase2_live/<run>/`), rooted at the output dir. `AppSession` owns one (`session.paths`), set via `configure_output(dir)` (Go-Live) or `configure_workspace(root)` (debug Phase 2). Every phase derives its paths from it — `OfflineOrchestrator` for epochs/models, `AppSession.new_phase2_log_dir()` for live logs — so nothing infers a path from another file's location.
 
 ## Current Frontend Scope
 

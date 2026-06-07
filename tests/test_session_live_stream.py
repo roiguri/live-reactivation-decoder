@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from backend.core.session_paths import SessionPaths
 from backend.online_phase.artifact_loader import DecoderPipelineArtifact
 from backend.session import AppSession, LiveStreamSession
 
@@ -388,13 +389,19 @@ def test_build_live_stream_session_with_log_connects_logger(
     assert (log_dir / "predictions.npz").exists()
 
 
-def test_resolve_phase2_log_dir_layout(tmp_path):
-    artifact = tmp_path / "subject_root" / "models" / "decoder_pipeline.joblib"
-    artifact.parent.mkdir(parents=True)
-    artifact.touch()
+def test_new_phase2_log_dir_uses_workspace(sample_config_path, tmp_path):
+    session = AppSession(sample_config_path)
+    session.paths = SessionPaths(tmp_path / "subject_root")
 
-    run_dir = AppSession.resolve_phase2_log_dir(artifact)
+    run_dir = session.new_phase2_log_dir()
 
-    # <artifact_root>/phase2_live/<timestamp>/, dir created on demand.
-    assert run_dir.parent == (tmp_path / "subject_root" / "phase2_live").resolve()
+    # <root>/phase2_live/<timestamp>/, resolved from the owned workspace
+    # (not inferred from any artifact path), created on demand.
+    assert run_dir.parent == tmp_path / "subject_root" / "phase2_live"
     assert run_dir.is_dir()
+
+
+def test_new_phase2_log_dir_none_without_workspace(sample_config_path):
+    session = AppSession(sample_config_path)
+    # No workspace configured → live inference can still run, just unlogged.
+    assert session.new_phase2_log_dir() is None

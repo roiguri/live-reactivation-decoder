@@ -552,7 +552,9 @@ class OfflineOrchestrator:
         online_state = get_online_state_for_live_phase()
     """
 
-    def __init__(self, settings_manager: SettingsManager, output_dir: Path) -> None:
+    def __init__(self, settings_manager: SettingsManager, paths: SessionPaths) -> None:
+        # Reads epochs_dir / decoder_pipeline_path from the shared SessionPaths
+        # (the single layout authority) rather than composing its own joins.
         pass
 
     def set_file_path(self, data_dir: str | Path) -> None:
@@ -810,7 +812,7 @@ UI-facing artifacts that the live runtime does not need (`spatial_patterns`,
 #### **7. AppSession Phase 2 Factory**
 
 * **Role:** The app-level composition boundary. The frontend imports only `AppSession`.
-* **API:** `AppSession.build_live_stream_session(decoder_pipeline_path, log_dir=None, batch_size_samples=40) -> LiveStreamSession`. Log paths are resolved by `AppSession.resolve_phase2_log_dir(decoder_pipeline_path)` → `<artifact_root>/phase2_live/<timestamp>/`.
+* **API:** `AppSession.build_live_stream_session(decoder_pipeline_path, log_dir=None, batch_size_samples=40) -> LiveStreamSession`. Log directories come from `AppSession.new_phase2_log_dir()`, resolved from the owned workspace (`session.paths.phase2_run_dir(...)`) — not inferred from the artifact path. Returns `None` when no workspace is set, so inference still runs unlogged.
 * **Responsibilities:** load the Phase 1 artifact, construct `LSLReceiver`, `OnlinePreprocessor`, `LiveInferenceEngine`, `StreamWorker`, and optional `LiveSessionLogger`, connect logger if needed, and return the stopped `LiveStreamSession`.
 
 ### Backend to Frontend Contract: Live Decoder Output
@@ -1490,7 +1492,7 @@ online_decoder/
 
 | Step | Call |
 |---|---|
-| Startup | `OfflineOrchestrator(settings_manager, output_dir)` |
+| Startup | `OfflineOrchestrator(settings_manager, session.paths)` (built by `AppSession.configure_output`) |
 | Node 1 | `set_file_path(data_dir)` → `load_raw_data()` |
 | Node 2 step 1 | `run_step1_prepare_ica()` → returns `(ica_obj, suggested_components)` |
 | Node 2 step 2 | `run_step2_finish_pipeline(excluded_components)` → returns `{"n_epochs": int}` |

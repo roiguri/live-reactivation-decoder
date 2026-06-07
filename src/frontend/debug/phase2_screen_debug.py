@@ -12,6 +12,7 @@ the debug helper needs to grow.
 """
 from __future__ import annotations
 
+from backend.core.session_paths import SessionPaths
 from backend.session import AppSession
 from frontend.debug.profiles import DebugProfile, resolve_profile
 from frontend.screens.phase2_screen import Phase2Screen
@@ -32,6 +33,9 @@ def build_debug_phase2(profile: DebugProfile | None = None) -> Phase2Screen:
     if profile is None:
         profile = resolve_profile()
     session = AppSession(profile.config_path)
+    # The profile dir is the session workspace root; Phase 2 logs land under it
+    # (profile_dir/phase2_live/...) via session.paths, like Go-Live under output_dir.
+    session.paths = SessionPaths(profile.root_dir)
     return Phase2Screen(
         session=session,
         decoder_pipeline_path=profile.pipeline_path,

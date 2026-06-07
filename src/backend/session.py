@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from PyQt6.QtCore import Qt
 
+from backend.core.session_paths import SessionPaths
 from backend.core.settings_manager import SettingsManager
 from backend.offline_phase.orchestrator import OfflineOrchestrator
 from backend.online_phase.artifact_loader import load_decoder_pipeline_artifact
@@ -83,20 +83,42 @@ class AppSession:
     Two-stage initialisation:
       1. AppSession(config_path)          — loads and validates config; session.settings
                                             becomes available immediately.
-      2. session.configure_output(dir)    — creates OfflineOrchestrator; session.offline
+      2. session.configure_output(dir)    — sets the session workspace (session.paths)
+                                            and creates OfflineOrchestrator; session.offline
                                             becomes available for pipeline steps.
+
+    ``session.paths`` (a :class:`SessionPaths`) is the single source of truth for
+    the on-disk layout. Every phase derives its locations from it — Phase 1
+    epochs/models, Phase 2 live logs — so nothing reverse-engineers a path from
+    another file. ``configure_output`` sets it for Go-Live; a debug Phase 2 jump
+    assigns ``session.paths`` directly (no offline orchestrator).
     """
 
     def __init__(self, config_path: str | Path) -> None:
         self._settings = SettingsManager(config_path)
         self.offline: OfflineOrchestrator | None = None
+        self.paths: SessionPaths | None = None
         # TODO(#1): Rethink the locking approach on the stream source.
         self._stream_source: StreamSource | None = None
         self._source_lock = threading.Lock()
 
     def configure_output(self, output_dir: str | Path) -> None:
-        """Create the OfflineOrchestrator. Must be called before session.offline is used."""
-        self.offline = OfflineOrchestrator(self._settings, Path(output_dir))
+        """Set the session workspace and create the OfflineOrchestrator.
+
+        Must be called before session.offline is used.
+        """
+        self.paths = SessionPaths(Path(output_dir))
+        self.offline = OfflineOrchestrator(self._settings, self.paths)
+
+    def new_phase2_log_dir(self) -> Path | None:
+        """Return (and create) a fresh run directory for Phase 2 logs, or ``None``.
+
+        The layout + run-naming live on :class:`SessionPaths`; the only thing here
+        is the ``None`` case — ``session.paths`` is optional (a ``SessionPaths``
+        instance never is), and an unset workspace lets live inference run
+        unlogged rather than failing.
+        """
+        return self.paths.new_phase2_run_dir() if self.paths is not None else None
 
     # ── live stream source lifecycle ──────────────────────────────────────────
 
@@ -136,22 +158,6 @@ class AppSession:
         """
         self._ensure_proxy_source(start=True)
         return LSLReceiver().discover_streams(timeout_sec=timeout_sec)
-
-    @staticmethod
-    def resolve_phase2_log_dir(decoder_pipeline_path: str | Path) -> Path:
-        """Return a fresh timestamped run directory for this run's Phase 2 logs.
-
-        Logs land in ``<artifact_root>/phase2_live/<YYYYMMDD_HHMMSS>/`` (mirroring
-        the PRD layout), where ``<artifact_root>`` is the directory holding the
-        artifact's ``models/`` folder. Derived from the pipeline path so it works
-        in both Go-Live and debug-profile paths (neither has an offline
-        ``output_dir``). A fresh timestamp per call keeps each Start
-        self-contained (file per Start). The directory is created on demand.
-        """
-        artifact_root = Path(decoder_pipeline_path).resolve().parent.parent
-        run_dir = artifact_root / "phase2_live" / datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_dir.mkdir(parents=True, exist_ok=True)
-        return run_dir
 
     def build_live_stream_session(
         self,
