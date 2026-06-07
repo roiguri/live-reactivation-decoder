@@ -24,9 +24,10 @@ M1 shipped the Phase 2 live-inference POC on branch `feat/phase2-live-ui` (13 co
 **What does not work or is unverified:**
 - **Pipeline fidelity is the open blocker.** Online predictions have never been validated against the offline pipeline on labeled data. A known ~60 ms pipeline group delay plus a causal-vs-zero-phase filter mismatch (see `online-inference-fidelity-bug`, diagnosed 2026-05-30) makes live inference *look* dead even when it is recoverable. **Goal 18 (Group Delay Deep Dive) characterizes this before any further UI work assumes the predictions are trustworthy.**
 - The XDF recording used for early testing (`scripts/recordings/eeg_recording_with_trigger.xdf`) contains no stimulus events (trigger codes 31-110, but no 11/12/13 for red/green/yellow). Predictions on that data are noise. Validation must replay actual training data (`.vhdr`) via `scripts/replay_vhdr_to_lsl.py`.
-- `latency_ready` is emitted by `StreamWorker` but consumed by nobody.
-- `PredictionLogger` exists but is never wired: `build_live_stream_session(log_path=None)`.
+- `latency_ready` is emitted by `StreamWorker` but consumed by nobody (latency log is the remaining half of Goal 7).
 - No back button, no exit confirmation, no decision settings.
+
+> **Update:** session logging is wired end-to-end (Goal 7 prediction-log half) — `LiveSessionLogger` writes `predictions.csv` + `markers.csv` + `manifest.json` + `predictions.npz` per Start under `phase2_live/`.
 
 ---
 
@@ -81,7 +82,7 @@ Work from `feat/phase2-stream-selection` lands several M2 items early and change
 |---|------|--------|-----|
 | 17 | Debug Profiles | ✅ Done (1 profile seeded; validation profile pending) | **1** |
 | 18 | Group Delay Deep Dive | Not started | **2** |
-| 7 | System Logging (prediction + latency timepoints) | Not started | **3** |
+| 7 | System Logging (prediction + latency timepoints) | Prediction log done; latency log pending | **3** |
 | 1 | Pipeline Validation | Step 1 (replay script) done; Steps 2-4 pending | **4** |
 | 9 | Frozen Event Graph | ✅ Done (built ahead of validation — delay-agnostic) | **5** |
 | 2 | Event Markers on Probability Graph | ✅ Done | — |
@@ -98,6 +99,7 @@ Work from `feat/phase2-stream-selection` lands several M2 items early and change
 | 15 | Probability Graph Window Length | Not started | backlog |
 | 16 | Probability Graph History View | Not started — needs UX discussion | backlog |
 | 19 | Per-Decoder Timepoint Selection (Phase 1 offline UI) | ✅ Done (merged, PR #7) | Phase 1 |
+| 20 | Persist Evaluation Results (Phase 1 offline) | Not started | Phase 1 |
 
 ---
 
@@ -143,22 +145,39 @@ Existing diagnostic assets to build on: `scripts/preproc_parity_check.py`, `scri
 
 ---
 
-## Goal 7 — System Logging (prediction + latency timepoints) (Seq 3)
+## Goal 7 — System Logging (prediction + latency timepoints) (Seq 3) — prediction log done; latency log pending
 
-Wire persistent logging so the validation step has hard evidence and live sessions are auditable. `PredictionLogger` already writes `timestamp, marker_code, <per-task probs>` to CSV but is **never instantiated** (`build_live_stream_session(log_path=None)`). `StreamWorker.latency_ready` emits a full per-batch timing breakdown (pull / accumulation / preprocessing / inference / emit ms, plus `pending_samples`) that **no one consumes**. This goal connects both, and stamps the `group_delay_ms` from Goal 18 so logged prediction timepoints are interpretable against marker times.
+Wire persistent logging so the validation step has hard evidence and live sessions are auditable. `StreamWorker.latency_ready` emits a full per-batch timing breakdown (pull / accumulation / preprocessing / inference / emit ms, plus `pending_samples`) that **no one consumes**. This goal connects both the prediction stream and the timing stream.
 
-**Prediction log (extends Goal 7's original "Subject-Folder Log Paths"):**
-- [ ] Determine the per-subject/session directory layout for Phase 2 logs (per PRD directory structure)
-- [ ] `Phase2Screen` / `AppSession` resolves the log path from the current subject/session
-- [ ] `build_live_stream_session(log_path=...)` passes a real path instead of `None`
-- [ ] CSV logging starts on Start, file closes on Halt
-- [ ] Each prediction row carries the wall-clock prediction timepoint and the marker-aligned timepoint (apply `group_delay_ms` from Goal 18)
+### Prediction log — ✅ Done (branch `feat/phase2-session-logging`)
 
-**Latency / timing log:**
+Replaced the old single-file `PredictionLogger` (which never ran) with a clean `LiveSessionLogger` — no back-compat. It writes one **run directory** per Start. Design decisions taken during the build:
+
+- **`LiveSessionLogger` is the live sink; the npz is derived.** It appends to two line-buffered CSVs (the crash-safe source of truth) and accumulates the raw batch arrays in memory (a few MB/run) so `close()` can emit a full-precision numpy bundle. A standalone `export_session_npz(run_dir)` rebuilds the `.npz` from the CSVs for sessions that crashed before close. The logger is a plain (non-Qt) callable on a direct connection — format logic decoupled from Qt.
+- **Markers in a separate sidecar at true timestamps, not snapped to the 100 Hz grid.** Markers are event-clocked (1000 Hz edges); snapping onto the prediction grid dropped markers at batch edges, collided simultaneous ones, and quantized time. The sidecar keeps every edge verbatim.
+- **Log every trigger edge**, `name` empty for unmapped codes (an audit log shouldn't pre-filter like the chart).
+- **`lsl_timestamp` + `t_sec` + manifest.** `lsl_timestamp` is the shared clock for exact marker↔prediction alignment (and a future `group_delay_ms` stamp); `t_sec` is standalone-readable; per-run constants live in the manifest. Probabilities rounded to 5 dp in CSV, full precision in the npz.
+- **File per Start.** `LiveStreamSession` is one-shot, so each Start gets its own timestamped run directory; no append.
+
+```
+<artifact_root>/phase2_live/<YYYYMMDD_HHMMSS>/
+├── predictions.csv   lsl_timestamp, t_sec, <per-task probs…>
+├── markers.csv       lsl_timestamp, t_sec, code, name
+├── manifest.json     schema_version, wall_clock_start/end, lsl_t0, counts, target/input sfreq, event_map, config
+└── predictions.npz   predictions matrix (full precision) + timestamps + markers + embedded manifest (written at close)
+```
+
+- [x] Directory layout per the PRD (`phase2_live/` under the artifact root) — `AppSession.resolve_phase2_log_dir(...)` derives it from `decoder_pipeline_path`, so it works in both Go-Live and debug-profile paths (neither has an offline `output_dir`)
+- [x] `Phase2Screen._on_start_clicked` resolves the run dir and passes `log_dir=`; `build_live_stream_session(log_dir=...)` constructs the logger (wired to `prediction_ready`; `LiveStreamSession.stop()` closes it) → logging starts on Start, closes on Halt
+- [x] `LiveSessionLogger` (CSVs + manifest + npz) + `export_session_npz` recovery; new `test_session_logger.py` (schema, marker fidelity, manifest start+finalize, npz contents, empty session, recovery) + session/lifecycle coverage; `smoke_stream_worker.py` updated to the run-directory schema
+- [ ] **Deferred to Goal 18:** the marker-aligned (group-delay-compensated) prediction timepoint. The raw shared `lsl_timestamp` is retained so it can be stamped later (manifest field and/or a `t_sec_aligned` column) without re-running.
+
+### Latency / timing log — Not started
+
 - [ ] A second sink consumes `latency_ready` and persists per-batch timing (or rolling p50/p95) + backlog (`pending_samples`)
 - [ ] Throttle/aggregate so the ~25 Hz `latency_ready` stream does not bloat the log (rolling summary, not every batch)
 
-- [ ] Verified: after a live replay session, a prediction CSV and a timing log exist at the expected paths with correct columns, and prediction timepoints line up with replayed markers once the group delay is applied
+- [ ] Verified: after a live replay session, a prediction CSV and a timing log exist at the expected paths with correct columns, and prediction timepoints line up with replayed markers once the group delay is applied (operator step on Windows)
 
 > Goals 4 (Trigger Log) and 6 (Latency Display + Buffer Health) are the **UI views** of this same data and remain in the backlog; this goal is the persistence/backend half they will later surface.
 
@@ -439,6 +458,20 @@ Each decoder is now operator-selectable at its own timepoint, end-to-end. Shippe
 ### Goal 19 — Remaining wrap-up
 - [x] `docs/backend_architecture.md` `run_training` signature reflects `dict[str, float]` (light targeted touch; doc has broader pre-existing drift)
 - [x] Merge `feat/per-decoder-timepoints` to `main` (PR #7, merge commit `e09817a`; branch deleted)
+
+---
+
+## Goal 20 — Persist Evaluation Results (Phase 1 offline)
+
+Today the offline evaluation (CV AUC curves, temporal-generalization matrices, per-task `peak_timepoint`) is computed and held **in memory** on `OfflineOrchestrator._eval_results` but **never written to disk** — only the operator's selected timepoints survive (baked into the trained artifact's `decoding_timepoints`). So a session's evaluation evidence is lost when the app closes, and there's nothing to compare a later run against. The PRD §5 layout reserves an `evaluation/` folder for exactly this, and `SessionPaths.evaluation_dir` (`<root>/evaluation/`) is already defined for it — it just has no writer.
+
+- [ ] Persist `_eval_results` to `SessionPaths.evaluation_dir` at the end of evaluation (CV diagonal AUC per task, TGM matrices, chance levels, time axis, per-task `peak_timepoint`)
+- [ ] Pick a format — numpy/`.npz` for the arrays (TGM/AUC) + a small JSON sidecar for scalars/metadata, mirroring the Phase 2 logger's split; or a single bundle. Decide alongside whether Phase 1 wants a manifest like Phase 2.
+- [ ] Record the operator's confirmed per-decoder timepoints next to the raw curves (so "what was chosen vs. the peak" is reconstructable)
+- [ ] `OfflineOrchestrator` owns the write (it already owns `evaluation_complete` / `_eval_results`); `AppSession.paths` provides the directory — no path inference
+- [ ] Verified: after a Phase 1 run, `<root>/evaluation/` holds the CV results with correct shapes, loadable for offline comparison (feeds Goal 1 validation and the `offline_inference_check.py` CV plots)
+
+> Offline-only, no Phase-2/online impact (tracked here because it surfaced during the session-paths refactor, which reserved `evaluation_dir`). Move to a dedicated Phase 1 plan if one is created.
 
 ---
 

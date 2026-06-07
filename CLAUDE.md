@@ -16,7 +16,7 @@ online_decoder/
 ├── src/backend/
 │   ├── core/           — SettingsManager and Pydantic config models
 │   ├── offline_phase/  — utils, OfflinePreprocessor, ModelEvaluator, ModelTrainer, OfflineOrchestrator
-│   └── online_phase/   — LSLReceiver, OnlinePreprocessor, LiveInferenceEngine, StreamWorker, PredictionLogger
+│   └── online_phase/   — LSLReceiver, OnlinePreprocessor, LiveInferenceEngine, StreamWorker, LiveSessionLogger
 ├── src/frontend/
 │   ├── screens/        — Phase1Screen, Phase2Screen
 │   ├── widgets/        — Phase 1 widgets + LiveProbabilityChart (pyqtgraph)
@@ -34,10 +34,11 @@ online_decoder/
 
 ## Current Backend Scope
 
-- Phase 2 backend surface: `LSLReceiver`, `DecoderPipelineArtifact` loader, `OnlinePreprocessor`, `LiveInferenceEngine`, `StreamWorker`, and `PredictionLogger`.
+- Phase 2 backend surface: `LSLReceiver`, `DecoderPipelineArtifact` loader, `OnlinePreprocessor`, `LiveInferenceEngine`, `StreamWorker`, and `LiveSessionLogger` (run sink → `predictions.csv` + `markers.csv` + `manifest.json` + `predictions.npz`; `export_session_npz` for recovery).
 - Phase 2 session API: `AppSession.build_live_stream_session(...) -> LiveStreamSession`. `AppSession` remains the app-level composition boundary; do not introduce `OnlinePhase` or expose `session.online`.
 - `StreamWorker` owns only the injected-dependency micro-batch loop. It keeps references to receiver/preprocessor/inference objects for `run()`, but `LiveStreamSession` owns start/stop/cleanup for the receiver, worker, and optional logger.
 - Phase 1 surface: config models, `SettingsManager`, `OfflinePreprocessor`, `ModelEvaluator`, `ModelTrainer`, shared `utils.py` (`build_classifier`, `get_task_data`), `OfflineOrchestrator` (Phase 1 state machine, owns file I/O and `decoder_pipeline.joblib` export), and `AppSession` (`src/backend/session.py` — the single frontend entry point; owns `SettingsManager` lifetime and exposes `session.offline` for Phase 1).
+- **Session paths**: `SessionPaths` (`src/backend/core/session_paths.py`) is the single source of truth for the on-disk layout (`epochs/`, `models/decoder_pipeline.joblib`, `phase2_live/<run>/`), rooted at the output dir. `AppSession` owns one (`session.paths`), set via `configure_output(dir)` (Go-Live) or `configure_workspace(root)` (debug Phase 2). Every phase derives its paths from it — `OfflineOrchestrator` for epochs/models, `AppSession.new_phase2_log_dir()` for live logs — so nothing infers a path from another file's location.
 
 ## Current Frontend Scope
 

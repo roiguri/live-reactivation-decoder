@@ -8,6 +8,7 @@ import mne
 import numpy as np
 import pytest
 
+from backend.core.session_paths import SessionPaths
 from backend.offline_phase.orchestrator import OfflineOrchestrator
 
 
@@ -23,7 +24,7 @@ def _make_orchestrator(
         settings_manager.get_preprocessing_params.return_value = {}
         settings_manager.get_decoder_settings.return_value = {}
         settings_manager.get_event_mapping.return_value = {}
-    return OfflineOrchestrator(settings_manager, tmp_path)
+    return OfflineOrchestrator(settings_manager, SessionPaths(tmp_path))
 
 
 def _attach_preprocessor_stub(

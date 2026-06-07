@@ -92,9 +92,15 @@ class _StubAppSession:
         self.start_source_calls = 0
         self.stop_source_calls = 0
         self.last_stream_name: str | None = None
+        self.last_log_dir: Any = None
 
-    def build_live_stream_session(self, decoder_pipeline_path, *, stream_name=None):
+    def new_phase2_log_dir(self):
+        # Pure path; the fake session never writes, so no directory is created.
+        return Path("/fake/phase2_live/20260607_000000")
+
+    def build_live_stream_session(self, decoder_pipeline_path, log_dir=None, *, stream_name=None):
         self.last_stream_name = stream_name
+        self.last_log_dir = log_dir
         # Hand out a fresh fake on each call to mirror the real one-shot
         # semantics (the screen builds a new session on every Start).
         if getattr(self._live, "_handed_out", False):
@@ -416,6 +422,15 @@ def test_start_uses_selected_stream_and_starts_source(screen_and_session) -> Non
     assert app_session.last_stream_name == "NeuroneStream"
     assert fake.start_calls == 1
     assert screen._start_halt_button._state == "live"
+
+
+def test_start_passes_resolved_log_dir(screen_and_session) -> None:
+    """Start must resolve a Phase 2 run directory and hand it to the session so
+    the LiveSessionLogger is wired (Goal 7)."""
+    screen, _, app_session, _ = screen_and_session
+    screen._start_halt_button.start_clicked.emit()
+
+    assert app_session.last_log_dir == Path("/fake/phase2_live/20260607_000000")
 
 
 def test_halt_stops_stream_source(screen_and_session) -> None:

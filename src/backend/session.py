@@ -7,13 +7,14 @@ from typing import Any
 
 from PyQt6.QtCore import Qt
 
+from backend.core.session_paths import SessionPaths
 from backend.core.settings_manager import SettingsManager
 from backend.offline_phase.orchestrator import OfflineOrchestrator
 from backend.online_phase.artifact_loader import load_decoder_pipeline_artifact
 from backend.online_phase.live_inference import LiveInferenceEngine
 from backend.online_phase.lsl_receiver import LSLReceiver
 from backend.online_phase.online_preprocessor import OnlinePreprocessor
-from backend.online_phase.prediction_logger import PredictionLogger
+from backend.online_phase.session_logger import LiveSessionLogger
 from backend.online_phase.stream_source import LslProxySource, StreamSource
 from backend.online_phase.stream_worker import StreamWorker
 
@@ -24,7 +25,7 @@ class LiveStreamSession:
 
     _receiver: LSLReceiver
     _worker: StreamWorker
-    _logger: PredictionLogger | None = None
+    _logger: LiveSessionLogger | None = None
 
     def __post_init__(self) -> None:
         self._started = False
@@ -82,20 +83,42 @@ class AppSession:
     Two-stage initialisation:
       1. AppSession(config_path)          — loads and validates config; session.settings
                                             becomes available immediately.
-      2. session.configure_output(dir)    — creates OfflineOrchestrator; session.offline
+      2. session.configure_output(dir)    — sets the session workspace (session.paths)
+                                            and creates OfflineOrchestrator; session.offline
                                             becomes available for pipeline steps.
+
+    ``session.paths`` (a :class:`SessionPaths`) is the single source of truth for
+    the on-disk layout. Every phase derives its locations from it — Phase 1
+    epochs/models, Phase 2 live logs — so nothing reverse-engineers a path from
+    another file. ``configure_output`` sets it for Go-Live; a debug Phase 2 jump
+    assigns ``session.paths`` directly (no offline orchestrator).
     """
 
     def __init__(self, config_path: str | Path) -> None:
         self._settings = SettingsManager(config_path)
         self.offline: OfflineOrchestrator | None = None
+        self.paths: SessionPaths | None = None
         # TODO(#1): Rethink the locking approach on the stream source.
         self._stream_source: StreamSource | None = None
         self._source_lock = threading.Lock()
 
     def configure_output(self, output_dir: str | Path) -> None:
-        """Create the OfflineOrchestrator. Must be called before session.offline is used."""
-        self.offline = OfflineOrchestrator(self._settings, Path(output_dir))
+        """Set the session workspace and create the OfflineOrchestrator.
+
+        Must be called before session.offline is used.
+        """
+        self.paths = SessionPaths(Path(output_dir))
+        self.offline = OfflineOrchestrator(self._settings, self.paths)
+
+    def new_phase2_log_dir(self) -> Path | None:
+        """Return (and create) a fresh run directory for Phase 2 logs, or ``None``.
+
+        The layout + run-naming live on :class:`SessionPaths`; the only thing here
+        is the ``None`` case — ``session.paths`` is optional (a ``SessionPaths``
+        instance never is), and an unset workspace lets live inference run
+        unlogged rather than failing.
+        """
+        return self.paths.new_phase2_run_dir() if self.paths is not None else None
 
     # ── live stream source lifecycle ──────────────────────────────────────────
 
@@ -139,7 +162,7 @@ class AppSession:
     def build_live_stream_session(
         self,
         decoder_pipeline_path: str | Path,
-        log_path: str | Path | None = None,
+        log_dir: str | Path | None = None,
         batch_size_samples: int = 40,
         *,
         stream_name: str | None = None,
@@ -150,6 +173,9 @@ class AppSession:
         the active ``StreamSource`` (start it via ``start_stream_source`` before
         ``LiveStreamSession.start``). The resolve timeout is picked from the
         active source kind — replay needs longer to advertise after MNE preload.
+
+        When ``log_dir`` is given, a :class:`LiveSessionLogger` persists the run
+        there (predictions/markers CSVs + manifest + npz on close).
         """
         # TODO(open): Avoid unnecessary disk reload when Phase 1 already has
         # an in-memory DecoderPipelineArtifact; see stream_worker_design.md Open §2.
@@ -181,11 +207,22 @@ class AppSession:
         )
 
         logger = None
-        if log_path is not None:
-            logger = PredictionLogger(
-                out_path=log_path,
+        if log_dir is not None:
+            # Receiver emits {name: id}; the log records every edge by code and
+            # resolves the name where one is configured (empty otherwise).
+            event_names = {
+                int(code): str(name)
+                for name, code in self._settings.get_event_mapping().items()
+            }
+            logger = LiveSessionLogger(
+                run_dir=log_dir,
                 task_names=list(artifact.models.keys()),
-                target_sfreq=preprocessor.target_sfreq,
+                event_names=event_names,
+                metadata={
+                    "target_sfreq": preprocessor.target_sfreq,
+                    "input_sfreq": preprocessor.input_sfreq,
+                    "config": self._settings.config_filepath.name,
+                },
             )
             worker.prediction_ready.connect(
                 logger.on_predictions,

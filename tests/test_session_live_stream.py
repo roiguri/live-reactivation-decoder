@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from backend.core.session_paths import SessionPaths
 from backend.online_phase.artifact_loader import DecoderPipelineArtifact
 from backend.session import AppSession, LiveStreamSession
 
@@ -60,6 +61,7 @@ class FakePreprocessor:
         self.preprocessing_settings = preprocessing_settings
         self.online_state = online_state
         self.target_sfreq = preprocessing_settings["final_resample"]["target_rate"]
+        self.input_sfreq = 1000.0
         FakePreprocessor.instances.append(self)
 
 
@@ -359,11 +361,11 @@ def test_build_live_stream_session_with_log_connects_logger(
 ):
     _patch_runtime(monkeypatch)
     session = AppSession(sample_config_path)
-    log_path = tmp_path / "predictions.csv"
+    log_dir = tmp_path / "run"
 
     live = session.build_live_stream_session(
         Path("decoder_pipeline.joblib"),
-        log_path=log_path,
+        log_dir=log_dir,
     )
     live.prediction_ready.emit(
         {
@@ -376,7 +378,30 @@ def test_build_live_stream_session_with_log_connects_logger(
     live.stop()
 
     assert len(live.prediction_ready.slots) == 1
-    assert log_path.read_text().splitlines() == [
-        "timestamp,marker_code,object,scene",
-        "1.0,,0.2,0.8",
+    predictions = (log_dir / "predictions.csv").read_text().splitlines()
+    assert predictions == [
+        "lsl_timestamp,t_sec,object,scene",
+        "1.0,0.0,0.2,0.8",
     ]
+    # Sidecar markers + manifest + npz are created alongside.
+    assert (log_dir / "markers.csv").exists()
+    assert (log_dir / "manifest.json").exists()
+    assert (log_dir / "predictions.npz").exists()
+
+
+def test_new_phase2_log_dir_uses_workspace(sample_config_path, tmp_path):
+    session = AppSession(sample_config_path)
+    session.paths = SessionPaths(tmp_path / "subject_root")
+
+    run_dir = session.new_phase2_log_dir()
+
+    # <root>/phase2_live/<timestamp>/, resolved from the owned workspace
+    # (not inferred from any artifact path), created on demand.
+    assert run_dir.parent == tmp_path / "subject_root" / "phase2_live"
+    assert run_dir.is_dir()
+
+
+def test_new_phase2_log_dir_none_without_workspace(sample_config_path):
+    session = AppSession(sample_config_path)
+    # No workspace configured → live inference can still run, just unlogged.
+    assert session.new_phase2_log_dir() is None
