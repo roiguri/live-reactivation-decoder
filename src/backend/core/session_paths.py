@@ -18,6 +18,7 @@ class SessionPaths:
     Current (flat) layout::
 
         <root>/
+        ├── experiment_config.yaml          # copy of the config this run used
         ├── epochs/                         # cleaned epochs (.fif)
         ├── evaluation/                     # CV results
         ├── models/
@@ -43,6 +44,11 @@ class SessionPaths:
     def __post_init__(self) -> None:
         # Normalise to Path even when constructed from a str (frozen dataclass).
         object.__setattr__(self, "root", Path(self.root))
+
+    @property
+    def experiment_config_path(self) -> Path:
+        """Where the run's config copy lives (written once when the workspace is set)."""
+        return self.root / "experiment_config.yaml"
 
     @property
     def epochs_dir(self) -> Path:
