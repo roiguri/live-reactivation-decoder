@@ -200,7 +200,8 @@ def configure_logging(level: str | int | None = None, *, banner: bool = True) ->
     """Configure root logging for an entry point. Idempotent.
 
     Installs a single :class:`_AppFormatter` stderr handler (replacing any prior
-    handlers), quiets noisy third-party loggers, and prints the startup banner.
+    handlers), quiets noisy third-party loggers, routes ``warnings.warn`` through
+    logging, and prints the startup banner.
 
     Returns the resolved numeric level.
     """
@@ -217,6 +218,11 @@ def configure_logging(level: str | int | None = None, *, banner: bool = True) ->
 
     for name, lvl in _THIRD_PARTY.items():
         logging.getLogger(name).setLevel(lvl)
+
+    # Route warnings.warn(...) (e.g. MNE/ICLabel RuntimeWarnings) through the
+    # logging system so they share this format + handlers instead of printing
+    # their own raw line to stderr.
+    logging.captureWarnings(True)
 
     if banner:
         _emit_banner(logging.getLevelName(resolved), color)
