@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -7,6 +8,8 @@ import yaml
 from pydantic import ValidationError
 
 from .config_models import ExperimentConfig
+
+logger = logging.getLogger(__name__)
 
 
 class SettingsManager:
@@ -22,6 +25,12 @@ class SettingsManager:
             raise ValueError(
                 f"Invalid config '{self.config_filepath}':\n{e}"
             ) from e
+        logger.info(
+            "Loaded config %s: model=%s, %d decoder(s)",
+            self.config_filepath.name,
+            self._config.decoders.model,
+            len(self._config.decoders.tasks),
+        )
 
     def get_preprocessing_params(self) -> dict[str, Any]:
         """Returns the 'preprocessing' block as a plain dict (random_state is a model field)."""

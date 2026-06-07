@@ -123,6 +123,7 @@ class AppSession:
         self.offline = OfflineOrchestrator(self._settings, self.paths)
         if is_new_workspace:
             self._copy_config_to_workspace()
+        logger.info("Workspace configured: %s", self.paths.root)
 
     def _copy_config_to_workspace(self) -> None:
         """Copy the source config verbatim to ``paths.experiment_config_path``.
