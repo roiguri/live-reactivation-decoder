@@ -238,7 +238,7 @@ class PreprocessingView(QWidget):
             try:
                 fig.canvas.draw_idle()
             except Exception:
-                pass
+                logger.debug("Failed to redraw ICA figure", exc_info=True)
 
     @staticmethod
     def _close_figs(figs) -> None:
@@ -253,7 +253,7 @@ class PreprocessingView(QWidget):
             try:
                 plt.close(fig)
             except Exception:
-                pass
+                logger.debug("Failed to close figure", exc_info=True)
 
     def _on_step1a_done(self, raw) -> None:
         # Worker thread is quitting; the MNE window must run on this (main) thread.
@@ -261,11 +261,14 @@ class PreprocessingView(QWidget):
             self._wait_overlay(
                 "Mark bad channels in the MNE window, then close it to continue…"
             )
+            logger.info("Opening bad-channel review window")
             # block=False + nested QEventLoop is the working substitute for
             # block=True, which is a no-op inside QApplication.exec().
             fig = raw.plot(block=False)
             _WaitForClose(fig).wait()
-            bads = list(raw.info["bads"])
+            # Coerce numpy str_ → plain str so the value reads cleanly in logs
+            # and downstream (MNE treats them identically as channel names).
+            bads = [str(b) for b in raw.info["bads"]]
             logger.info(
                 "Bad-channel review closed; operator selected %d channel(s): %s",
                 len(bads), bads,
@@ -273,6 +276,7 @@ class PreprocessingView(QWidget):
             self._session.offline.set_bad_channels(bads)
             self._bad_channels = bads
         except Exception as exc:  # pragma: no cover — display/runtime guard
+            logger.exception("Bad-channel review failed")
             self._on_error(f"Bad-channel review failed: {exc}")
             return
 
@@ -292,6 +296,7 @@ class PreprocessingView(QWidget):
                 "for the detail window. Close all topomap windows when "
                 "done."
             )
+            logger.info("Opening ICA component review window")
             # MNE's plot_components(inst=epochs) returns one matplotlib
             # figure per ~20 components and wires up two click handlers:
             #   • click a subplot title → toggle ica.exclude (in-place)
@@ -340,7 +345,7 @@ class PreprocessingView(QWidget):
                 try:
                     f.canvas.manager.window.showMaximized()
                 except Exception:
-                    pass
+                    logger.debug("Failed to maximize ICA window", exc_info=True)
             _WaitForAllFigsClose(topomap_figs).wait()
             excluded = list(ica.exclude)
             logger.info(
@@ -350,6 +355,7 @@ class PreprocessingView(QWidget):
             )
             self._close_figs(topomap_figs)
         except Exception as exc:  # pragma: no cover — display/runtime guard
+            logger.exception("ICA review failed")
             self._on_error(f"ICA review failed: {exc}")
             return
 

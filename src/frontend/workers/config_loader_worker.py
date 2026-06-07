@@ -15,12 +15,6 @@ class ConfigLoaderWorker(BaseWorker):
         super().__init__(parent)
         self._config_path = config_path
 
-    def run(self) -> None:
-        try:
-            from backend.session import AppSession
-            session = AppSession(self._config_path)
-            self.result_ready.emit(session)
-        except Exception as exc:
-            self.error_occurred.emit(str(exc))
-        finally:
-            self.finished.emit()
+    def execute(self):
+        from backend.session import AppSession
+        return AppSession(self._config_path)

@@ -11,6 +11,7 @@ from backend.core.artifact_models import (
     DecoderPipelineArtifactSpec,
     DecoderPipelineMetadata,
 )
+from backend.core.logging_setup import log_duration
 from backend.core.session_paths import SessionPaths
 from backend.core.settings_manager import SettingsManager
 from backend.offline_phase.evaluator import ModelEvaluator
@@ -82,9 +83,10 @@ class OfflineOrchestrator:
         if self._data_dir is None:
             raise ValueError("Call set_file_path() before load_raw_data().")
 
-        vhdr = self._find_vhdr()
-        self._raw = self._load_eeg_raw(vhdr)
-        logger.info("Raw EEG loaded from %s", vhdr)
+        with log_duration(logger, "Raw load", level=logging.DEBUG):
+            vhdr = self._find_vhdr()
+            self._raw = self._load_eeg_raw(vhdr)
+            logger.info("Raw EEG loaded from %s", vhdr)
 
     def get_loaded_data_summary(self) -> dict[str, Any] | None:
         """Return a small summary of the loaded raw recording (or ``None``).
@@ -129,7 +131,8 @@ class OfflineOrchestrator:
             preprocessing_settings=self._settings.get_preprocessing_params(),
             raw=self._raw,
         )
-        return self._preprocessor.run_step1a_filter()
+        with log_duration(logger, "Filtering", level=logging.DEBUG):
+            return self._preprocessor.run_step1a_filter()
 
     def set_bad_channels(self, bads: list[str]) -> None:
         """Forward the operator's bad-channel selection to the preprocessor.
@@ -158,11 +161,12 @@ class OfflineOrchestrator:
         if self._preprocessor is None:
             raise RuntimeError("Call run_step1a_filter() before run_step1b_fit_ica().")
 
-        ica, epochs, suggested = self._preprocessor.run_step1b_fit_ica(
-            self._settings.get_event_mapping()
-        )
-        self._epochs = epochs
-        logger.info("ICA fitted. %d component(s) suggested.", len(suggested))
+        with log_duration(logger, "ICA fit", level=logging.DEBUG):
+            ica, epochs, suggested = self._preprocessor.run_step1b_fit_ica(
+                self._settings.get_event_mapping()
+            )
+            self._epochs = epochs
+            logger.info("ICA fitted. %d component(s) suggested.", len(suggested))
         return ica, epochs, suggested
 
     def ica_component_labels(self) -> list[tuple[str, float]] | None:
@@ -195,15 +199,16 @@ class OfflineOrchestrator:
                 "Call run_step1b_fit_ica() before run_step2_apply_and_save()."
             )
 
-        result = self._preprocessor.run_step2_apply_and_save(
-            exclude_components=excluded_components,
-            output_dir=self._paths.epochs_dir,
-        )
-        self._epochs = self._preprocessor.epochs
-        # Preprocessor already dropped its raw handle; drop ours too so the
-        # Raw object's refcount reaches zero and the buffer is freed.
-        self._raw = None
-        logger.info("Preprocessing complete. %d epochs retained.", len(self._epochs))
+        with log_duration(logger, "Apply ICA + save", level=logging.DEBUG):
+            result = self._preprocessor.run_step2_apply_and_save(
+                exclude_components=excluded_components,
+                output_dir=self._paths.epochs_dir,
+            )
+            self._epochs = self._preprocessor.epochs
+            # Preprocessor already dropped its raw handle; drop ours too so the
+            # Raw object's refcount reaches zero and the buffer is freed.
+            self._raw = None
+            logger.info("Preprocessing complete. %d epochs retained.", len(self._epochs))
         return result
 
     def run_evaluation(self) -> dict[str, Any]:
@@ -221,12 +226,13 @@ class OfflineOrchestrator:
                 "Call run_step2_apply_and_save() before run_evaluation()."
             )
 
-        evaluator = ModelEvaluator(self._epochs, self._settings.get_decoder_settings())
-        self._eval_results = evaluator.run_evaluation()
-        logger.info(
-            "Evaluation complete. Suggested timepoint: %.3fs",
-            self._eval_results["suggested_timepoint"],
-        )
+        with log_duration(logger, "Evaluation", level=logging.DEBUG):
+            evaluator = ModelEvaluator(self._epochs, self._settings.get_decoder_settings())
+            self._eval_results = evaluator.run_evaluation()
+            logger.info(
+                "Evaluation complete. Suggested timepoint: %.3fs",
+                self._eval_results["suggested_timepoint"],
+            )
         return self._eval_results
 
     def run_training(self, timepoints: dict[str, float]) -> dict[str, Any]:
@@ -257,25 +263,26 @@ class OfflineOrchestrator:
 
         per_task_timepoints = {k: float(v) for k, v in timepoints.items()}
 
-        trainer = ModelTrainer(self._epochs, self._settings.get_decoder_settings())
-        training_results = trainer.run_training(per_task_timepoints)
-        preprocessor_state = self._preprocessor.export_online_state()
+        with log_duration(logger, "Training", level=logging.DEBUG):
+            trainer = ModelTrainer(self._epochs, self._settings.get_decoder_settings())
+            training_results = trainer.run_training(per_task_timepoints)
+            preprocessor_state = self._preprocessor.export_online_state()
 
-        self._live_artifact_spec = DecoderPipelineArtifactSpec(
-            models=training_results["models"],
-            online_state=preprocessor_state,
-            metadata=DecoderPipelineMetadata(
-                feature_width=len(preprocessor_state["eeg_chunk_indices"]),
-                decoding_timepoints=per_task_timepoints,
-            ),
-        )
-        self._ui_state = {
-            "spatial_patterns": training_results["spatial_patterns"],
-            "mne_info": training_results["mne_info"],
-        }
+            self._live_artifact_spec = DecoderPipelineArtifactSpec(
+                models=training_results["models"],
+                online_state=preprocessor_state,
+                metadata=DecoderPipelineMetadata(
+                    feature_width=len(preprocessor_state["eeg_chunk_indices"]),
+                    decoding_timepoints=per_task_timepoints,
+                ),
+            )
+            self._ui_state = {
+                "spatial_patterns": training_results["spatial_patterns"],
+                "mne_info": training_results["mne_info"],
+            }
 
-        save_path = self._save_to_disk()
-        logger.info("Training complete. Pipeline saved → %s", save_path)
+            save_path = self._save_to_disk()
+            logger.info("Training complete. Pipeline saved → %s", save_path)
         return {
             "model_filepath": save_path,
             "spatial_patterns": training_results["spatial_patterns"],

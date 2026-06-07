@@ -19,11 +19,5 @@ class TrainingWorker(BaseWorker):
         self._orchestrator = orchestrator
         self._timepoints = {k: float(v) for k, v in timepoints.items()}
 
-    def run(self) -> None:
-        try:
-            result = self._orchestrator.run_training(self._timepoints)
-            self.result_ready.emit(result)
-        except Exception as exc:
-            self.error_occurred.emit(str(exc))
-        finally:
-            self.finished.emit()
+    def execute(self):
+        return self._orchestrator.run_training(self._timepoints)

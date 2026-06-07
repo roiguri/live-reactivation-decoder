@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any
 
 import numpy as np
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
+
+logger = logging.getLogger(__name__)
+
+# Batches between rolling latency summaries (~10 s at the default 40-sample
+# batch on a 1000 Hz stream, i.e. ~25 batches/s).
+_LATENCY_SUMMARY_EVERY = 250
 
 
 class StreamWorker(QThread):
@@ -39,8 +46,11 @@ class StreamWorker(QThread):
         self._batch_eeg: list[np.ndarray] = []
         self._pending_markers: list[tuple[float, int]] = []
         self._stop_requested = False
+        # Per-batch total_ms collected since the last rolling latency summary.
+        self._latency_window: list[float] = []
 
     def run(self) -> None:
+        logger.debug("Stream worker loop started")
         while not self._stop_requested:
             batch_processed = False
             pull_started = time.perf_counter()
@@ -107,17 +117,47 @@ class StreamWorker(QThread):
                     "pending_samples": self._accumulated_samples,
                 })
 
+                self._latency_window.append(total_ms)
+                if len(self._latency_window) >= _LATENCY_SUMMARY_EVERY:
+                    self._log_latency_summary()
+
                 if self._stop_requested:
                     break
 
             if not batch_processed and not self._stop_requested:
                 time.sleep(self.poll_interval_sec)
+        self._log_latency_summary()  # flush any partial window on exit
+        logger.debug("Stream worker loop exited")
+
+    def _log_latency_summary(self) -> None:
+        """Emit one rolling DEBUG summary of per-batch latency, then reset.
+
+        Aggregates the per-batch ``total_ms`` collected since the last summary
+        so the log carries mean/p95/max rather than ~25 lines per second.
+        """
+        window = self._latency_window
+        if not window:
+            return
+        arr = np.asarray(window)
+        logger.debug(
+            "live latency over %d batches: mean %.1f ms, p95 %.1f ms, "
+            "max %.1f ms, pending %d samples",
+            arr.size,
+            float(arr.mean()),
+            float(np.percentile(arr, 95)),
+            float(arr.max()),
+            self._accumulated_samples,
+        )
+        self._latency_window = []
 
     def stop(self) -> None:
         self._stop_requested = True
 
     def _fail(self, stage: str, exc: Exception) -> None:
         self._stop_requested = True
+        # Called from within the run()-loop except blocks, so the active
+        # exception's traceback is still live and is captured here.
+        logger.exception("%s failed", stage)
         self.error_occurred.emit(f"{stage} failed: {type(exc).__name__}: {exc}")
 
     @property

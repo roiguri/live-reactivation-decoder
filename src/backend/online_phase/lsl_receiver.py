@@ -241,9 +241,6 @@ class LSLReceiver:
                 logger.warning(f"Malformed chunk received: {e}. Chunk shape: {chunk_shape}. Skipping.")
                 continue
 
-            if len(chunk_markers) > 0:
-                logger.debug(f"Detected markers: {chunk_markers}")
-
             timestamps_parts.append(timestamps_array)
             eeg_parts.append(eeg_chunk)
             markers.extend(
@@ -257,9 +254,6 @@ class LSLReceiver:
                 np.empty((0, self.eeg_channel_count), dtype=float),
                 [],
             )
-
-        total_samples = sum(part.shape[0] for part in eeg_parts)
-        logger.debug(f"Pulled {total_samples} samples, {len(markers)} markers")
 
         return np.concatenate(timestamps_parts), np.vstack(eeg_parts), markers
 

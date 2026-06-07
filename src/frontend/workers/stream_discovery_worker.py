@@ -17,11 +17,5 @@ class StreamDiscoveryWorker(BaseWorker):
         self._session = session
         self._timeout_sec = timeout_sec
 
-    def run(self) -> None:
-        try:
-            names = self._session.discover_streams(timeout_sec=self._timeout_sec)
-            self.result_ready.emit(names)
-        except Exception as exc:
-            self.error_occurred.emit(str(exc))
-        finally:
-            self.finished.emit()
+    def execute(self):
+        return self._session.discover_streams(timeout_sec=self._timeout_sec)

@@ -136,6 +136,16 @@ class OnlinePreprocessor:
         self._decimate_zi: Optional[np.ndarray] = None
         self._decimate_phase: int = 0
 
+        logger.info(
+            "OnlinePreprocessor ready: %d ch (%d good / %d bad), %g→%g Hz "
+            "(decim %d, stage=%s), HP %g Hz, notch %s Hz, LP %g Hz, %d ICA excluded",
+            self._n_eeg, len(self._good_indices), len(self._bad_indices),
+            self._input_sfreq, self._target_sfreq, self._decimation,
+            self._resample_filter_stage, hp["l_freq"],
+            notch_freq if notch_freq is not None else "off", lp["h_freq"],
+            len(self._ica_exclude),
+        )
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     @property

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
@@ -31,6 +32,8 @@ from frontend.widgets.phase2 import (
     StartHaltButton,
     TargetSelectionDialog,
 )
+
+logger = logging.getLogger(__name__)
 
 # TODO: wire a Back button. Unresolved: which screen Back lands on
 # (Node 5 results vs. journey reset) and what to do with a running
@@ -173,12 +176,11 @@ class Phase2Screen(QWidget):
 
     def _on_start_clicked(self) -> None:
         if self._target is None:
-            QMessageBox.information(
-                self,
-                "No target selected",
-                "Choose a target before starting inference.",
-            )
-            return
+            # No stream picked yet — open the target picker instead of
+            # erroring, so Start doubles as "pick, then start".
+            self._on_choose_target()
+            if self._target is None:
+                return  # operator cancelled the picker
 
         # Drop any frozen tail from the previous session so the new one
         # starts visually blank.
@@ -203,6 +205,7 @@ class Phase2Screen(QWidget):
             self._wire_session(self._live)
             self._live.start()
         except Exception as exc:
+            logger.exception("Live inference failed to start")
             self._safely_stop()
             QMessageBox.critical(self, "Could not start live inference", str(exc))
             return
@@ -225,16 +228,18 @@ class Phase2Screen(QWidget):
             try:
                 self._live.stop()
             except Exception:
-                # Best-effort: surface the failure via header text but
-                # don't re-raise — we're already in a cleanup path.
-                pass
+                logger.warning(
+                    "Failed to stop live session during teardown", exc_info=True
+                )
             self._live = None
         try:
             # Stop the publishing source (proxy/replay). AppSession owns its
             # lifetime; a subsequent Start relaunches it.
             self.session.stop_stream_source()
         except Exception:
-            pass
+            logger.warning(
+                "Failed to stop stream source during teardown", exc_info=True
+            )
         self._start_halt_button.set_idle()
         self._header.set_status("INFERENCE HALTED", color=TEXT_PRIMARY)
 

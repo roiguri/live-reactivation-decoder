@@ -17,11 +17,5 @@ class EvaluationWorker(BaseWorker):
         super().__init__(parent)
         self._orchestrator = orchestrator
 
-    def run(self) -> None:
-        try:
-            result = self._orchestrator.run_evaluation()
-            self.result_ready.emit(result)
-        except Exception as exc:
-            self.error_occurred.emit(str(exc))
-        finally:
-            self.finished.emit()
+    def execute(self):
+        return self._orchestrator.run_evaluation()

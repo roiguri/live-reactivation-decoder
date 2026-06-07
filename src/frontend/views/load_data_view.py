@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from PyQt6.QtCore import Qt, QThread, pyqtSignal as Signal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
@@ -11,6 +13,8 @@ from frontend.styles.theme import (
 )
 from frontend.widgets.shared import FilePicker
 from frontend.workers.load_worker import LoadWorker
+
+logger = logging.getLogger(__name__)
 
 
 class LoadDataView(QWidget):
@@ -95,19 +99,21 @@ class LoadDataView(QWidget):
     def trigger_load(self) -> None:
         """Start the background load. Wired to the journey-panel Node 2 button.
 
-        Safe no-op when prerequisites are missing (panel button is gated, but
-        this guard keeps the slot self-contained).
+        Node 2 is only reachable after Node 1 emits session_ready (session set +
+        offline configured), and the button is gated on a selected data dir — so
+        prerequisites are guaranteed; an unready call is a wiring bug that fails
+        loudly rather than being silently swallowed.
         """
-        if not self._data_dir or self._session is None or self._session.offline is None:
-            return
         if self._loading:
-            return  # guard re-entry while a load is in flight
-
-        try:
-            self._session.offline.set_file_path(self._data_dir)
-        except Exception as exc:
-            QMessageBox.critical(self, "Load Error", str(exc))
+            # The button is disabled while a load is in flight, so re-entry
+            # shouldn't happen; if it does, something fired this slot
+            # unexpectedly — warn and don't start a second load thread.
+            logger.warning(
+                "trigger_load re-entered while a load is in flight; ignoring"
+            )
             return
+
+        self._session.offline.set_file_path(self._data_dir)
 
         self._picker.setEnabled(False)
         self._loading = True

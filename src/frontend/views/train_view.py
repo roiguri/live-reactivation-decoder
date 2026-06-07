@@ -28,7 +28,6 @@ same loading-overlay / ready-changed protocols:
 """
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Any, Optional
 
@@ -45,8 +44,6 @@ from frontend.styles.theme import (
 )
 from frontend.widgets.charts import TopomapWidget
 from frontend.workers.training_worker import TrainingWorker
-
-logger = logging.getLogger(__name__)
 
 
 class TrainView(QWidget):

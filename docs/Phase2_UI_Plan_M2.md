@@ -438,7 +438,7 @@ These items are **offline (Phase 1)** and have **no Phase-2 / online impact**. T
 
 ## Goal 19 — Per-Decoder Timepoint Selection (Phase 1 offline UI) — ✅ Done
 
-Each decoder is now operator-selectable at its own timepoint, end-to-end. Shipped on `feat/per-decoder-timepoints` (7 commits); full design in [docs/feature_plans/per_decoder_timepoint_selection.md](feature_plans/per_decoder_timepoint_selection.md).
+Each decoder is now operator-selectable at its own timepoint, end-to-end. Shipped on `feat/per-decoder-timepoints` (7 commits); full design in [docs/plans/per_decoder_timepoint_selection.md](plans/per_decoder_timepoint_selection.md).
 
 - [x] `EvaluationView` Summary tab is a **per-decoder roster** — each decoder has its own timepoint spinbox, AUC@t, read-only Peak column, and Confirm; pre-filled with its evaluator `peak_timepoint`
 - [x] Per-decoder editing (roster spinbox, decoder-tab spinbox, or chart click) moves **only that decoder**, synced bidirectionally; "Approve && Continue" gates on **all** decoders confirmed

@@ -86,16 +86,13 @@ class OfflinePreprocessor:
             )
 
         self._original_ch_names = list(self.raw.ch_names)
+        logger.info("Filtering raw (stage=%s)", self._stage)
         self._channel_hygiene()
         self._highpass()
         self._notch()
         if self._stage == "early":
             self._lowpass(self.raw)
             self.raw = self._resample(self.raw)
-        logger.info(
-            "Step 1A complete (stage=%s, sfreq=%.1f Hz).",
-            self._stage, self.raw.info["sfreq"],
-        )
         return self.raw
 
     def set_bad_channels(self, bads: list[str]) -> None:
@@ -127,6 +124,7 @@ class OfflinePreprocessor:
         self.epochs = self._epoch(event_mapping)
         logger.info("Epochs created: %d", len(self.epochs))
         self._reference()
+        logger.info("Fitting ICA…")
         self._suggested_exclude = self._fit_ica()
         logger.info(
             "ICA fitted (%d components). ICLabel suggested: %s",
@@ -249,11 +247,13 @@ class OfflinePreprocessor:
             l_freq=hp["l_freq"], h_freq=None, method=hp.get("method", "iir"),
             phase="forward", verbose=False,
         )
+        logger.info("Highpass: l_freq=%s Hz (%s)", hp["l_freq"], hp.get("method", "iir"))
 
     def _notch(self) -> None:
         freq = self.settings.get("notch", {}).get("freq")
         if freq:
             self.raw.notch_filter(freqs=freq, verbose=False)
+            logger.info("Notch: %s Hz", freq)
 
     def _lowpass(self, inst) -> None:
         lp = self.settings["lowpass"]
@@ -262,6 +262,7 @@ class OfflinePreprocessor:
             l_freq=None, h_freq=lp["h_freq"], method=lp.get("method", "iir"),
             phase="forward", verbose=False,
         )
+        logger.info("Lowpass: h_freq=%s Hz (%s)", lp["h_freq"], lp.get("method", "iir"))
 
     def _resample(self, inst):
         """Causal anti-alias FIR + integer decimation, mirroring online ``_decimate``.
@@ -286,6 +287,7 @@ class OfflinePreprocessor:
             )
 
         decimation = int(current) // int(target)
+        logger.info("Resample: %g → %g Hz (decimation %d)", current, target, decimation)
         cutoff_hz = 0.9 * target / 2.0
         n_taps = 10 * decimation + 1
         anti_alias = firwin(n_taps, cutoff_hz, fs=current)
