@@ -44,8 +44,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--log",
         type=Path,
-        default=Path("/tmp/smoke.csv"),
-        help="CSV output path for PredictionLogger.",
+        default=Path("/tmp/smoke_logs"),
+        help="Run directory for LiveSessionLogger output "
+             "(predictions.csv / markers.csv / manifest.json / predictions.npz).",
     )
     parser.add_argument(
         "--batch-size",
@@ -202,13 +203,14 @@ def _configure_receiver_for_smoke(
     receiver.resolve_timeout_sec = resolve_timeout_sec
 
 
-def _summarize_csv(log_path: Path) -> tuple[int, bool, int, list[str]]:
-    if not log_path.exists():
-        raise FileNotFoundError(f"Prediction log was not created: {log_path}")
+def _summarize_csv(run_dir: Path) -> tuple[int, bool, int, list[str]]:
+    predictions_path = run_dir / "predictions.csv"
+    markers_path = run_dir / "markers.csv"
+    if not predictions_path.exists():
+        raise FileNotFoundError(f"Prediction log was not created: {predictions_path}")
 
-    with log_path.open(newline="") as f:
-        reader = csv.reader(f)
-        rows = list(reader)
+    with predictions_path.open(newline="") as f:
+        rows = list(csv.reader(f))
 
     if not rows:
         return 0, False, 0, []
@@ -216,8 +218,13 @@ def _summarize_csv(log_path: Path) -> tuple[int, bool, int, list[str]]:
     header = rows[0]
     data_rows = rows[1:]
     timestamps = np.asarray([float(row[0]) for row in data_rows], dtype=float)
-    marker_count = sum(1 for row in data_rows if len(row) > 1 and row[1] != "")
     monotonic = bool(timestamps.size <= 1 or np.all(np.diff(timestamps) >= 0))
+
+    # Markers live in a sidecar (one row per trigger edge, no inline column).
+    marker_count = 0
+    if markers_path.exists():
+        with markers_path.open(newline="") as f:
+            marker_count = max(0, len(list(csv.reader(f))) - 1)
     return len(data_rows), monotonic, marker_count, header
 
 
@@ -240,15 +247,13 @@ def main() -> int:
             time.sleep(args.replay_startup_wait)
             _ensure_replay_process_running(replay_process)
 
-        log_path = args.log.resolve()
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        if log_path.exists():
-            log_path.unlink()
+        run_dir = args.log.resolve()
+        run_dir.mkdir(parents=True, exist_ok=True)
 
         session = AppSession(args.config)
         live = session.build_live_stream_session(
             decoder_pipeline_path=args.pipeline,
-            log_path=log_path,
+            log_dir=run_dir,
             batch_size_samples=args.batch_size,
         )
         _configure_receiver_for_smoke(
@@ -271,10 +276,10 @@ def main() -> int:
         live.stop()
         live = None
 
-        row_count, monotonic, marker_count, header = _summarize_csv(log_path)
+        row_count, monotonic, marker_count, header = _summarize_csv(run_dir)
         print()
         print("Smoke Test Summary")
-        print(f"  log_path: {log_path}")
+        print(f"  run_dir: {run_dir}")
         print(f"  row_count: {row_count}")
         print(f"  timestamps_monotonic: {monotonic}")
         print(f"  marker_count: {marker_count}")

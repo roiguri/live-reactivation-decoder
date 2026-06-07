@@ -60,6 +60,7 @@ class FakePreprocessor:
         self.preprocessing_settings = preprocessing_settings
         self.online_state = online_state
         self.target_sfreq = preprocessing_settings["final_resample"]["target_rate"]
+        self.input_sfreq = 1000.0
         FakePreprocessor.instances.append(self)
 
 
@@ -359,11 +360,11 @@ def test_build_live_stream_session_with_log_connects_logger(
 ):
     _patch_runtime(monkeypatch)
     session = AppSession(sample_config_path)
-    log_path = tmp_path / "predictions.csv"
+    log_dir = tmp_path / "run"
 
     live = session.build_live_stream_session(
         Path("decoder_pipeline.joblib"),
-        log_path=log_path,
+        log_dir=log_dir,
     )
     live.prediction_ready.emit(
         {
@@ -376,7 +377,24 @@ def test_build_live_stream_session_with_log_connects_logger(
     live.stop()
 
     assert len(live.prediction_ready.slots) == 1
-    assert log_path.read_text().splitlines() == [
-        "timestamp,marker_code,object,scene",
-        "1.0,,0.2,0.8",
+    predictions = (log_dir / "predictions.csv").read_text().splitlines()
+    assert predictions == [
+        "lsl_timestamp,t_sec,object,scene",
+        "1.0,0.0,0.2,0.8",
     ]
+    # Sidecar markers + manifest + npz are created alongside.
+    assert (log_dir / "markers.csv").exists()
+    assert (log_dir / "manifest.json").exists()
+    assert (log_dir / "predictions.npz").exists()
+
+
+def test_resolve_phase2_log_dir_layout(tmp_path):
+    artifact = tmp_path / "subject_root" / "models" / "decoder_pipeline.joblib"
+    artifact.parent.mkdir(parents=True)
+    artifact.touch()
+
+    run_dir = AppSession.resolve_phase2_log_dir(artifact)
+
+    # <artifact_root>/phase2_live/<timestamp>/, dir created on demand.
+    assert run_dir.parent == (tmp_path / "subject_root" / "phase2_live").resolve()
+    assert run_dir.is_dir()

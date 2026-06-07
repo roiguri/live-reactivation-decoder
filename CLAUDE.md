@@ -16,7 +16,7 @@ online_decoder/
 ├── src/backend/
 │   ├── core/           — SettingsManager and Pydantic config models
 │   ├── offline_phase/  — utils, OfflinePreprocessor, ModelEvaluator, ModelTrainer, OfflineOrchestrator
-│   └── online_phase/   — LSLReceiver, OnlinePreprocessor, LiveInferenceEngine, StreamWorker, PredictionLogger
+│   └── online_phase/   — LSLReceiver, OnlinePreprocessor, LiveInferenceEngine, StreamWorker, LiveSessionLogger
 ├── src/frontend/
 │   ├── screens/        — Phase1Screen, Phase2Screen
 │   ├── widgets/        — Phase 1 widgets + LiveProbabilityChart (pyqtgraph)
@@ -34,7 +34,7 @@ online_decoder/
 
 ## Current Backend Scope
 
-- Phase 2 backend surface: `LSLReceiver`, `DecoderPipelineArtifact` loader, `OnlinePreprocessor`, `LiveInferenceEngine`, `StreamWorker`, and `PredictionLogger`.
+- Phase 2 backend surface: `LSLReceiver`, `DecoderPipelineArtifact` loader, `OnlinePreprocessor`, `LiveInferenceEngine`, `StreamWorker`, and `LiveSessionLogger` (run sink → `predictions.csv` + `markers.csv` + `manifest.json` + `predictions.npz`; `export_session_npz` for recovery).
 - Phase 2 session API: `AppSession.build_live_stream_session(...) -> LiveStreamSession`. `AppSession` remains the app-level composition boundary; do not introduce `OnlinePhase` or expose `session.online`.
 - `StreamWorker` owns only the injected-dependency micro-batch loop. It keeps references to receiver/preprocessor/inference objects for `run()`, but `LiveStreamSession` owns start/stop/cleanup for the receiver, worker, and optional logger.
 - Phase 1 surface: config models, `SettingsManager`, `OfflinePreprocessor`, `ModelEvaluator`, `ModelTrainer`, shared `utils.py` (`build_classifier`, `get_task_data`), `OfflineOrchestrator` (Phase 1 state machine, owns file I/O and `decoder_pipeline.joblib` export), and `AppSession` (`src/backend/session.py` — the single frontend entry point; owns `SettingsManager` lifetime and exposes `session.offline` for Phase 1).

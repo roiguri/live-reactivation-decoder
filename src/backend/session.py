@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,7 @@ from backend.online_phase.artifact_loader import load_decoder_pipeline_artifact
 from backend.online_phase.live_inference import LiveInferenceEngine
 from backend.online_phase.lsl_receiver import LSLReceiver
 from backend.online_phase.online_preprocessor import OnlinePreprocessor
-from backend.online_phase.prediction_logger import PredictionLogger
+from backend.online_phase.session_logger import LiveSessionLogger
 from backend.online_phase.stream_source import LslProxySource, StreamSource
 from backend.online_phase.stream_worker import StreamWorker
 
@@ -24,7 +25,7 @@ class LiveStreamSession:
 
     _receiver: LSLReceiver
     _worker: StreamWorker
-    _logger: PredictionLogger | None = None
+    _logger: LiveSessionLogger | None = None
 
     def __post_init__(self) -> None:
         self._started = False
@@ -136,10 +137,26 @@ class AppSession:
         self._ensure_proxy_source(start=True)
         return LSLReceiver().discover_streams(timeout_sec=timeout_sec)
 
+    @staticmethod
+    def resolve_phase2_log_dir(decoder_pipeline_path: str | Path) -> Path:
+        """Return a fresh timestamped run directory for this run's Phase 2 logs.
+
+        Logs land in ``<artifact_root>/phase2_live/<YYYYMMDD_HHMMSS>/`` (mirroring
+        the PRD layout), where ``<artifact_root>`` is the directory holding the
+        artifact's ``models/`` folder. Derived from the pipeline path so it works
+        in both Go-Live and debug-profile paths (neither has an offline
+        ``output_dir``). A fresh timestamp per call keeps each Start
+        self-contained (file per Start). The directory is created on demand.
+        """
+        artifact_root = Path(decoder_pipeline_path).resolve().parent.parent
+        run_dir = artifact_root / "phase2_live" / datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_dir.mkdir(parents=True, exist_ok=True)
+        return run_dir
+
     def build_live_stream_session(
         self,
         decoder_pipeline_path: str | Path,
-        log_path: str | Path | None = None,
+        log_dir: str | Path | None = None,
         batch_size_samples: int = 40,
         *,
         stream_name: str | None = None,
@@ -150,6 +167,9 @@ class AppSession:
         the active ``StreamSource`` (start it via ``start_stream_source`` before
         ``LiveStreamSession.start``). The resolve timeout is picked from the
         active source kind — replay needs longer to advertise after MNE preload.
+
+        When ``log_dir`` is given, a :class:`LiveSessionLogger` persists the run
+        there (predictions/markers CSVs + manifest + npz on close).
         """
         # TODO(open): Avoid unnecessary disk reload when Phase 1 already has
         # an in-memory DecoderPipelineArtifact; see stream_worker_design.md Open §2.
@@ -181,11 +201,22 @@ class AppSession:
         )
 
         logger = None
-        if log_path is not None:
-            logger = PredictionLogger(
-                out_path=log_path,
+        if log_dir is not None:
+            # Receiver emits {name: id}; the log records every edge by code and
+            # resolves the name where one is configured (empty otherwise).
+            event_names = {
+                int(code): str(name)
+                for name, code in self._settings.get_event_mapping().items()
+            }
+            logger = LiveSessionLogger(
+                run_dir=log_dir,
                 task_names=list(artifact.models.keys()),
-                target_sfreq=preprocessor.target_sfreq,
+                event_names=event_names,
+                metadata={
+                    "target_sfreq": preprocessor.target_sfreq,
+                    "input_sfreq": preprocessor.input_sfreq,
+                    "config": self._settings.config_filepath.name,
+                },
             )
             worker.prediction_ready.connect(
                 logger.on_predictions,

@@ -667,7 +667,7 @@ Older full-window / `RingBuffer` descriptions are obsolete and are kept only in 
 - `DecoderPipelineArtifact` loader is implemented in code
 - `OnlinePreprocessor` is implemented in code (`src/backend/online_phase/online_preprocessor.py`)
 - `LiveInferenceEngine` is implemented in code
-- `StreamWorker` and `PredictionLogger` are implemented in code
+- `StreamWorker` and `LiveSessionLogger` are implemented in code
 - Session composition is implemented as `AppSession.build_live_stream_session(...) -> LiveStreamSession`; do not introduce `OnlinePhase` or `session.online`
 
 ### **Data Flow (Active Micro-Batch Design)**
@@ -717,7 +717,7 @@ UI-facing artifacts that the live runtime does not need (`spatial_patterns`,
      - **"late"**: bad-channel interp → average reference → ICA → 40 Hz LP → decimate 1000→100 Hz.
    - The variant flag is configured per training run and stored implicitly via the ICA matrices in `online_state` (matrices fit at the rate the offline pipeline ran at).
 5. `LiveInferenceEngine.predict()` scores all decimated outputs from that batch.
-6. `StreamWorker` emits probabilities, aligned timestamps, and markers through `prediction_ready`; `PredictionLogger` and the UI are consumers of that signal.
+6. `StreamWorker` emits probabilities, aligned timestamps, and markers through `prediction_ready`; `LiveSessionLogger` and the UI are consumers of that signal.
 
 ### **The Components**
 
@@ -792,12 +792,13 @@ UI-facing artifacts that the live runtime does not need (`spatial_patterns`,
 * **Status:** Implemented.
 * **Does not own:** artifact loading, logger files, receiver start/stop, or frontend lifecycle. Those belong to `AppSession`/`LiveStreamSession`.
 
-#### **5. PredictionLogger (CSV Sink)**
+#### **5. LiveSessionLogger (Run Sink)**
 
-* **Role:** Optional consumer of `prediction_ready` that writes live prediction rows to CSV.
-* **Inputs:** task names, target sampling rate, output path, and `prediction_ready` payloads.
-* **Outputs:** CSV file with timestamp, optional marker code, and one probability column per task.
-* **Status:** Implemented.
+* **Role:** Optional consumer of `prediction_ready` that persists one decoding run. A plain (non-Qt) callable connected via a direct connection; its only live job is to append to two line-buffered CSVs (the crash-safe source of truth) and own the run manifest. It also keeps the raw batch arrays in memory to emit a numpy bundle at `close()`.
+* **Inputs:** run directory, task names, `{code: name}` event map, manifest metadata, and `prediction_ready` payloads.
+* **Outputs (one run directory):** `predictions.csv` (`lsl_timestamp, t_sec, <per-task probs>`), `markers.csv` (`lsl_timestamp, t_sec, code, name` — every trigger edge, no grid-snapping), `manifest.json` (schema version, wall-clock + `lsl_t0`, counts, metadata), and `predictions.npz` (full-precision arrays + embedded manifest, written at close).
+* **Recovery:** `export_session_npz(run_dir)` rebuilds the `.npz` from the CSVs for sessions that crashed before `close()`.
+* **Status:** Implemented in `src/backend/online_phase/session_logger.py`.
 
 #### **6. LiveStreamSession (Online Lifecycle Wrapper)**
 
@@ -809,8 +810,8 @@ UI-facing artifacts that the live runtime does not need (`spatial_patterns`,
 #### **7. AppSession Phase 2 Factory**
 
 * **Role:** The app-level composition boundary. The frontend imports only `AppSession`.
-* **API:** `AppSession.build_live_stream_session(decoder_pipeline_path, log_path=None, batch_size_samples=40) -> LiveStreamSession`.
-* **Responsibilities:** load the Phase 1 artifact, construct `LSLReceiver`, `OnlinePreprocessor`, `LiveInferenceEngine`, `StreamWorker`, and optional `PredictionLogger`, connect logger if needed, and return the stopped `LiveStreamSession`.
+* **API:** `AppSession.build_live_stream_session(decoder_pipeline_path, log_dir=None, batch_size_samples=40) -> LiveStreamSession`. Log paths are resolved by `AppSession.resolve_phase2_log_dir(decoder_pipeline_path)` → `<artifact_root>/phase2_live/<timestamp>/`.
+* **Responsibilities:** load the Phase 1 artifact, construct `LSLReceiver`, `OnlinePreprocessor`, `LiveInferenceEngine`, `StreamWorker`, and optional `LiveSessionLogger`, connect logger if needed, and return the stopped `LiveStreamSession`.
 
 ### Backend to Frontend Contract: Live Decoder Output
 
@@ -1439,7 +1440,7 @@ online_decoder/
 │           ├── online_preprocessor.py # OnlinePreprocessor - Implemented
 │           ├── live_inference.py      # LiveInferenceEngine - Implemented
 │           ├── artifact_loader.py     # DecoderPipelineArtifact loader - Implemented
-│           ├── prediction_logger.py   # PredictionLogger - Implemented
+│           ├── session_logger.py      # LiveSessionLogger + export_session_npz - Implemented
 │           ├── stream_worker.py       # StreamWorker (QThread) - Implemented
 │           └── __init__.py            # Public API exports
 │
