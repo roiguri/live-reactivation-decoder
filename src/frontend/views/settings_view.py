@@ -82,23 +82,12 @@ class SettingsView(QWidget):
     def trigger_continue(self) -> None:
         """Build the AppSession and emit `session_ready`.
 
-        Wired to the journey-panel Node 1 action button by Phase1Screen.
-        Safe no-op when prerequisites are missing (panel button is gated, but
-        this guard keeps the slot self-contained).
+        Wired to the journey-panel Node 1 action button (gated on ready-state),
+        so config + output are always set when this fires (the debug walkthrough
+        sets them in earlier steps). Calling it unready is a wiring bug and is
+        left to fail loudly rather than silently no-op.
         """
-        if not (self._temp_session and self._output_dir):
-            return
-        try:
-            self._temp_session.configure_output(self._output_dir)
-        except Exception as exc:
-            QMessageBox.critical(self, "Session Error", str(exc))
-            self._temp_session = None
-            self._config_path = None
-            self._config_picker.clear()
-            self._config_status_lbl.hide()
-            self._update_settings_display(None)
-            self._update_continue_state()
-            return
+        self._temp_session.configure_output(self._output_dir)
         self.session_ready.emit(self._temp_session)
 
     # ── private builders ─────────────────────────────────────────────────────
