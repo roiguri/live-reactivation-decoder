@@ -366,6 +366,21 @@ class _FakeTargetDialog:
         return {"source": "lsl", "stream_name": "PickedStream"}
 
 
+class _CancelledTargetDialog:
+    """Stand-in for TargetSelectionDialog that the operator cancels."""
+
+    def __init__(self, session, parent=None) -> None:
+        pass
+
+    def exec(self):
+        from PyQt6.QtWidgets import QDialog
+
+        return QDialog.DialogCode.Rejected
+
+    def selected_target(self):
+        return None
+
+
 def test_header_starts_without_target_and_emits_signal(qapp) -> None:
     # Exercise the header in isolation: a real screen would open a modal
     # dialog on click, which would deadlock the offscreen test.
@@ -392,15 +407,15 @@ def test_choose_target_updates_header_and_state(screen_and_session) -> None:
     assert _FakeTargetDialog.last_session is screen.session
 
 
-def test_start_without_target_is_guarded(qapp) -> None:
-    """Start with no target must not build/start a session — just prompt."""
+def test_start_without_target_opens_picker_cancel_starts_nothing(qapp) -> None:
+    """Start with no target opens the picker; cancelling builds/starts nothing."""
     from frontend.screens.phase2_screen import Phase2Screen
 
     fake = _FakeLiveStreamSession()
     app_session = _StubAppSession(fake)
     with patch("frontend.screens.phase2_screen.QMessageBox.critical"), patch(
-        "frontend.screens.phase2_screen.QMessageBox.information"
-    ) as mock_info:
+        "frontend.screens.phase2_screen.TargetSelectionDialog", _CancelledTargetDialog
+    ):
         screen = Phase2Screen(
             session=app_session,
             decoder_pipeline_path=Path("/nonexistent.joblib"),
@@ -408,10 +423,34 @@ def test_start_without_target_is_guarded(qapp) -> None:
         assert screen._target is None
         screen._start_halt_button.start_clicked.emit()
 
-        assert mock_info.called
+        # Cancelled picker → still no target, nothing built/started, idle.
+        assert screen._target is None
         assert fake.start_calls == 0
         assert app_session.start_source_calls == 0
         assert screen._start_halt_button._state == "idle"
+
+
+def test_start_without_target_picks_then_starts(qapp) -> None:
+    """Start with no target opens the picker; selecting a stream then starts."""
+    from frontend.screens.phase2_screen import Phase2Screen
+
+    fake = _FakeLiveStreamSession()
+    app_session = _StubAppSession(fake)
+    with patch("frontend.screens.phase2_screen.QMessageBox.critical"), patch(
+        "frontend.screens.phase2_screen.TargetSelectionDialog", _FakeTargetDialog
+    ):
+        screen = Phase2Screen(
+            session=app_session,
+            decoder_pipeline_path=Path("/nonexistent.joblib"),
+        )
+        assert screen._target is None
+        screen._start_halt_button.start_clicked.emit()
+
+        # Picker accepted → target set and the session started.
+        assert screen._target == {"source": "lsl", "stream_name": "PickedStream"}
+        assert fake.start_calls == 1
+        assert app_session.start_source_calls == 1
+        assert screen._start_halt_button._state == "live"
 
 
 def test_start_uses_selected_stream_and_starts_source(screen_and_session) -> None:
