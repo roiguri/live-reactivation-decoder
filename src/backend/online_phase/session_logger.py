@@ -33,11 +33,14 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
 
@@ -109,6 +112,10 @@ class LiveSessionLogger:
         # A preliminary manifest so a run that crashes before close() is still
         # interpretable; close() rewrites it with lsl_t0, end time, and counts.
         self._write_manifest()
+        logger.info(
+            "Live session logging to %s (%d decoder(s))",
+            self._run_dir, len(self._task_names),
+        )
 
     # ── live sink ──────────────────────────────────────────────────────────────
 
@@ -174,6 +181,10 @@ class LiveSessionLogger:
             ),
         )
         self._closed = True
+        logger.info(
+            "Live run logged: %d prediction(s), %d marker(s) → %s",
+            int(timestamps.size), int(markers.size), self._run_dir,
+        )
 
     # ── internals ────────────────────────────────────────────────────────────────
 
