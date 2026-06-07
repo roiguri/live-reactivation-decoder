@@ -6,7 +6,7 @@
 
 Code under `src/` is the source of truth.
 
-Use [docs/backend_architecture.md](docs/backend_architecture.md) for the maintained backend summary, [docs/Phase2_Implementation_Plan.md](docs/Phase2_Implementation_Plan.md) for the Phase 2 backend checklist, and [docs/Phase2_UI_Plan_M1.md](docs/Phase2_UI_Plan_M1.md) for the completed M1 UI plan. See [docs/logging.md](docs/logging.md) for logging conventions. If the docs and code disagree, follow the code and update the docs.
+Use [docs/backend_architecture.md](docs/backend_architecture.md) for the maintained backend summary, [docs/Phase2_Implementation_Plan.md](docs/Phase2_Implementation_Plan.md) for the Phase 2 backend checklist, and [docs/Phase2_UI_Plan_M1.md](docs/Phase2_UI_Plan_M1.md) for the completed M1 UI plan. See [docs/README.md](docs/README.md) for the docs map and [docs/architecture/logging.md](docs/architecture/logging.md) for logging conventions. If the docs and code disagree, follow the code and update the docs.
 
 ## Directory Layout
 
