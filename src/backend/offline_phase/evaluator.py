@@ -75,6 +75,12 @@ class ModelEvaluator:
                 "peak_timepoint": float(self.times[int(np.argmax(diagonal))]),
                 "chance_level": _CHANCE_LEVEL,
             }
+            logger.info(
+                "Task '%s': peak AUC %.3f at t=%.3fs",
+                name,
+                task_results[name]["peak_auc"],
+                task_results[name]["peak_timepoint"],
+            )
 
         suggested_idx = self._compute_suggested_idx(task_results)
         return {
