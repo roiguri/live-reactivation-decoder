@@ -4,7 +4,7 @@ from PyQt6.QtCore import QEvent, Qt
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import QLabel, QProgressBar, QVBoxLayout, QWidget
 
-from frontend.styles.theme import BORDER_GRAY, PRIMARY_BLUE, TEXT_PRIMARY
+from frontend.styles.theme import TEXT_PRIMARY, progress_bar_qss
 
 
 class LoadingOverlay(QWidget):
@@ -28,17 +28,6 @@ class LoadingOverlay(QWidget):
                 color: {TEXT_PRIMARY};
                 background: transparent;
             }}
-            QProgressBar#loading_bar {{
-                background-color: #F3F4F6;
-                border: 1px solid {BORDER_GRAY};
-                border-radius: 2px;
-                height: 6px;
-                text-align: center;
-            }}
-            QProgressBar#loading_bar::chunk {{
-                background-color: {PRIMARY_BLUE};
-                border-radius: 2px;
-            }}
             """
         )
 
@@ -57,6 +46,7 @@ class LoadingOverlay(QWidget):
 
         self._progress = QProgressBar()
         self._progress.setObjectName("loading_bar")
+        self._progress.setStyleSheet(progress_bar_qss("loading_bar"))
         self._progress.setRange(0, 0)  # indeterminate
         self._progress.setTextVisible(False)
         self._progress.setFixedWidth(240)

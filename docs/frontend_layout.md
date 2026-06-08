@@ -129,6 +129,31 @@ All currently placeholder `QLabel` centered in a `QVBoxLayout`. Each will be rep
 
 ---
 
+## Loading & Progress Feedback
+
+Two idioms, chosen by the *shape* of the wait — not by which step you're in:
+
+| Idiom | Use for | Implementation |
+|---|---|---|
+| **Transient overlay** | Short and/or indeterminate waits where the operator just needs "working…", and the underlying content should stay visible (dimmed). E.g. config load, data load, the gaps between preprocessing's native MNE windows. | `widgets/loading_overlay.py` — a translucent layer over the workspace card with a message + indeterminate bar. Driven by each view's `loading_requested(str)` / `loading_done` signals (wired in `Phase1Screen`). |
+| **In-workspace progress page** | Long operations that have *structured* progress worth showing (per-item / per-stage), where a dedicated view is warranted. E.g. Node 4 evaluation's per-decoder run. | A page inside the view's own `QStackedWidget` (e.g. `EvaluationView`: Ready → **Progress** → Results). The view opts out of the shared overlay (`_start_worker(..., show_overlay=False)`). |
+
+This mirrors the design mock, where every heavy wait is a full-workspace view rather than an overlay; the overlay is our pragmatic addition for short waits and for narrating preprocessing's MNE-window hand-offs.
+
+**Reading as one system:** both idioms share the progress-bar look via `theme.progress_bar_qss(object_name)` — the single source of truth for bar styling. Use it for any new progress bar rather than re-inlining the QSS.
+
+### `CVProgressView(QWidget)` — Node 4 evaluation progress
+
+`widgets/cv_progress_view.py`. Per-decoder card grid + overall bar (mirrors the mock's `WorkspaceNode3CVProgress`).
+
+- Backend supplies **real** per-decoder completion events (`ModelEvaluator.run_evaluation`'s `on_progress` hook → `EvaluationWorker.decoder_progress` signal → `update_progress`). Decoders run serially, so completing decoder *i* advances card *i+1* to "running".
+- The smooth overall bar and the ETA are **interpolated on the UI side** between those events (a `QTimer` eases toward — but never onto — the next milestone); the backend stays timing-free. Only `mark_all_complete()` reaches 100 %.
+- A running decoder shows an **indeterminate** shimmer, not a fabricated fold counter (the CV call doesn't expose folds). Finer real progress would ride the same `decoder_progress` signal shape.
+
+Lifecycle: `set_decoders(names)` → `start()` → `update_progress(completed, total, name)` × N → `mark_all_complete()`; `reset()` tears down on error.
+
+---
+
 ## Signal Flow
 
 ```

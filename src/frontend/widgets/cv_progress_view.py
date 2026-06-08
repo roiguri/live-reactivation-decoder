@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
 
 from frontend.styles.theme import (
     BORDER_GRAY, CARD_WHITE, PRIMARY_BLUE, SUCCESS_GREEN, TEXT_MUTED,
-    TEXT_PRIMARY, chart_line_color,
+    TEXT_PRIMARY, chart_line_color, progress_bar_qss,
 )
 
 # Animation cadence and the easing time-constant used before we have a real
@@ -262,9 +262,11 @@ class CVProgressView(QWidget):
         center.setSpacing(0)
         center.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
+        # Caption mirrors LoadingOverlay's message (12 pt Medium) so the two
+        # loading idioms read as one design system.
         caption = QLabel("Running cross-validation across decoders…")
         cf = caption.font()
-        cf.setPointSize(13)
+        cf.setPointSize(12)
         cf.setWeight(QFont.Weight.Medium)
         caption.setFont(cf)
         caption.setStyleSheet(f"color: {TEXT_PRIMARY};")
@@ -297,12 +299,7 @@ class CVProgressView(QWidget):
         self._overall_bar.setTextVisible(False)
         self._overall_bar.setFixedHeight(6)
         self._overall_bar.setFixedWidth(560)
-        self._overall_bar.setStyleSheet(
-            "QProgressBar#overall_bar { background: #F3F4F6; "
-            f"border: 1px solid {BORDER_GRAY}; border-radius: 3px; }}"
-            f"QProgressBar#overall_bar::chunk {{ background: {PRIMARY_BLUE}; "
-            "border-radius: 3px; }"
-        )
+        self._overall_bar.setStyleSheet(progress_bar_qss("overall_bar"))
         center.addWidget(self._overall_bar, 0, Qt.AlignmentFlag.AlignHCenter)
         center.addSpacing(26)
 
@@ -351,12 +348,7 @@ class CVProgressView(QWidget):
         bar.setValue(0)
         bar.setTextVisible(False)
         bar.setFixedHeight(5)
-        bar.setStyleSheet(
-            "QProgressBar#card_bar { background: #F3F4F6; "
-            f"border: 1px solid {BORDER_GRAY}; border-radius: 2px; }}"
-            f"QProgressBar#card_bar::chunk {{ background: {PRIMARY_BLUE}; "
-            "border-radius: 2px; }"
-        )
+        bar.setStyleSheet(progress_bar_qss("card_bar"))
         body.addWidget(bar)
 
         status = QLabel("Pending")
