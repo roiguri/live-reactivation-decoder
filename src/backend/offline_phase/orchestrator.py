@@ -211,9 +211,14 @@ class OfflineOrchestrator:
             logger.info("Preprocessing complete. %d epochs retained.", len(self._epochs))
         return result
 
-    def run_evaluation(self) -> dict[str, Any]:
+    def run_evaluation(self, on_progress=None) -> dict[str, Any]:
         """
         Run temporal generalization cross-validation to surface the best decoding timepoint.
+
+        Args:
+            on_progress: Optional per-decoder progress callback, forwarded
+                verbatim to ``ModelEvaluator.run_evaluation`` — see its
+                docstring for the contract. Default ``None``.
 
         Returns:
             Full evaluator result dict (times, AUC curves, TGMs, suggested_timepoint).
@@ -228,7 +233,7 @@ class OfflineOrchestrator:
 
         with log_duration(logger, "Evaluation", level=logging.DEBUG):
             evaluator = ModelEvaluator(self._epochs, self._settings.get_decoder_settings())
-            self._eval_results = evaluator.run_evaluation()
+            self._eval_results = evaluator.run_evaluation(on_progress=on_progress)
             logger.info(
                 "Evaluation complete. Suggested timepoint: %.3fs",
                 self._eval_results["suggested_timepoint"],

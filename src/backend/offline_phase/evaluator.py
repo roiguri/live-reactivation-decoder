@@ -32,9 +32,20 @@ class ModelEvaluator:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def run_evaluation(self) -> dict[str, Any]:
+    def run_evaluation(self, on_progress=None) -> dict[str, Any]:
         """
         Run full evaluation for all decoder tasks defined in settings.
+
+        Args:
+            on_progress: Optional callback invoked once after each decoder's
+                Temporal-Generalization CV completes, as
+                ``on_progress(completed: int, total: int, task_name: str)``
+                where ``completed`` counts decoders finished so far (1-based)
+                and ``total`` is the decoder count. Purely a progress hook —
+                the return value is ignored and exceptions are not caught here.
+                Runs synchronously on the calling thread; a GUI caller is
+                responsible for marshalling onto its own thread. Default
+                ``None`` leaves behaviour unchanged.
 
         Returns:
             {
@@ -61,8 +72,9 @@ class ModelEvaluator:
         if not tasks:
             raise ValueError("decoder_settings contains no tasks.")
 
+        total = len(tasks)
         task_results: dict[str, Any] = {}
-        for task_cfg in tasks:
+        for i, task_cfg in enumerate(tasks):
             name = task_cfg["name"]
             logger.info("Evaluating task: %s", name)
             X, y = self._get_task_data(task_cfg)
@@ -81,6 +93,8 @@ class ModelEvaluator:
                 task_results[name]["peak_auc"],
                 task_results[name]["peak_timepoint"],
             )
+            if on_progress is not None:
+                on_progress(i + 1, total, name)
 
         suggested_idx = self._compute_suggested_idx(task_results)
         return {

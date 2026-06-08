@@ -28,6 +28,23 @@ def chart_line_color(index: int) -> str:
     """Cycle the chart palette so >6 decoders still get distinct lines."""
     return CHART_LINE_COLORS[index % len(CHART_LINE_COLORS)]
 
+
+def progress_bar_qss(object_name: str, *, radius: int = 2) -> str:
+    """Single source of truth for the app's progress-bar look.
+
+    Both loading idioms share it so they read as one design system: the
+    transient ``LoadingOverlay`` (short/indeterminate waits) and the
+    in-workspace progress pages (long ops with structured progress, e.g.
+    evaluation's per-decoder ``CVProgressView``). Scoped by ``object_name``
+    so a caller can style several distinct bars from one rule.
+    """
+    return (
+        f"QProgressBar#{object_name} {{ background: #F3F4F6; "
+        f"border: 1px solid {BORDER_GRAY}; border-radius: {radius}px; }}"
+        f"QProgressBar#{object_name}::chunk {{ background: {PRIMARY_BLUE}; "
+        f"border-radius: {radius}px; }}"
+    )
+
 def build_app_palette():
     from PyQt6.QtGui import QPalette, QColor
     p = QPalette()

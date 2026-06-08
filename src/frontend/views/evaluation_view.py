@@ -15,6 +15,7 @@ from frontend.styles.theme import (
     SUCCESS_GREEN, TEXT_MUTED, TEXT_PRIMARY, chart_line_color,
 )
 from frontend.widgets.charts import AUCChart, TGMChart
+from frontend.widgets.cv_progress_view import CVProgressView
 from frontend.workers.evaluation_worker import EvaluationWorker
 
 _DEVIATION_WARN_MS = 50.0  # |selected − suggested| above this → amber hint shown
@@ -120,8 +121,13 @@ class EvaluationView(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
+        # 3-page stack: Ready (0) → Progress (1) → Results (2). The progress
+        # page replaces the generic loading overlay for evaluation, showing
+        # per-decoder cards driven by the worker's decoder_progress signal.
+        self._progress_view = CVProgressView()
         self._pages = QStackedWidget()
         self._pages.addWidget(self._build_ready_page())
+        self._pages.addWidget(self._progress_view)
         self._pages.addWidget(self._build_results_page())
         outer.addWidget(self._pages)
 
@@ -153,10 +159,22 @@ class EvaluationView(QWidget):
             return
         self._running = True
         self._update_ready_state()
+
+        # Switch to the per-decoder progress page instead of the global
+        # overlay, seed its cards from the configured decoders (same order
+        # the backend evaluates them), and start the UI-side animation.
+        names = [t["name"] for t in self._session.settings["decoders"]["tasks"]]
+        self._progress_view.set_decoders(names)
+        self._progress_view.start()
+        self._pages.setCurrentIndex(1)
+
+        worker = EvaluationWorker(self._session.offline)
+        worker.decoder_progress.connect(self._progress_view.update_progress)
         self._start_worker(
-            EvaluationWorker(self._session.offline),
+            worker,
             "Running evaluation…",
             self._on_eval_done,
+            show_overlay=False,
         )
 
     def trigger_confirm(self) -> None:
@@ -182,8 +200,13 @@ class EvaluationView(QWidget):
 
     # ── worker plumbing ──────────────────────────────────────────────────────
 
-    def _start_worker(self, worker, message: str, on_done) -> None:
-        self.loading_requested.emit(message)
+    def _start_worker(
+        self, worker, message: str, on_done, *, show_overlay: bool = True
+    ) -> None:
+        # Evaluation drives its own in-workspace progress page, so it opts out
+        # of the shared loading overlay (show_overlay=False).
+        if show_overlay:
+            self.loading_requested.emit(message)
         self._thread = QThread()
         self._worker = worker
         worker.moveToThread(self._thread)
@@ -203,20 +226,25 @@ class EvaluationView(QWidget):
 
     def _on_error(self, message: str) -> None:
         self._running = False
-        self.loading_done.emit()
+        # Tear down the progress page and return to the Ready page so the
+        # operator can retry. No overlay was shown, so nothing to hide.
+        self._progress_view.reset()
+        self._pages.setCurrentIndex(0)
         QMessageBox.critical(self, "Evaluation Error", message)
         self._update_ready_state()
 
     # ── eval result hand-off ──────────────────────────────────────────────────
 
     def _on_eval_done(self, result: dict) -> None:
-        self.loading_done.emit()
+        # Snap the progress page to 100 % (truthful completion), then reveal
+        # the results page. No overlay was shown, so nothing to hide.
+        self._progress_view.mark_all_complete()
         self._result = result
         self._running = False
         self._done = True  # set before _populate_results so the per-decoder
                            # Confirm button gating sees the right state.
         self._populate_results(result)
-        self._pages.setCurrentIndex(1)
+        self._pages.setCurrentIndex(2)
         self._update_ready_state()
         self.results_displayed.emit()
 

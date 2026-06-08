@@ -64,8 +64,18 @@ def _make_result() -> dict:
 @pytest.fixture
 def view(qapp) -> EvaluationView:
     v = EvaluationView()
-    v._on_eval_done(_make_result())  # populate Page 1 directly
+    v._on_eval_done(_make_result())  # populate the Results page directly
     return v
+
+
+def test_eval_done_shows_results_page(qapp) -> None:
+    # Results live at stack index 2 (Ready=0, Progress=1, Results=2). Calling
+    # _on_eval_done without a prior start() must be safe (progress sweep was
+    # never begun) and land on the results page.
+    v = EvaluationView()
+    v._on_eval_done(_make_result())
+    assert v._pages.currentIndex() == 2
+    assert v._done is True
 
 
 def test_prefills_per_decoder_suggested_peaks(view: EvaluationView) -> None:
