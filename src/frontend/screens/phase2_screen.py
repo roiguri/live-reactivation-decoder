@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
+from collections import deque
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+import numpy as np
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QCloseEvent, QFont
 from PyQt6.QtWidgets import (
     QDialog,
@@ -49,6 +51,15 @@ _DEFAULT_THRESHOLD = 0.85
 # then it's a single knob here, same altitude as _DEFAULT_THRESHOLD.
 _DEFAULT_WINDOW_SECONDS = 5.0
 _CHART_MAX_HEIGHT = 420
+
+# Live diagnostics: rolling window of per-batch total_ms used for the header's
+# p50/p95 readout, refreshed on a slow timer decoupled from the ~25 Hz
+# latency_ready stream.
+_LATENCY_WINDOW = 100
+_DIAG_REFRESH_HZ = 5
+# Fallback batch size for the buffer-health threshold if the session doesn't
+# expose one (e.g. the test fakes). Matches StreamWorker's default.
+_DEFAULT_BATCH_SIZE = 40
 
 
 class Phase2Screen(QWidget):
@@ -120,6 +131,16 @@ class Phase2Screen(QWidget):
         # The session is built lazily on Start, bound to the chosen target.
         self._live: LiveStreamSession | None = None
 
+        # Live diagnostics: a rolling window of per-batch total_ms and the
+        # latest backlog, summarised onto the header by a 5 Hz timer that only
+        # runs while a stream is live.
+        self._latency_window: deque[float] = deque(maxlen=_LATENCY_WINDOW)
+        self._pending_samples: int = 0
+        self._batch_size: int = _DEFAULT_BATCH_SIZE
+        self._diag_timer = QTimer(self)
+        self._diag_timer.setInterval(int(round(1000 / _DIAG_REFRESH_HZ)))
+        self._diag_timer.timeout.connect(self._update_diagnostics)
+
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
@@ -143,6 +164,33 @@ class Phase2Screen(QWidget):
         live.error_occurred.connect(self._on_error, Qt.ConnectionType.QueuedConnection)
         live.prediction_ready.connect(
             self._on_predictions, Qt.ConnectionType.QueuedConnection
+        )
+        live.latency_ready.connect(
+            self._on_latency, Qt.ConnectionType.QueuedConnection
+        )
+
+    def _on_latency(self, timing: dict) -> None:
+        """Data-only hot path for the ~25 Hz timing stream: record the latest
+        backlog and append the batch latency. The header is updated separately
+        on the slow ``_diag_timer`` so this never does percentile work."""
+        self._pending_samples = int(timing.get("pending_samples", 0))
+        total_ms = timing.get("total_ms")
+        if total_ms is not None:
+            self._latency_window.append(float(total_ms))
+
+    def _update_diagnostics(self) -> None:
+        """5 Hz tick: summarise the latency window + backlog onto the header.
+
+        Buffer is healthy while the backlog stays under twice the batch size —
+        i.e. the worker has at most one batch queued behind the current one.
+        """
+        if not self._latency_window:
+            return
+        window = np.fromiter(self._latency_window, dtype=np.float64)
+        p50, p95 = np.percentile(window, [50, 95])
+        self._header.set_latency(float(p50), float(p95))
+        self._header.set_buffer_health(
+            self._pending_samples < self._batch_size * 2
         )
 
     def _on_predictions(
@@ -212,6 +260,14 @@ class Phase2Screen(QWidget):
 
         self._start_halt_button.set_live()
         self._header.set_status("LIVE INFERENCE", color=SUCCESS_GREEN)
+        # Begin live diagnostics: scale the backlog threshold to this session's
+        # batch size, start fresh, and run the 5 Hz header refresh.
+        self._batch_size = getattr(
+            self._live, "batch_size_samples", _DEFAULT_BATCH_SIZE
+        )
+        self._latency_window.clear()
+        self._pending_samples = 0
+        self._diag_timer.start()
 
     def _on_halt_clicked(self) -> None:
         self._safely_stop()
@@ -224,6 +280,12 @@ class Phase2Screen(QWidget):
 
     def _safely_stop(self) -> None:
         """Idempotent teardown. After this returns, ``self._live is None``."""
+        # Stop live diagnostics first so no stale percentile lingers on the
+        # header after Halt. Idempotent: a no-op when already stopped.
+        self._diag_timer.stop()
+        self._latency_window.clear()
+        self._pending_samples = 0
+        self._header.clear_diagnostics()
         if self._live is not None:
             try:
                 self._live.stop()

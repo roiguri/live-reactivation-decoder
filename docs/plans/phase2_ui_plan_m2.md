@@ -24,7 +24,7 @@ M1 shipped the Phase 2 live-inference POC on branch `feat/phase2-live-ui` (13 co
 **What does not work or is unverified:**
 - **Pipeline fidelity is the open blocker.** Online predictions have never been validated against the offline pipeline on labeled data. A known ~60 ms pipeline group delay plus a causal-vs-zero-phase filter mismatch (see `online-inference-fidelity-bug`, diagnosed 2026-05-30) makes live inference *look* dead even when it is recoverable. **Goal 18 (Group Delay Deep Dive) characterizes this before any further UI work assumes the predictions are trustworthy.**
 - The XDF recording used for early testing (`scripts/recordings/eeg_recording_with_trigger.xdf`) contains no stimulus events (trigger codes 31-110, but no 11/12/13 for red/green/yellow). Predictions on that data are noise. Validation must replay actual training data (`.vhdr`) via `scripts/replay_vhdr_to_lsl.py`.
-- `latency_ready` is emitted by `StreamWorker` but consumed by nobody (latency log is the remaining half of Goal 7).
+- `latency_ready` is emitted by `StreamWorker`; the **header display** consumes it now (Goal 6 ✅). The persisted **latency log** is still the remaining half of Goal 7.
 - No back button, no exit confirmation, no decision settings.
 
 > **Update:** session logging is wired end-to-end (Goal 7 prediction-log half) — `LiveSessionLogger` writes `predictions.csv` + `markers.csv` + `manifest.json` + `predictions.npz` per Start under `phase2_live/`.
@@ -89,7 +89,7 @@ Work from `feat/phase2-stream-selection` lands several M2 items early and change
 | 3 | LSL Stream Picker | ✅ Done (stream-selection branch) | — |
 | 4 | Trigger Log | Not started | backlog |
 | 5 | Decision History Strip | Not started | backlog |
-| 6 | Latency Display + Buffer Health | Not started | backlog |
+| 6 | Latency Display + Buffer Health | ✅ Done (data-agnostic UI batch) | backlog |
 | 8 | Decision Settings UI | Not started | backlog |
 | 10 | Back Button + Exit Flow | Not started | backlog |
 | 11 | Past Events Dropdown | ✅ Done (built with Goal 9) | backlog |
@@ -277,16 +277,16 @@ Row of recent decoder decisions displayed above the chart in the centre panel.
 
 ---
 
-## Goal 6 — Latency Display + Buffer Health
+## Goal 6 — Latency Display + Buffer Health — ✅ Done
 
-Rolling latency readout and buffer-health indicator in the header. (UI surface over the Goal 7 timing log.) Deferred from M1 Commit 8.
+Rolling latency readout and buffer-health indicator in the header. Deferred from M1 Commit 8. **Built as a data-agnostic UI item** — it consumes `StreamWorker.latency_ready` (pure system timing), which is independent of prediction *correctness*, so it works regardless of the fidelity bug and doubles as instrumentation for the deferred Goal 18 / Goal 1 work (per-stage timing + backlog visible live). This is the *display* half; the persisted timing log (Goal 7 latency half) is still separate.
 
-- [ ] `Phase2Header` gains latency label (`Latency: p50 / p95 ms`) and buffer-health pill
-- [ ] `Phase2Screen` subscribes to `latency_ready`, buffers in `deque(maxlen=100)`
-- [ ] 5 Hz `QTimer` computes rolling percentiles and buffer-health state
-- [ ] Green pill when `pending_samples < batch_size * 2`, amber otherwise
-- [ ] Diagnostics clear on Halt
-- [ ] Verified: during replay, latency numbers update ~5x/sec with non-zero values
+- [x] `Phase2Header` gains a latency label (`Latency: p50 / p95 ms`) and a buffer-health pill (`BUFFER OK` green / `BACKLOG` amber), via `set_latency` / `set_buffer_health` / `clear_diagnostics`
+- [x] `Phase2Screen` subscribes to `latency_ready` (queued), buffers `total_ms` in `deque(maxlen=100)` and records the latest `pending_samples` (data-only hot path)
+- [x] 5 Hz `QTimer` computes rolling p50/p95 (numpy) and the buffer-health state, decoupled from the ~25 Hz `latency_ready` stream
+- [x] Green pill when `pending_samples < batch_size * 2`, amber otherwise — batch size read from the new `LiveStreamSession.batch_size_samples` property (fallback 40)
+- [x] Diagnostics clear on Halt **and** error (timer stopped, window/backlog reset, header blanked)
+- [x] Verified headless: 8 tests (header text/pill/clear, latency buffering + summary, backlog→amber threshold, timer start/stop lifecycle, clear-on-error, empty-window no-op). **Live replay verification (numbers update ~5×/s with non-zero values) remains an operator step on Windows.**
 
 ---
 
