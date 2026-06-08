@@ -292,6 +292,11 @@ class LiveProbabilityChart(pg.PlotWidget):
         ts = self._timestamps[start:end]
         x = ts - self._latest_ts  # rebased: latest sample at 0, older negative
         for name, curve in self._curves.items():
+            # Skip hidden curves — setData still re-slices/rebuilds the path
+            # even though Qt skips the paint. Data keeps flowing into the ring
+            # buffer, so a re-shown curve repopulates next tick.
+            if not curve.isVisible():
+                continue
             curve.setData(x, self._buffers[name][start:end])
         self._refresh_markers()
 
