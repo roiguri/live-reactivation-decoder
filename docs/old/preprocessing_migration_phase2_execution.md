@@ -2,7 +2,7 @@
 
 ## Context
 
-The overall design lives in [Preprocessing_Migration_Plan.md](Preprocessing_Migration_Plan.md) and covers **both phases** (offline training pipeline + online streaming pipeline). This document is the **execution-only** plan for **Phase 2 (Itai's half)**, broken by commit.
+The overall design lives in [Preprocessing_Migration_Plan.md](preprocessing_migration_plan.md) and covers **both phases** (offline training pipeline + online streaming pipeline). This document is the **execution-only** plan for **Phase 2 (Itai's half)**, broken by commit.
 
 **Division of labour:**
 - **Itai** — Phase 2: `OnlinePreprocessor`, `LSLReceiver` hygiene replay, online tests, benchmark script.
@@ -85,7 +85,7 @@ Three acceptable merge orderings:
 
 ### Before Itai *starts*
 
-Agree with Roi on the exact field paths (`highpass.l_freq`, `notch.freq`, `lowpass.h_freq`, `final_resample.target_rate`, `resample_filter_stage`, `channel_hygiene.*`, `ica.iclabel.*`, etc.) by referencing [Preprocessing_Migration_Plan.md § Config schema changes](Preprocessing_Migration_Plan.md). If those paths drift between Itai's test fixtures and Roi's eventual Pydantic models, the merge will fail loudly — but it's avoidable with five minutes of upfront agreement.
+Agree with Roi on the exact field paths (`highpass.l_freq`, `notch.freq`, `lowpass.h_freq`, `final_resample.target_rate`, `resample_filter_stage`, `channel_hygiene.*`, `ica.iclabel.*`, etc.) by referencing [Preprocessing_Migration_Plan.md § Config schema changes](preprocessing_migration_plan.md). If those paths drift between Itai's test fixtures and Roi's eventual Pydantic models, the merge will fail loudly — but it's avoidable with five minutes of upfront agreement.
 
 Roi's Phase 1 work also produces the new positional `online_state` shape (`bad_indices`, `eeg_chunk_indices`). Itai's tests use synthetic fixtures of that shape until Roi's joblib exports land.
 
@@ -102,8 +102,8 @@ Each commit lists: **Scope** (files touched), **Changes** (what), **Tests** (add
 **Message:** `feat(online): split bandpass filter into HP-only stage`
 
 **Scope:**
-- [../src/backend/online_phase/online_preprocessor.py](../src/backend/online_phase/online_preprocessor.py)
-- [../tests/online_phase/test_online_preprocessor.py](../tests/online_phase/test_online_preprocessor.py)
+- [../src/backend/online_phase/online_preprocessor.py](../../src/backend/online_phase/online_preprocessor.py)
+- [../tests/online_phase/test_online_preprocessor.py](../../tests/online_phase/test_online_preprocessor.py)
 
 **Changes:**
 - Update constructor to read from `preprocessing_settings["highpass"]` and `preprocessing_settings["notch"]` instead of `["bandpass"]`.
@@ -131,8 +131,8 @@ pytest online_decoder/tests/online_phase/test_online_preprocessor.py -v -k "filt
 **Message:** `feat(prepro-fix): add lowpass stage and decimate to 100 Hz`
 
 **Scope:**
-- [../src/backend/online_phase/online_preprocessor.py](../src/backend/online_phase/online_preprocessor.py)
-- [../tests/online_phase/test_online_preprocessor.py](../tests/online_phase/test_online_preprocessor.py)
+- [../src/backend/online_phase/online_preprocessor.py](../../src/backend/online_phase/online_preprocessor.py)
+- [../tests/online_phase/test_online_preprocessor.py](../../tests/online_phase/test_online_preprocessor.py)
 
 **Changes:**
 - **New `_apply_lowpass(data)` method** mirroring `_apply_filter`'s structure: design `_lowpass_sos` from `preprocessing_settings["lowpass"]["h_freq"]` at input rate via `mne.filter.create_filter`, apply causally with persistent `_lowpass_zi`. Reset state added to `reset_state()`.
@@ -183,8 +183,8 @@ pytest online_decoder/tests/online_phase/test_online_preprocessor.py -v -k "lowp
 **Message:** `refactor(prepro-fix): use positional indices from online_state`
 
 **Scope:**
-- [../src/backend/online_phase/online_preprocessor.py](../src/backend/online_phase/online_preprocessor.py)
-- [../tests/online_phase/test_online_preprocessor.py](../tests/online_phase/test_online_preprocessor.py)
+- [../src/backend/online_phase/online_preprocessor.py](../../src/backend/online_phase/online_preprocessor.py)
+- [../tests/online_phase/test_online_preprocessor.py](../../tests/online_phase/test_online_preprocessor.py)
 
 **Changes:**
 - Replace constructor reads of `online_state["ch_names"]` (compute index lists from names) with direct reads of:
@@ -222,8 +222,8 @@ pytest online_decoder/tests/online_phase/test_online_preprocessor.py -v -k "vali
 **Message:** `feat(prepro-fix): apply positional EEG hygiene inside OnlinePreprocessor`
 
 **Scope:**
-- [../src/backend/online_phase/online_preprocessor.py](../src/backend/online_phase/online_preprocessor.py)
-- [../tests/online_phase/test_online_preprocessor.py](../tests/online_phase/test_online_preprocessor.py)
+- [../src/backend/online_phase/online_preprocessor.py](../../src/backend/online_phase/online_preprocessor.py)
+- [../tests/online_phase/test_online_preprocessor.py](../../tests/online_phase/test_online_preprocessor.py)
 
 **Design decision:** the column selection lives in `OnlinePreprocessor`, **not** `LSLReceiver`. Rationale: every offline-derived artifact (`bad_indices`, ICA matrices, interp weights, `eeg_chunk_indices`) belongs together in the one class that consumes `online_state`. `LSLReceiver` stays pure hardware plumbing — talks to LSL, strips triggers, validates count. It has no business knowing about the offline pipeline. Bonus: smoke tests and future debug/visualization consumers of the receiver get raw 64-channel amplifier output, which is what they want.
 
@@ -261,7 +261,7 @@ pytest online_decoder/tests/online_phase/ --ignore=tests/online_phase/test_lsl_r
 **Message:** `tools(prepro-fix): align benchmark_preprocessor defaults with new schema`
 
 **Scope:**
-- [../scripts/benchmark_preprocessor.py](../scripts/benchmark_preprocessor.py)
+- [../scripts/benchmark_preprocessor.py](../../scripts/benchmark_preprocessor.py)
 
 **Changes:**
 - Update default `--target-sfreq` from 256 → 100.
@@ -291,13 +291,13 @@ python online_decoder/scripts/benchmark_preprocessor.py --target-sfreq 100 --n-c
 **Message:** `docs(prepro-fix): document new OnlinePreprocessor pipeline order`
 
 **Scope:**
-- [backend_architecture.md](backend_architecture.md)
+- [backend_architecture.md](../architecture/backend_architecture.md)
 - [../../knowledge_base/02_reference/online_filtering.md](../../knowledge_base/02_reference/online_filtering.md)
-- Possibly [../CLAUDE.md](../CLAUDE.md)
+- Possibly [../CLAUDE.md](../../CLAUDE.md)
 
 **Changes:**
 - Add a short section to `backend_architecture.md` describing the new online pipeline order (both variants), the positional online_state, and how `LSLReceiver` applies hygiene.
-- Reference [Preprocessing_Migration_Plan.md](Preprocessing_Migration_Plan.md) for the full design rationale.
+- Reference [Preprocessing_Migration_Plan.md](preprocessing_migration_plan.md) for the full design rationale.
 - Update `CLAUDE.md`'s "Current Backend Scope" bullet if the architecture summary needs adjustment.
 - **Update `online_filtering.md` for Commit 2's changes:**
   - Rewrite the "Decimation: 1000 Hz → 256 Hz" section for the new integer 1000 → 100 Hz case. The polyphase machinery (`up_factor`, `down_factor`, phase-counter loop, "first output at sample 3") is gone; the algorithm is now `np.arange(phase, n_in, decimation)` with simpler phase tracking. The attributes table needs to drop `_up_factor`/`_down_factor` and add `_decimation`.

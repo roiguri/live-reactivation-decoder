@@ -155,7 +155,7 @@ class LiveProbabilityChart(pg.PlotWidget):
             # the frame budget. Static guide/marker InfiniteLines keep the
             # global setting, so they stay smooth. Tradeoff: slightly harder
             # curve edges / mild shimmer as the curve scrolls. See the "Chart
-            # Rendering Performance" section in docs/Phase2_UI_Plan_M2.md.
+            # Rendering Performance" section in docs/plans/phase2_ui_plan_m2.md.
             curve = self.plot(
                 pen=pg.mkPen(color=color, width=2), name=name, antialias=False
             )

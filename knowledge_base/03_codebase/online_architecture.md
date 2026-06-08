@@ -55,7 +55,7 @@ Conceptually, the main Phase 1 pieces are:
 - **ModelEvaluator** — ✅ committed in `src/backend/offline_phase/`
 - **ModelTrainer** — ✅ committed in `src/backend/offline_phase/`
 - **OfflineOrchestrator** — ✅ committed in `src/backend/offline_phase/`; the single frontend-facing entry point for Phase 1, owning file I/O, state management, bundling, and `decoder_pipeline.joblib` export. During raw load it also decodes parallel-port triggers from the analog trigger channel (see [`02_reference/parallel_port_trigger_decoding.md`](../02_reference/parallel_port_trigger_decoding.md))
-- **Phase 1 UI** — 🔲 partially implemented (Steps 1–4 of 12); PyQt6 5-node training pipeline. See [frontend_layout.md](../../docs/frontend_layout.md) and [Phase1_UI_Plan.md](../../docs/Phase1_UI_Plan.md)
+- **Phase 1 UI** — 🔲 partially implemented (Steps 1–4 of 12); PyQt6 5-node training pipeline. See [frontend_layout.md](../../docs/architecture/frontend_layout.md) and [Phase1_UI_Plan.md](../../docs/old/phase1_ui_plan.md)
 
 Phase 2 depends on the `decoder_pipeline.joblib` produced by the orchestrator.
 
@@ -148,5 +148,5 @@ The intended live path is:
 - Full historical design debates: see the `01_timeline/03_online_stage_design/` documents
 - Detailed LSL hardware notes: see [../01_timeline/03_online_stage_design/Lab Equipment & LSL.md](../01_timeline/03_online_stage_design/Lab%20Equipment%20%26%20LSL.md)
 - Parent-repo semester-A architecture: see [offline_architecture.md](offline_architecture.md)
-- Fine-grained backend status and interfaces: see [Backend Architecture](../../docs/backend_architecture.md)
-- Frontend UI design: see [frontend_layout.md](../../docs/frontend_layout.md) and [Phase1_UI_Plan.md](../../docs/Phase1_UI_Plan.md)
+- Fine-grained backend status and interfaces: see [Backend Architecture](../../docs/architecture/backend_architecture.md)
+- Frontend UI design: see [frontend_layout.md](../../docs/architecture/frontend_layout.md) and [Phase1_UI_Plan.md](../../docs/old/phase1_ui_plan.md)

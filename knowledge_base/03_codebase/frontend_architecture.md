@@ -6,7 +6,7 @@ Back to [Codebase Overview](README.md) or [Project Index](../START_HERE.md).
 
 The frontend (`src/frontend/`) is **planned, not committed**.
 
-The full Phase 1 UI implementation contract lives in [../../docs/Phase1_UI_Plan.md](../../docs/Phase1_UI_Plan.md). This document is the knowledge-base summary.
+The full Phase 1 UI implementation contract lives in [../../docs/Phase1_UI_Plan.md](../../docs/old/phase1_ui_plan.md). This document is the knowledge-base summary.
 
 ---
 
@@ -90,6 +90,6 @@ ICA component cards (Node 3) also embed a two-axis matplotlib figure (topomap + 
 
 ## What This Document Doesn't Cover
 
-- Full file structure and widget hierarchy: [../../docs/Phase1_UI_Plan.md](../../docs/Phase1_UI_Plan.md)
-- Backend class interfaces: [../../docs/backend_architecture.md](../../docs/backend_architecture.md)
+- Full file structure and widget hierarchy: [../../docs/Phase1_UI_Plan.md](../../docs/old/phase1_ui_plan.md)
+- Backend class interfaces: [../../docs/backend_architecture.md](../../docs/architecture/backend_architecture.md)
 - Operator workflow intent: [../01_timeline/03_online_stage_design/](../01_timeline/03_online_stage_design/)

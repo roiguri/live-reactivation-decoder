@@ -12,7 +12,7 @@ The offline (semester-A) pipeline that informed this app's design lives in the p
 
 - [Offline Architecture](offline_architecture.md): Historical context for the parent repo's `src/` (semester-A evaluation pipeline)
 - [Online Architecture](online_architecture.md): Current backend surface and planned live stack
-- [Frontend Layout](../../docs/frontend_layout.md): PyQt6 UI layout reference — widget hierarchy, signal flow, shared widgets, styling
+- [Frontend Layout](../../docs/architecture/frontend_layout.md): PyQt6 UI layout reference — widget hierarchy, signal flow, shared widgets, styling
 - [Implementation Docs](../../docs/README.md): Current backend contract and Phase 2 implementation plan
 
 ## Source Layout

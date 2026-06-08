@@ -1,6 +1,6 @@
 # Historical Online System Architecture
 
-> **Historical Design Note**: This document records an earlier target architecture. It is **not** the current implementation contract for this app. Some parts of this document, including older buffering assumptions, are now obsolete. For the current committed backend surface and active Phase 2 direction, see [../../../docs/backend_architecture.md](../../../docs/backend_architecture.md).
+> **Historical Design Note**: This document records an earlier target architecture. It is **not** the current implementation contract for this app. Some parts of this document, including older buffering assumptions, are now obsolete. For the current committed backend surface and active Phase 2 direction, see [../../../docs/backend_architecture.md](../../../docs/architecture/backend_architecture.md).
 
 Documentation of the real-time inference system architecture for the Reactivation Decoder project.
 
@@ -364,7 +364,7 @@ Confirmed equipment in the lab (from lab visit):
 
 ## What This Document Doesn't Cover
 
-- **Implementation details and component interfaces**: Detailed Python class interfaces, method signatures, and data flow specifics (see [../../../docs/backend_architecture.md](../../../docs/backend_architecture.md))
+- **Implementation details and component interfaces**: Detailed Python class interfaces, method signatures, and data flow specifics (see [../../../docs/backend_architecture.md](../../../docs/architecture/backend_architecture.md))
 - **UI/UX design**: User interface screens, workflows, and visual prototypes (see [Reactivation Decoder PRD.md](Reactivation%20Decoder%20PRD.md))
 - **Behavioral experiment design**: BMR experiment stages, feature space, and output file formats (see [../../02_reference/BMR Data Specification.md](../../02_reference/BMR%20Data%20Specification.md))
 - **Offline decoder implementation**: See the parent [`reactivation-decoder`](https://github.com/roiguri/reactivation-decoder) repo's `src/` for the existing semester-A analysis pipeline.
