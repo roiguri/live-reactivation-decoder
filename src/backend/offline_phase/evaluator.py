@@ -111,8 +111,17 @@ class ModelEvaluator:
         """
         k: int = self.settings["cv"]["k"]
         cv = StratifiedKFold(n_splits=k, shuffle=True, random_state=self.settings["random_state"])
+        # Parallelize the TGM over train-timepoints (n_jobs=-1 uses all cores,
+        # so this stays machine-agnostic). Timepoints (~121) far outnumber CV
+        # folds (k=3), so distributing them keeps every core busy and scales
+        # better than fold-parallelism. cross_val_multiscore stays serial
+        # (n_jobs=1) on purpose: nesting loky inside loky oversubscribes and,
+        # because it changes the BLAS thread count seen by LogisticRegression's
+        # iterative solver, perturbs the scores past tolerance. With only the
+        # estimator parallelized the TGM is bit-for-bit identical to the serial
+        # result — pure speedup, no behavior change. (See issue #43.)
         estimator = GeneralizingEstimator(
-            self._build_classifier(), scoring="roc_auc", n_jobs=1, verbose=False
+            self._build_classifier(), scoring="roc_auc", n_jobs=-1, verbose=False
         )
         # scores: (n_folds, n_train_times, n_test_times)
         scores = cross_val_multiscore(estimator, X, y, cv=cv, n_jobs=1)
