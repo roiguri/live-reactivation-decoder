@@ -72,13 +72,34 @@ def test_update_progress_advances_serially(view: CVProgressView) -> None:
     assert view._status["yellow"] == "running"  # last one now running
 
 
-def test_overall_bar_never_completes_before_mark_all(view: CVProgressView) -> None:
+def test_bar_jumps_in_discrete_sections(view: CVProgressView) -> None:
+    # The bar advances only on real completion events: 0 → 33 → 66, never
+    # creeping in between, and reaches 100 only via mark_all_complete.
+    view.set_decoders(["red", "green", "yellow"])
+    view.start()
+    assert view._overall_bar.value() == 0
+
+    view.update_progress(1, 3, "red")
+    assert view._overall_bar.value() == 33  # 1/3
+
+    view.update_progress(2, 3, "green")
+    assert view._overall_bar.value() == 67  # 2/3, rounded
+
+    # Last decoder still running → bar holds at the section, not 100.
+    assert view._overall_bar.value() < 100
+
+
+def test_eta_hidden_until_first_decoder_done(view: CVProgressView) -> None:
     view.set_decoders(["red", "green"])
     view.start()
+    # No duration sample yet → no estimate shown.
+    assert view._eta_lbl.text() == ""
+    view._tick_eta()  # even if the timer fires, still nothing to estimate from
+    assert view._eta_lbl.text() == ""
+
     view.update_progress(1, 2, "red")
-    # One of two decoders done → bar is at the 50 % floor, never 100 %.
-    assert view._overall_bar.value() < 100
-    assert view._overall_bar.value() >= 50
+    # One real sample now exists → an estimate appears.
+    assert view._eta_lbl.text() != ""
 
 
 def test_mark_all_complete_fills_everything(view: CVProgressView) -> None:
@@ -88,7 +109,7 @@ def test_mark_all_complete_fills_everything(view: CVProgressView) -> None:
     assert all(view._status[n] == "done" for n in view._cards)
     assert view._overall_bar.value() == 100
     assert view._pct_lbl.text() == "100%"
-    assert not view._anim_timer.isActive()
+    assert not view._eta_timer.isActive()
 
 
 def test_mark_all_complete_safe_without_start(view: CVProgressView) -> None:
@@ -103,13 +124,13 @@ def test_mark_all_complete_safe_without_start(view: CVProgressView) -> None:
 def test_reset_clears_and_stops(view: CVProgressView) -> None:
     view.set_decoders(["red", "green"])
     view.start()
-    assert view._anim_timer.isActive()
+    assert view._eta_timer.isActive()
 
     view.reset()
     assert view._cards == {}
     assert view._total == 0
     assert view._overall_bar.value() == 0
-    assert not view._anim_timer.isActive()
+    assert not view._eta_timer.isActive()
 
 
 def test_update_progress_ignores_unknown_decoder(view: CVProgressView) -> None:

@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import math
-from typing import Optional
-
 from PyQt6.QtCore import QElapsedTimer, Qt, QTimer
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
@@ -14,11 +11,10 @@ from frontend.styles.theme import (
     TEXT_PRIMARY, chart_line_color, progress_bar_qss,
 )
 
-# Animation cadence and the easing time-constant used before we have a real
-# per-decoder duration sample. Once the first decoder finishes we switch to
-# the measured average, so this only shapes the very first segment.
-_TICK_MS = 50
-_DEFAULT_TAU_S = 4.0
+# Cadence of the ETA countdown tick. It only refreshes the remaining-time
+# *text* (after the first decoder lands a real duration) — never the bar,
+# which jumps in discrete sections at real completion events.
+_ETA_TICK_MS = 1000
 
 # Per-decoder grid: 3 columns mirrors the design mock (knowledge_base/
 # 02_reference/ui_demo/Phase1Screen.jsx, WorkspaceNode3CVProgress).
@@ -31,14 +27,20 @@ class CVProgressView(QWidget):
     Replaces the generic indeterminate overlay for Node 4 with the mock's
     decoder-card grid + overall bar. The backend reports real progress at
     decoder granularity (``ModelEvaluator.run_evaluation``'s ``on_progress``
-    hook → ``update_progress``); this widget interpolates a smooth overall
-    bar and an ETA *between* those events on the UI side, so the backend
-    never has to own timing.
+    hook → ``update_progress``).
 
-    The interpolation never claims more than the truth: the displayed bar
-    eases toward — but never reaches — the next decoder's milestone until
-    that decoder's real completion event lands, and ``mark_all_complete``
-    is the only thing that fills it to 100 %.
+    Honest-by-construction, with no between-event guessing:
+
+    * The overall bar **jumps in discrete sections** — it advances to
+      ``decoders done / total`` only when a real completion event lands, and
+      reaches 100 % only via ``mark_all_complete``. It never creeps
+      gradually (we have no within-decoder signal, so a smooth fill would be
+      invented).
+    * The remaining-time estimate appears **only after the first decoder
+      finishes** — that's the first real duration sample. Before then there
+      is nothing to estimate from, so no ETA is shown. The running decoder's
+      card carries an indeterminate shimmer so the screen still reads as
+      live while the bar sits between section jumps.
 
     Decoders run serially in the backend, so a completion event for decoder
     *i* implies decoder *i+1* is now the one running; the card grid is
@@ -69,14 +71,15 @@ class CVProgressView(QWidget):
 
         self._total: int = 0
         self._completed: int = 0
-        self._display_fraction: float = 0.0
-        # Measured wall-clock durations of finished decoders → average drives
-        # the ETA and the easing time-constant once at least one has landed.
+        # Measured wall-clock durations of finished decoders. Their mean is
+        # the per-decoder estimate that drives the ETA — available only once
+        # the first decoder has finished (≥1 sample).
         self._durations: list[float] = []
         self._segment_clock = QElapsedTimer()  # time in the current decoder
-        self._anim_timer = QTimer(self)
-        self._anim_timer.setInterval(_TICK_MS)
-        self._anim_timer.timeout.connect(self._tick)
+        # Ticks the remaining-time text only; the bar is event-driven.
+        self._eta_timer = QTimer(self)
+        self._eta_timer.setInterval(_ETA_TICK_MS)
+        self._eta_timer.timeout.connect(self._tick_eta)
 
         self._build_ui()
 
@@ -96,53 +99,56 @@ class CVProgressView(QWidget):
         self._eta_lbl.setText("")
 
     def start(self) -> None:
-        """Begin the run: first decoder → Running, start the animation."""
+        """Begin the run: first decoder → Running, bar at 0 %.
+
+        No ETA yet — there's no duration sample to estimate from until the
+        first decoder finishes. The ETA-tick timer runs so the estimate can
+        appear the moment that first sample lands.
+        """
         if not self._names:
             return
         self._completed = 0
-        self._display_fraction = 0.0
         self._durations.clear()
         self._set_status(self._names[0], "running")
         self._segment_clock.restart()
-        self._anim_timer.start()
-        self._eta_lbl.setText("Estimating…")
+        self._eta_timer.start()
+        self._refresh_overall(0.0)
+        self._eta_lbl.setText("")
 
     def update_progress(self, completed: int, total: int, name: str) -> None:
         """Handle one real backend completion event.
 
-        ``name`` (the ``completed``-th decoder) just finished; mark it Complete
-        and, since decoders run serially, advance the next one to Running.
+        ``name`` (the ``completed``-th decoder) just finished; mark it Complete,
+        jump the overall bar to the new section, and — since decoders run
+        serially — advance the next one to Running.
         """
         if name not in self._status:
             return
         self._set_status(name, "done")
-        # Record this decoder's wall-clock duration for ETA/easing.
+        # Record this decoder's wall-clock duration → feeds the ETA estimate.
         self._durations.append(self._segment_clock.elapsed() / 1000.0)
         self._segment_clock.restart()
         self._completed = completed
-        # Bump the floor so the bar can't ease below a confirmed milestone.
-        self._display_fraction = max(
-            self._display_fraction, completed / max(1, total)
-        )
         idx = self._names.index(name)
         if idx + 1 < len(self._names):
             self._set_status(self._names[idx + 1], "running")
-        self._refresh_overall(self._display_fraction)
+        # Discrete section jump — the bar only advances on real events.
+        self._refresh_overall(completed / max(1, total))
+        self._tick_eta()
 
     def mark_all_complete(self) -> None:
         """Snap every card to Complete and the bar to 100 % — the only path
         that reaches 100 %. Safe to call even if ``start`` never ran."""
-        self._anim_timer.stop()
+        self._eta_timer.stop()
         for name in self._names:
             self._set_status(name, "done")
         self._completed = self._total
-        self._display_fraction = 1.0
         self._refresh_overall(1.0)
         self._eta_lbl.setText("Done")
 
     def reset(self) -> None:
-        """Stop the animation and tear down the grid."""
-        self._anim_timer.stop()
+        """Stop the ETA timer and tear down the grid."""
+        self._eta_timer.stop()
         while self._grid.count():
             item = self._grid.takeAt(0)
             w = item.widget()
@@ -156,41 +162,24 @@ class CVProgressView(QWidget):
         self._status.clear()
         self._total = 0
         self._completed = 0
-        self._display_fraction = 0.0
         self._durations.clear()
         self._refresh_overall(0.0)
         self._eta_lbl.setText("")
 
-    # ── animation ──────────────────────────────────────────────────────────
+    # ── ETA ──────────────────────────────────────────────────────────────────
 
-    def _tick(self) -> None:
-        """Ease the overall bar toward — but never onto — the next milestone.
+    def _tick_eta(self) -> None:
+        """Refresh the remaining-time text (the bar is event-driven).
 
-        ``base`` is the confirmed fraction (decoders done / total); the bar
-        creeps toward ``nxt`` (one decoder further) asymptotically, paced by
-        the average measured decoder duration (or a default for the first
-        segment). It can never reach ``nxt`` here, so the bar only completes a
-        segment when the real completion event arrives — and 100 % only via
-        ``mark_all_complete``.
+        Shown only after the first decoder finishes — until then there's no
+        duration sample, so the estimate stays blank. Estimate = (decoders
+        left, including the running one) × mean measured duration, minus the
+        time already spent in the running decoder.
         """
-        if self._total == 0:
-            return
-        elapsed = self._segment_clock.elapsed() / 1000.0
-        tau = (sum(self._durations) / len(self._durations)
-               if self._durations else _DEFAULT_TAU_S)
-        base = self._completed / self._total
-        nxt = min(self._completed + 1, self._total) / self._total
-        eased = base + (nxt - base) * (1.0 - math.exp(-elapsed / max(tau, 0.1)))
-        # Monotonic: never let the displayed bar retreat.
-        self._display_fraction = max(self._display_fraction, eased)
-        self._refresh_overall(self._display_fraction)
-        self._refresh_eta(elapsed)
-
-    def _refresh_eta(self, segment_elapsed: float) -> None:
-        if not self._durations:
-            self._eta_lbl.setText("Estimating…")
-            return
+        if self._total == 0 or not self._durations:
+            return  # no sample yet → no estimate (label stays blank)
         avg = sum(self._durations) / len(self._durations)
+        segment_elapsed = self._segment_clock.elapsed() / 1000.0
         remaining_decoders = self._total - self._completed
         eta = max(0.0, remaining_decoders * avg - segment_elapsed)
         self._eta_lbl.setText(

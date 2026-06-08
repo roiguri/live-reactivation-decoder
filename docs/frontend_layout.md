@@ -147,8 +147,8 @@ This mirrors the design mock, where every heavy wait is a full-workspace view ra
 `widgets/cv_progress_view.py`. Per-decoder card grid + overall bar (mirrors the mock's `WorkspaceNode3CVProgress`).
 
 - Backend supplies **real** per-decoder completion events (`ModelEvaluator.run_evaluation`'s `on_progress` hook → `EvaluationWorker.decoder_progress` signal → `update_progress`). Decoders run serially, so completing decoder *i* advances card *i+1* to "running".
-- The smooth overall bar and the ETA are **interpolated on the UI side** between those events (a `QTimer` eases toward — but never onto — the next milestone); the backend stays timing-free. Only `mark_all_complete()` reaches 100 %.
-- A running decoder shows an **indeterminate** shimmer, not a fabricated fold counter (the CV call doesn't expose folds). Finer real progress would ride the same `decoder_progress` signal shape.
+- The overall bar **jumps in discrete sections** at those real events (`decoders done / total`), never creeping — there's no within-decoder signal, so a smooth fill would be invented. Only `mark_all_complete()` reaches 100 %.
+- The remaining-time estimate is shown **only after the first decoder finishes** (the first real duration sample); before then it's blank. A running decoder shows an **indeterminate** shimmer — not a fabricated fold counter — so the screen reads as live between section jumps. Finer real progress would ride the same `decoder_progress` signal shape.
 
 Lifecycle: `set_decoders(names)` → `start()` → `update_progress(completed, total, name)` × N → `mark_all_complete()`; `reset()` tears down on error.
 
