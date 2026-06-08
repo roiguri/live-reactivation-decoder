@@ -87,7 +87,7 @@ Work from `feat/phase2-stream-selection` lands several M2 items early and change
 | 9 | Frozen Event Graph | ✅ Done (built ahead of validation — delay-agnostic) | **5** |
 | 2 | Event Markers on Probability Graph | ✅ Done | — |
 | 3 | LSL Stream Picker | ✅ Done (stream-selection branch) | — |
-| 4 | Trigger Log | Not started | backlog |
+| 4 | Trigger Log | ✅ Done (data-agnostic UI batch) | backlog |
 | 5 | Decision History Strip | Not started | backlog |
 | 6 | Latency Display + Buffer Health | Not started | backlog |
 | 8 | Decision Settings UI | Not started | backlog |
@@ -253,15 +253,15 @@ Shipped as `src/frontend/widgets/phase2/frozen_event_chart.py` (+ `frozen_event_
 
 # Backlog (resume original plan)
 
-## Goal 4 — Trigger Log
+## Goal 4 — Trigger Log — ✅ Done
 
-Terminal-style scrolling log below the chart showing trigger events and system messages. (UI surface over the Goal 7 logging backend.)
+Terminal-style scrolling log below the chart showing trigger events and system messages. (UI surface over the Goal 7 logging backend.) **Built as a data-agnostic UI item** — it surfaces raw trigger edges (delay-free, untouched by preprocessing), so it works regardless of prediction fidelity and the timestamps line up for free once fidelity lands.
 
-- [ ] New widget: `TriggerLog` (text-based, append-only, auto-scroll)
-- [ ] Receives markers from `prediction_ready` and formats them as timestamped log lines
-- [ ] Also logs lifecycle events: stream started, stream halted, errors
-- [ ] Placed in the centre panel below the chart card
-- [ ] Verified: during replay, trigger events appear in real time with correct codes
+- [x] New widget: `TriggerLog` (`src/frontend/widgets/phase2/trigger_log.py`) — read-only `QPlainTextEdit`, append-only, auto-scroll, capped at `_MAX_LINES = 500` via `setMaximumBlockCount`
+- [x] Receives markers from `prediction_ready` and formats them as session-relative (`+T.Ts`, rebased on the first marker like `FrozenEventView`) log lines; resolves the configured event name (blank for unmapped codes — an audit log doesn't pre-filter like the chart)
+- [x] Also logs lifecycle events: stream started (with target), stream halted, errors — fed by `Phase2Screen` (`reset()` on Start, `log_event(...)` on start/halt/error)
+- [x] Placed in the centre panel below the event-locked view (scratch stacked card — final layout is Goal 13)
+- [x] Verified headless: 8 tests (name resolution, unmapped code, line cap, log_event + reset, marker forwarding, start/halt/error logging, reset-on-Start). **Live replay verification on Windows remains an operator step.**
 
 ---
 

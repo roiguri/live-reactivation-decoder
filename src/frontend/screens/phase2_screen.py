@@ -31,6 +31,7 @@ from frontend.widgets.phase2 import (
     Phase2SettingsPanel,
     StartHaltButton,
     TargetSelectionDialog,
+    TriggerLog,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,6 +99,9 @@ class Phase2Screen(QWidget):
             threshold=_DEFAULT_THRESHOLD,
             event_names=event_names,
         )
+        # Append-only trigger / system log (Goal 4). Surfaces every raw
+        # trigger edge plus lifecycle messages; shares the chart's event map.
+        self._trigger_log = TriggerLog(event_names=event_names)
         # Live target chosen by the operator via the header. None until a
         # target is selected; Start is guarded against a missing target.
         self._target: dict | None = None
@@ -155,6 +159,7 @@ class Phase2Screen(QWidget):
         self._chart.append_markers(markers)
         self._frozen.append_predictions(predictions, out_ts)
         self._frozen.append_markers(markers)
+        self._trigger_log.append_markers(markers)
 
     # ── target selection ───────────────────────────────────────────────────────
 
@@ -186,6 +191,7 @@ class Phase2Screen(QWidget):
         # starts visually blank.
         self._chart.reset_buffers()
         self._frozen.reset_buffers()
+        self._trigger_log.reset()
         self._start_halt_button.set_connecting()
         # Force the disabled "Connecting…" repaint before the blocking
         # LSL resolve so the operator sees the state change.
@@ -212,6 +218,9 @@ class Phase2Screen(QWidget):
 
         self._start_halt_button.set_live()
         self._header.set_status("LIVE INFERENCE", color=SUCCESS_GREEN)
+        self._trigger_log.log_event(
+            f"Stream started — {self._target.get('stream_name')}"
+        )
 
     def _on_halt_clicked(self) -> None:
         self._safely_stop()
@@ -219,6 +228,7 @@ class Phase2Screen(QWidget):
     def _on_error(self, message: str) -> None:
         # Stop first so the receiver/proxy/worker clean up before any
         # modal blocks the event loop.
+        self._trigger_log.log_event(f"Error: {message}")
         self._safely_stop()
         QMessageBox.critical(self, "Live inference error", message)
 
@@ -232,6 +242,9 @@ class Phase2Screen(QWidget):
                     "Failed to stop live session during teardown", exc_info=True
                 )
             self._live = None
+            # Guarded by ``_live is not None`` so a close-after-halt (where
+            # ``_safely_stop`` runs again on a None session) doesn't double-log.
+            self._trigger_log.log_event("Inference halted")
         try:
             # Stop the publishing source (proxy/replay). AppSession owns its
             # lifetime; a subsequent Start relaunches it.
@@ -300,6 +313,21 @@ class Phase2Screen(QWidget):
         event_card_layout.setContentsMargins(8, 8, 8, 8)
         event_card_layout.addWidget(self._frozen)
         layout.addWidget(event_card)
+
+        # Trigger / system log (Goal 4), below the event-locked view. Scratch
+        # stacked placement — final layout is Goal 13 (modular panels).
+        log_title = QLabel("TRIGGER LOG")
+        ltf = log_title.font()
+        ltf.setPointSize(9)
+        ltf.setWeight(QFont.Weight.DemiBold)
+        log_title.setFont(ltf)
+        log_title.setStyleSheet(
+            f"color: {TEXT_MUTED}; background: transparent; letter-spacing: 1px;"
+        )
+        layout.addSpacing(8)
+        layout.addWidget(log_title)
+        self._trigger_log.setMaximumHeight(140)
+        layout.addWidget(self._trigger_log)
 
         layout.addStretch(1)
         return panel

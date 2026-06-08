@@ -13,6 +13,8 @@ Sub-widgets composed by :class:`Phase2Screen`:
   — fixed-window, event-locked probability snapshot.
 * :class:`~frontend.widgets.phase2.frozen_event_view.FrozenEventView`
   — the chart plus a dropdown to browse past event snapshots.
+* :class:`~frontend.widgets.phase2.trigger_log.TriggerLog` — append-only
+  log of trigger edges + lifecycle events below the chart.
 """
 from frontend.widgets.phase2.frozen_event_chart import FrozenEventChart
 from frontend.widgets.phase2.frozen_event_view import FrozenEventView
@@ -20,6 +22,7 @@ from frontend.widgets.phase2.header import Phase2Header
 from frontend.widgets.phase2.settings_panel import Phase2SettingsPanel
 from frontend.widgets.phase2.start_halt_button import StartHaltButton
 from frontend.widgets.phase2.target_dialog import TargetSelectionDialog
+from frontend.widgets.phase2.trigger_log import TriggerLog
 
 __all__ = [
     "FrozenEventChart",
@@ -28,4 +31,5 @@ __all__ = [
     "Phase2SettingsPanel",
     "StartHaltButton",
     "TargetSelectionDialog",
+    "TriggerLog",
 ]
