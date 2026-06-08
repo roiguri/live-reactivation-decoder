@@ -1,6 +1,6 @@
 # Frontend Layout Reference
 
-Back to [Docs Index](README.md) or [Phase 1 UI Plan](Phase1_UI_Plan.md).
+Back to [Docs Index](../README.md) or [Phase 1 UI Plan](../old/phase1_ui_plan.md).
 
 ---
 
@@ -101,7 +101,7 @@ SettingsView (QWidget)
 
 ### Nodes 2–5 — Stubs
 
-All currently placeholder `QLabel` centered in a `QVBoxLayout`. Each will be replaced with a full implementation per the [Phase 1 UI Plan](Phase1_UI_Plan.md).
+All currently placeholder `QLabel` centered in a `QVBoxLayout`. Each will be replaced with a full implementation per the [Phase 1 UI Plan](../old/phase1_ui_plan.md).
 
 ---
 

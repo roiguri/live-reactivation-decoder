@@ -1,19 +1,13 @@
 # Documentation
 
-Docs are organized by purpose. Migration into this structure is **in progress** — some
-maintained docs are still at the `docs/` root and will move into the folders below in a
-follow-up.
-
-- **[architecture/](architecture/)** — how the system works now (maintained,
-  source-of-truth-adjacent).
+- **[architecture/](architecture/)** — how the system works now; the maintained,
+  source-of-truth-adjacent references:
+  - [backend_architecture.md](architecture/backend_architecture.md) — backend surface & contracts
+  - [frontend_layout.md](architecture/frontend_layout.md) — frontend structure
+  - [stream_worker_design.md](architecture/stream_worker_design.md) — live decoder loop design
   - [logging.md](architecture/logging.md) — logging conventions
-  - *pending move: `backend_architecture.md`, `frontend_layout.md`, `stream_worker_design.md`*
-- **[plans/](plans/)** — implementation plans (historical + active).
-  - [per_decoder_timepoint_selection.md](plans/per_decoder_timepoint_selection.md)
-  - *pending move: the Phase 1/2 UI & backend plans, the preprocessing migration*
-- **[reference/](reference/)** — results & dev/feature references.
-  - [debug_profiles.md](reference/debug_profiles.md)
-  - *pending move: `Decoder_Pipeline_Results.md`*
-- **[old/](old/)** — archived early implementation plans.
+- **[plans/](plans/)** — active, per-milestone implementation plans (transient).
+- **[reference/](reference/)** — results and dev/feature references (investigations, benchmarks, tooling notes).
+- **[old/](old/)** — archived/superseded plans (completed milestones + early implementation plans).
 
 > When the docs and the code disagree, the code under `src/` wins — follow it and update the doc.

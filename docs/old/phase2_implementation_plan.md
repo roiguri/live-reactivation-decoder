@@ -1,6 +1,6 @@
 # Phase 2 Implementation Plan
 
-> Quick implementation plan for the active stateful micro-batch architecture. For rationale and trade-offs, see [../../knowledge_base/01_timeline/03_online_stage_design/Phase2_Architecture_Discussion.md](../../knowledge_base/01_timeline/03_online_stage_design/Phase2_Architecture_Discussion.md). For the maintained backend contract, see [backend_architecture.md](backend_architecture.md).
+> Quick implementation plan for the active stateful micro-batch architecture. For rationale and trade-offs, see [../../knowledge_base/01_timeline/03_online_stage_design/Phase2_Architecture_Discussion.md](../../knowledge_base/01_timeline/03_online_stage_design/Phase2_Architecture_Discussion.md). For the maintained backend contract, see [backend_architecture.md](../architecture/backend_architecture.md).
 
 Last design update on **2026-05-11**.
 
@@ -140,7 +140,7 @@ engine = LiveInferenceEngine(
 
 **Status:** `[x]` Implemented in `online_decoder/src/backend/online_phase/live_inference.py`.
 
-**Detailed plan:** See [LiveInferenceEngine_Implementation_Plan.md](LiveInferenceEngine_Implementation_Plan.md).
+**Detailed plan:** See [LiveInferenceEngine_Implementation_Plan.md](live_inference_engine_implementation_plan.md).
 
 **Inputs:**
 - Unwrapped trained sklearn-compatible decoder models.

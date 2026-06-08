@@ -1,6 +1,6 @@
 # Debug Profiles — `debug_snapshots/` as a multi-profile hub
 
-Implements **Goal 17 (Debug Profiles)** from [Phase2_UI_Plan_M2.md](../Phase2_UI_Plan_M2.md).
+Implements **Goal 17 (Debug Profiles)** from [Phase2_UI_Plan_M2.md](../plans/phase2_ui_plan_m2.md).
 
 > **Status (2026-06-05): implemented + seeded.** Steps 1–6 below are done —
 > `profiles.py` + tests, the profile-aware seeder, both debug entry points,

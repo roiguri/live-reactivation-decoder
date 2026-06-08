@@ -18,7 +18,7 @@
 
 ## Context
 
-The pipeline in [../src/backend/offline_phase/preprocessor.py](../src/backend/offline_phase/preprocessor.py) and its causal mirror in [../src/backend/online_phase/online_preprocessor.py](../src/backend/online_phase/online_preprocessor.py) were modelled on an **outdated** reference. The current reference of record is [../../knowledge_base/02_reference/tomer_preprocessing_new.py](../../knowledge_base/02_reference/tomer_preprocessing_new.py), with its ICA helper [../../knowledge_base/02_reference/ica_handler.py](../../knowledge_base/02_reference/ica_handler.py).
+The pipeline in [../src/backend/offline_phase/preprocessor.py](../../src/backend/offline_phase/preprocessor.py) and its causal mirror in [../src/backend/online_phase/online_preprocessor.py](../../src/backend/online_phase/online_preprocessor.py) were modelled on an **outdated** reference. The current reference of record is [../../knowledge_base/02_reference/tomer_preprocessing_new.py](../../knowledge_base/02_reference/tomer_preprocessing_new.py), with its ICA helper [../../knowledge_base/02_reference/ica_handler.py](../../knowledge_base/02_reference/ica_handler.py).
 
 The new reference differs structurally — ICA runs on epochs **after** cleaning rather than on raw, filtering is split (HP early / LP late), there is a second resample at the end on epochs, the montage is hardware-specific, and human-in-the-loop steps (bad channels, ICA review) replace the current automatic detection. We must adopt this with these project-specific constraints (from the instructor's latest direction):
 
@@ -49,7 +49,7 @@ The outcome: a preprocessing pipeline whose offline output matches the new refer
 
 ## Target offline pipeline order
 
-Implemented in [../src/backend/offline_phase/preprocessor.py](../src/backend/offline_phase/preprocessor.py). Stage placement of LPF + final resample depends on `preprocessing.resample_filter_stage`.
+Implemented in [../src/backend/offline_phase/preprocessor.py](../../src/backend/offline_phase/preprocessor.py). Stage placement of LPF + final resample depends on `preprocessing.resample_filter_stage`.
 
 Shared prefix (both variants):
 
@@ -80,7 +80,7 @@ Shared prefix (both variants):
 
 ## Target online pipeline order
 
-Implemented in [../src/backend/online_phase/online_preprocessor.py](../src/backend/online_phase/online_preprocessor.py). Stage placement of LPF + decimation mirrors `settings.preprocessing.resample_filter_stage`.
+Implemented in [../src/backend/online_phase/online_preprocessor.py](../../src/backend/online_phase/online_preprocessor.py). Stage placement of LPF + decimation mirrors `settings.preprocessing.resample_filter_stage`.
 
 Shared causal stages: HP + notch IIR (persistent `zi`) → bad-channel interpolation → average reference → ICA → optionally followed (or preceded) by LP + decimate.
 
@@ -106,7 +106,7 @@ Shared causal stages: HP + notch IIR (persistent `zi`) → bad-channel interpola
 
 ## Config schema changes
 
-[../src/backend/core/config_models.py](../src/backend/core/config_models.py) and [../experiment_config.yaml](../experiment_config.yaml):
+[../src/backend/core/config_models.py](../../src/backend/core/config_models.py) and [../experiment_config.yaml](../../experiment_config.yaml):
 
 **Remove:**
 
@@ -172,7 +172,7 @@ Pydantic models: split `BandpassSettings` → `HighpassSettings` + `NotchSetting
 
 ### `online_state` schema
 
-Exported by `OfflinePreprocessor.export_online_state()` and consumed by [../src/backend/online_phase/online_preprocessor.py](../src/backend/online_phase/online_preprocessor.py). The full joblib envelope is built in [../src/backend/offline_phase/orchestrator.py](../src/backend/offline_phase/orchestrator.py) and unwrapped by `load_decoder_pipeline_artifact()` in [../src/backend/online_phase/artifact_loader.py](../src/backend/online_phase/artifact_loader.py).
+Exported by `OfflinePreprocessor.export_online_state()` and consumed by [../src/backend/online_phase/online_preprocessor.py](../../src/backend/online_phase/online_preprocessor.py). The full joblib envelope is built in [../src/backend/offline_phase/orchestrator.py](../../src/backend/offline_phase/orchestrator.py) and unwrapped by `load_decoder_pipeline_artifact()` in [../src/backend/online_phase/artifact_loader.py](../../src/backend/online_phase/artifact_loader.py).
 
 ```python
 online_state = {
@@ -225,7 +225,7 @@ The cross-check against `sfreq_offline` is removed (it was comparing settings to
 
 ### Online channel-hygiene replay
 
-[../src/backend/online_phase/lsl_receiver.py](../src/backend/online_phase/lsl_receiver.py) (or a thin shim immediately downstream of it) applies `online_state["eeg_chunk_indices"]` as a column selection to the **post-trigger-split EEG array** (the (n_samples, 64) chunk that comes out of `split_eeg_and_markers`, before reaching `OnlinePreprocessor`):
+[../src/backend/online_phase/lsl_receiver.py](../../src/backend/online_phase/lsl_receiver.py) (or a thin shim immediately downstream of it) applies `online_state["eeg_chunk_indices"]` as a column selection to the **post-trigger-split EEG array** (the (n_samples, 64) chunk that comes out of `split_eeg_and_markers`, before reaching `OnlinePreprocessor`):
 
 ```python
 # After existing trigger split:
@@ -241,9 +241,9 @@ The trigger split layer is unaffected: it stays in the LSL receiver, parameteriz
 
 ## Frontend / orchestrator restructure
 
-MNE interactive plots **require the main Qt thread**. Today, [../src/frontend/workers/preprocessing_worker.py](../src/frontend/workers/preprocessing_worker.py) runs the entire two-step pipeline on a `QThread` worker. We split into compute-on-worker / plot-on-main steps.
+MNE interactive plots **require the main Qt thread**. Today, [../src/frontend/workers/preprocessing_worker.py](../../src/frontend/workers/preprocessing_worker.py) runs the entire two-step pipeline on a `QThread` worker. We split into compute-on-worker / plot-on-main steps.
 
-[../src/backend/offline_phase/orchestrator.py](../src/backend/offline_phase/orchestrator.py) — replace the current `run_step1_prepare_ica` / `run_step2_finish_pipeline` API with four granular methods:
+[../src/backend/offline_phase/orchestrator.py](../../src/backend/offline_phase/orchestrator.py) — replace the current `run_step1_prepare_ica` / `run_step2_finish_pipeline` API with four granular methods:
 
 | Method | Where | What |
 |---|---|---|
@@ -252,11 +252,11 @@ MNE interactive plots **require the main Qt thread**. Today, [../src/frontend/wo
 | `run_step1b_fit_ica()` | Worker | Interpolate bads → make epochs → average reference → fit ICA → ICLabel labels. Returns `(ica, epochs_for_review, suggested_exclude)`. |
 | `run_step2_apply_and_save(exclude_components: list[int])` | Worker | Apply ICA → LP → final resample → save → export online state. |
 
-Frontend changes in [../src/frontend/](../src/frontend/):
+Frontend changes in [../src/frontend/](../../src/frontend/):
 
 - **New screen / step**: `BadChannelReviewStep`. Worker runs `run_step1a_filter()`. On completion, main thread calls `raw.plot(block=True)` — when the user closes the window, `raw.info["bads"]` is read and passed to `orchestrator.set_bad_channels(...)`. Then trigger Step 1B worker.
 - **Replace `ICAComponentCard` grid screen** with: after Step 1B worker completes, main thread sets `ica.exclude = suggested_exclude`, calls `ica.plot_components(inst=epochs)` (optional topomap reference window) and `ica.plot_sources(epochs, block=True)`. Final `ica.exclude` is read on close and passed to `run_step2_apply_and_save(...)`.
-- Delete [../src/frontend/widgets/ica_component_card.py](../src/frontend/widgets/ica_component_card.py) and any preprocessing-view screens that wired it up.
+- Delete [../src/frontend/widgets/ica_component_card.py](../../src/frontend/widgets/ica_component_card.py) and any preprocessing-view screens that wired it up.
 
 Threading discipline: workers emit signals carrying the raw / ICA objects; main thread invokes MNE plot calls. **No MNE plot call from inside a `QThread.run()`** — that deadlocks Qt's event loop. The pattern is: `worker.finished.emit(raw)` → slot on main thread → `raw.plot(block=True)` → `orchestrator.set_bad_channels(raw.info["bads"])` → kick off next worker.
 
@@ -264,7 +264,7 @@ Threading discipline: workers emit signals carrying the raw / ICA objects; main 
 
 ## Dependencies
 
-[../requirements.txt](../requirements.txt):
+[../requirements.txt](../../requirements.txt):
 
 - **Add** `mne-icalabel` (for `mne_icalabel.label_components`).
 - PyQt6 already pinned (`pyqt6>=6.6`), MNE already pinned — no further GUI deps.
@@ -275,16 +275,16 @@ Threading discipline: workers emit signals carrying the raw / ICA objects; main 
 
 | Path | Change |
 |---|---|
-| [../src/backend/offline_phase/preprocessor.py](../src/backend/offline_phase/preprocessor.py) | Full rewrite of pipeline order. Drop `_detect_bad_channels`, `_autoreject`. Add channel hygiene, ICLabel suggestion, **`resample_filter_stage` branching** (LP+resample on raw vs on epochs). Preserve `_compute_interp_weights`. **`export_online_state` rewrites its channel fields as positional:** `bad_channels` (names) → `bad_indices` (ints into post-hygiene array); drop `ch_names`; add `eeg_chunk_indices` computed by capturing the .vhdr's original channel order before EMG drop and recording which positions survived. |
-| [../src/backend/offline_phase/orchestrator.py](../src/backend/offline_phase/orchestrator.py) | Replace two-step API with `run_step1a_filter` / `set_bad_channels` / `run_step1b_fit_ica` / `run_step2_apply_and_save`. State machine update. |
-| [../src/backend/online_phase/online_preprocessor.py](../src/backend/online_phase/online_preprocessor.py) | Reconfigure stage 1 to HP-only. Add `_apply_lowpass` (40 Hz, persistent `zi`). Decimation ratio = 1000/100 = 10. **Pipeline ordering branches on `settings.preprocessing.resample_filter_stage`** ("early" → LP+decimate before spatial transforms; "late" → after ICA). `process_batch` returns at 100 Hz. Constructor signature unchanged (`preprocessing_settings`, `online_state`, `input_sfreq`). Drop the `sfreq_offline` validation check. |
-| [../src/backend/online_phase/lsl_receiver.py](../src/backend/online_phase/lsl_receiver.py) | After existing trigger split, apply `online_state["eeg_chunk_indices"]` as a column selection on the EEG chunk before forwarding to `OnlinePreprocessor`. Trigger split stays unchanged — hygiene operates downstream of it, so trigger position is unaffected. |
-| [../src/backend/core/config_models.py](../src/backend/core/config_models.py) | Split bandpass; add highpass/notch/lowpass/channel_hygiene/iclabel/final_resample; delete reject_criteria; ICA `n_components: Literal["auto"] \| int`. |
-| [../experiment_config.yaml](../experiment_config.yaml) | Rewrite `preprocessing:` block to new schema. |
-| [../src/frontend/workers/preprocessing_worker.py](../src/frontend/workers/preprocessing_worker.py) | Replace two workers with three (Step1A, Step1B, Step2). |
+| [../src/backend/offline_phase/preprocessor.py](../../src/backend/offline_phase/preprocessor.py) | Full rewrite of pipeline order. Drop `_detect_bad_channels`, `_autoreject`. Add channel hygiene, ICLabel suggestion, **`resample_filter_stage` branching** (LP+resample on raw vs on epochs). Preserve `_compute_interp_weights`. **`export_online_state` rewrites its channel fields as positional:** `bad_channels` (names) → `bad_indices` (ints into post-hygiene array); drop `ch_names`; add `eeg_chunk_indices` computed by capturing the .vhdr's original channel order before EMG drop and recording which positions survived. |
+| [../src/backend/offline_phase/orchestrator.py](../../src/backend/offline_phase/orchestrator.py) | Replace two-step API with `run_step1a_filter` / `set_bad_channels` / `run_step1b_fit_ica` / `run_step2_apply_and_save`. State machine update. |
+| [../src/backend/online_phase/online_preprocessor.py](../../src/backend/online_phase/online_preprocessor.py) | Reconfigure stage 1 to HP-only. Add `_apply_lowpass` (40 Hz, persistent `zi`). Decimation ratio = 1000/100 = 10. **Pipeline ordering branches on `settings.preprocessing.resample_filter_stage`** ("early" → LP+decimate before spatial transforms; "late" → after ICA). `process_batch` returns at 100 Hz. Constructor signature unchanged (`preprocessing_settings`, `online_state`, `input_sfreq`). Drop the `sfreq_offline` validation check. |
+| [../src/backend/online_phase/lsl_receiver.py](../../src/backend/online_phase/lsl_receiver.py) | After existing trigger split, apply `online_state["eeg_chunk_indices"]` as a column selection on the EEG chunk before forwarding to `OnlinePreprocessor`. Trigger split stays unchanged — hygiene operates downstream of it, so trigger position is unaffected. |
+| [../src/backend/core/config_models.py](../../src/backend/core/config_models.py) | Split bandpass; add highpass/notch/lowpass/channel_hygiene/iclabel/final_resample; delete reject_criteria; ICA `n_components: Literal["auto"] \| int`. |
+| [../experiment_config.yaml](../../experiment_config.yaml) | Rewrite `preprocessing:` block to new schema. |
+| [../src/frontend/workers/preprocessing_worker.py](../../src/frontend/workers/preprocessing_worker.py) | Replace two workers with three (Step1A, Step1B, Step2). |
 | `../src/frontend/screens/preprocessing_view.py` (and related) | Replace ICA card grid with main-thread `raw.plot` + `ica.plot_sources` calls. Add `BadChannelReviewStep`. |
-| [../src/frontend/widgets/ica_component_card.py](../src/frontend/widgets/ica_component_card.py) | **Delete** (replaced by MNE's native window). |
-| [../requirements.txt](../requirements.txt) | Add `mne-icalabel`. |
+| [../src/frontend/widgets/ica_component_card.py](../../src/frontend/widgets/ica_component_card.py) | **Delete** (replaced by MNE's native window). |
+| [../requirements.txt](../../requirements.txt) | Add `mne-icalabel`. |
 
 ---
 
@@ -292,10 +292,10 @@ Threading discipline: workers emit signals carrying the raw / ICA objects; main 
 
 | Path | Action |
 |---|---|
-| [../tests/offline_phase/test_preprocessor.py](../tests/offline_phase/test_preprocessor.py) | Drop AutoReject + hard-amplitude + auto-bad-channel tests. Add tests for channel hygiene (EMG drop, HEGOC rename, montage), ICLabel-based pre-fill (mock `label_components`), epoch-side LP + resample, manual bad-channel hook accepts bads list. |
-| [../tests/offline_phase/test_orchestrator.py](../tests/offline_phase/test_orchestrator.py) | Update state machine for four-method API; assert ordering. |
-| [../tests/online_phase/test_online_preprocessor.py](../tests/online_phase/test_online_preprocessor.py) | Bandpass test → HP-only test. New LP+decimate test (40 Hz LP, 1000/100 ratio = 10). Drop the `sfreq_offline` cross-check test. **Add ordering tests for both `resample_filter_stage` variants** — verify stages run in the right order based on the settings flag. Add a shape-validation test: corrupt `ica_pca_components` shape → constructor raises before first `process_batch`. |
-| [../tests/online_phase/test_lsl_receiver.py](../tests/online_phase/test_lsl_receiver.py) | New test for index-based hygiene: feed a synthetic (n_samples, 65) chunk with a known column for EMG, apply trigger split + `eeg_chunk_indices` selection, assert the resulting array drops the right column and preserves the trigger column unchanged. |
+| [../tests/offline_phase/test_preprocessor.py](../../tests/offline_phase/test_preprocessor.py) | Drop AutoReject + hard-amplitude + auto-bad-channel tests. Add tests for channel hygiene (EMG drop, HEGOC rename, montage), ICLabel-based pre-fill (mock `label_components`), epoch-side LP + resample, manual bad-channel hook accepts bads list. |
+| [../tests/offline_phase/test_orchestrator.py](../../tests/offline_phase/test_orchestrator.py) | Update state machine for four-method API; assert ordering. |
+| [../tests/online_phase/test_online_preprocessor.py](../../tests/online_phase/test_online_preprocessor.py) | Bandpass test → HP-only test. New LP+decimate test (40 Hz LP, 1000/100 ratio = 10). Drop the `sfreq_offline` cross-check test. **Add ordering tests for both `resample_filter_stage` variants** — verify stages run in the right order based on the settings flag. Add a shape-validation test: corrupt `ica_pca_components` shape → constructor raises before first `process_batch`. |
+| [../tests/online_phase/test_lsl_receiver.py](../../tests/online_phase/test_lsl_receiver.py) | New test for index-based hygiene: feed a synthetic (n_samples, 65) chunk with a known column for EMG, apply trigger split + `eeg_chunk_indices` selection, assert the resulting array drops the right column and preserves the trigger column unchanged. |
 
 ---
 

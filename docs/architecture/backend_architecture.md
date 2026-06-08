@@ -1,6 +1,6 @@
 # Backend Architecture
 
-Back to [Codebase Structure](README.md) or [Project Index](../START_HERE.md).
+Back to [Codebase Structure](../README.md) or [Project Index](../../knowledge_base/START_HERE.md).
 
 ---
 
@@ -1478,7 +1478,7 @@ online_decoder/
 
 ## 5. Frontend Architecture (Phase 1 UI)
 
-`src/frontend/` is planned but not committed. The active design is described in [Phase1_UI_Plan.md](Phase1_UI_Plan.md).
+`src/frontend/` is planned but not committed. The active design is described in [Phase1_UI_Plan.md](../old/phase1_ui_plan.md).
 
 **Summary:**
 
@@ -1505,9 +1505,9 @@ online_decoder/
 
 This is the authoritative architecture reference for the backend class surface in `online_decoder`. It does not cover:
 
-- **Frontend/UI implementation details**: See [Phase1_UI_Plan.md](Phase1_UI_Plan.md) for the full Phase 1 UI plan. See [../../knowledge_base/01_timeline/03_online_stage_design/Reactivation Decoder PRD.md](../../knowledge_base/01_timeline/03_online_stage_design/Reactivation%20Decoder%20PRD.md) for the operator workflow and UI intent
+- **Frontend/UI implementation details**: See [Phase1_UI_Plan.md](../old/phase1_ui_plan.md) for the full Phase 1 UI plan. See [../../knowledge_base/01_timeline/03_online_stage_design/Reactivation Decoder PRD.md](../../knowledge_base/01_timeline/03_online_stage_design/Reactivation%20Decoder%20PRD.md) for the operator workflow and UI intent
 - **Development workflow and testing**: See [../../knowledge_base/03_codebase/online_architecture.md](../../knowledge_base/03_codebase/online_architecture.md) for pytest usage, dependency management, and running tests
-- **Current experiment-specific values**: See [../experiment_config.yaml](../experiment_config.yaml) for the concrete YAML used in this repository
+- **Current experiment-specific values**: See [../experiment_config.yaml](../../experiment_config.yaml) for the concrete YAML used in this repository
 - **Experiment design and requirements**: See [../../knowledge_base/01_timeline/03_online_stage_design/Reactivation Decoder PRD.md](../../knowledge_base/01_timeline/03_online_stage_design/Reactivation%20Decoder%20PRD.md) for product requirements
 - **Hardware integration details**: See [../../knowledge_base/01_timeline/03_online_stage_design/Lab Equipment & LSL.md](../../knowledge_base/01_timeline/03_online_stage_design/Lab%20Equipment%20%26%20LSL.md) for NeurOne hardware and LSL streaming specifics
 - **Real-time ICA approaches**: See [../../knowledge_base/02_reference/ICA_real_time.md](../../knowledge_base/02_reference/ICA_real_time.md) for static vs dynamic ICA implementation options

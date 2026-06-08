@@ -1,6 +1,6 @@
 # Phase 2 UI — Live Inference Implementation Plan
 
-Back to [Docs Index](README.md) or [Phase 2 Backend Plan](Phase2_Implementation_Plan.md).
+Back to [Docs Index](../README.md) or [Phase 2 Backend Plan](phase2_implementation_plan.md).
 
 ---
 

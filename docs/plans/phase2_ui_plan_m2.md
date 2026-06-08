@@ -1,6 +1,6 @@
 # Phase 2 UI — M2 Implementation Plan
 
-Back to [Docs Index](README.md) | Previous: [M1 Plan](Phase2_UI_Plan_M1.md)
+Back to [Docs Index](../README.md) | Previous: [M1 Plan](../old/phase2_ui_plan_m1.md)
 
 ---
 
@@ -109,7 +109,7 @@ Work from `feat/phase2-stream-selection` lands several M2 items early and change
 
 `python -m frontend.debug.main --phase2` was hardcoded to one config and one pipeline. Diagnosing the fidelity bug and validating the pipeline both need to swap *settings*, *trained artifact*, and *replay recording* together, repeatably. A **debug profile** bundles those so a single flag selects a known scenario.
 
-Implemented as **self-describing directories** (not a central registry): each `debug_snapshots/<name>/` carries a minimal `manifest.yaml` (`name`, copied-in `config`, `raw_data_dir` path-only) plus the snapshots, `models/`, and `epochs/` it produces. Discovery lists subdirs with a manifest. Self-contained in `src/frontend/debug/`; production `frontend.main` stays byte-for-byte unaffected. Full design + usage: [docs/features/debug_profiles.md](features/debug_profiles.md) and `src/frontend/debug/README.md`.
+Implemented as **self-describing directories** (not a central registry): each `debug_snapshots/<name>/` carries a minimal `manifest.yaml` (`name`, copied-in `config`, `raw_data_dir` path-only) plus the snapshots, `models/`, and `epochs/` it produces. Discovery lists subdirs with a manifest. Self-contained in `src/frontend/debug/`; production `frontend.main` stays byte-for-byte unaffected. Full design + usage: [docs/features/debug_profiles.md](../reference/debug_profiles.md) and `src/frontend/debug/README.md`.
 
 - [x] `DebugProfile` (`src/frontend/debug/profiles.py`) — resolved paths from a 3-field manifest. *Trimmed from the original sketch: no central registry, no `stream_name`/`notes`/explicit `pipeline` fields (snapshot/pipeline/epochs paths are conventions); add back if needed.*
 - [x] `frontend.debug.main` gains `--profile <name>`, `--list-profiles`, and `--config` / `--data` overrides (pipeline path is a convention, so no `--pipeline`)
@@ -438,7 +438,7 @@ These items are **offline (Phase 1)** and have **no Phase-2 / online impact**. T
 
 ## Goal 19 — Per-Decoder Timepoint Selection (Phase 1 offline UI) — ✅ Done
 
-Each decoder is now operator-selectable at its own timepoint, end-to-end. Shipped on `feat/per-decoder-timepoints` (7 commits); full design in [docs/plans/per_decoder_timepoint_selection.md](plans/per_decoder_timepoint_selection.md).
+Each decoder is now operator-selectable at its own timepoint, end-to-end. Shipped on `feat/per-decoder-timepoints` (7 commits); full design in [docs/plans/per_decoder_timepoint_selection.md](../old/per_decoder_timepoint_selection.md).
 
 - [x] `EvaluationView` Summary tab is a **per-decoder roster** — each decoder has its own timepoint spinbox, AUC@t, read-only Peak column, and Confirm; pre-filled with its evaluator `peak_timepoint`
 - [x] Per-decoder editing (roster spinbox, decoder-tab spinbox, or chart click) moves **only that decoder**, synced bidirectionally; "Approve && Continue" gates on **all** decoders confirmed

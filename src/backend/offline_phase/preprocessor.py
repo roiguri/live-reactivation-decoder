@@ -15,7 +15,7 @@ class OfflinePreprocessor:
     """
     Executes the offline cleaning pipeline for a single subject recording,
     modelled on ``knowledge_base/02_reference/tomer_preprocessing_new.py`` plus
-    the instructor's parameters (see docs/Preprocessing_Migration_Plan.md).
+    the instructor's parameters (see docs/old/preprocessing_migration_plan.md).
 
     Caller is responsible for loading raw data and passing it via the
     constructor (or assigning ``self.raw`` directly).

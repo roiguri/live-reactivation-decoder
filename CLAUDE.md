@@ -6,7 +6,7 @@
 
 Code under `src/` is the source of truth.
 
-Use [docs/backend_architecture.md](docs/backend_architecture.md) for the maintained backend summary, [docs/Phase2_Implementation_Plan.md](docs/Phase2_Implementation_Plan.md) for the Phase 2 backend checklist, and [docs/Phase2_UI_Plan_M1.md](docs/Phase2_UI_Plan_M1.md) for the completed M1 UI plan. See [docs/README.md](docs/README.md) for the docs map and [docs/architecture/logging.md](docs/architecture/logging.md) for logging conventions. If the docs and code disagree, follow the code and update the docs.
+Use [docs/architecture/backend_architecture.md](docs/architecture/backend_architecture.md) for the maintained backend summary, [docs/old/phase2_implementation_plan.md](docs/old/phase2_implementation_plan.md) for the Phase 2 backend checklist, and [docs/old/phase2_ui_plan_m1.md](docs/old/phase2_ui_plan_m1.md) for the completed M1 UI plan. See [docs/README.md](docs/README.md) for the docs map and [docs/architecture/logging.md](docs/architecture/logging.md) for logging conventions. If the docs and code disagree, follow the code and update the docs.
 
 ## Directory Layout
 
@@ -75,7 +75,7 @@ python scripts/smoke_stream_worker.py --pipeline /path/to/decoder_pipeline.jobli
 
 The experiment config lives in `experiment_config.yaml`. Its schema is defined in `src/backend/core/config_models.py` using Pydantic v2. When the YAML schema changes, update the Pydantic models.
 
-The `preprocessing:` block follows the new reference pipeline (see `docs/Preprocessing_Migration_Plan.md`): `resample_filter_stage` (`early`|`late`), `channel_hygiene`, `highpass`, `notch`, `ica` (incl. `iclabel`), `epochs`, `lowpass`, `final_resample`. The old `bandpass`/`resample`/`reject_criteria` sections are gone. Both offline and online phases now consume the same positional `online_state` schema (`eeg_chunk_indices`, `bad_indices`, ICA matrices, interp weights, pre_whitener — no channel names).
+The `preprocessing:` block follows the new reference pipeline (see `docs/old/preprocessing_migration_plan.md`): `resample_filter_stage` (`early`|`late`), `channel_hygiene`, `highpass`, `notch`, `ica` (incl. `iclabel`), `epochs`, `lowpass`, `final_resample`. The old `bandpass`/`resample`/`reject_criteria` sections are gone. Both offline and online phases now consume the same positional `online_state` schema (`eeg_chunk_indices`, `bad_indices`, ICA matrices, interp weights, pre_whitener — no channel names).
 
 ## When to Update This File
 

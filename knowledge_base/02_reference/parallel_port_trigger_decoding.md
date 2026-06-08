@@ -124,6 +124,6 @@ Scope is roughly the same as the original commit, in reverse.
 
 ## Relationship to the online phase
 
-The online path has its own (different) trigger decoder via [`LSLReceiver.decode_trigger_value`](../../docs/backend_architecture.md#lslreceiver-helper-functions), which uses `(int(raw_value) >> 8) & 0xFF` because the LSL stream from NeurOne carries the trigger as a packed 32-bit word. Our offline decoder uses `voltage × 1e4` because the BrainVision .eeg file stores the same underlying byte as a pre-scaled float32 voltage.
+The online path has its own (different) trigger decoder via [`LSLReceiver.decode_trigger_value`](../../docs/architecture/backend_architecture.md#lslreceiver-helper-functions), which uses `(int(raw_value) >> 8) & 0xFF` because the LSL stream from NeurOne carries the trigger as a packed 32-bit word. Our offline decoder uses `voltage × 1e4` because the BrainVision .eeg file stores the same underlying byte as a pre-scaled float32 voltage.
 
 Two file formats, one logical signal. If the offline decision is revisited, this section should be revisited too — there may or may not be a corresponding online-phase change depending on whether the upstream hardware reconfiguration also affects the LSL stream.
