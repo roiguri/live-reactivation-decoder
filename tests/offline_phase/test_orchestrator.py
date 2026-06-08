@@ -296,6 +296,23 @@ class TestRunEvaluation:
         assert "tasks" in result
         assert orc._eval_results is result
 
+    def test_forwards_progress_callback(
+        self, tmp_path: Path, synthetic_epochs: mne.EpochsArray, evaluator_settings: dict
+    ) -> None:
+        sm = MagicMock()
+        sm.get_decoder_settings.return_value = evaluator_settings
+        orc = _make_orchestrator(tmp_path, sm)
+        _attach_preprocessor_stub(orc)
+        orc._epochs = synthetic_epochs
+
+        calls = []
+        orc.run_evaluation(
+            on_progress=lambda completed, total, name: calls.append(completed)
+        )
+
+        # Pass-through reaches the evaluator: one tick per decoder.
+        assert calls == list(range(1, len(evaluator_settings["tasks"]) + 1))
+
 
 # ── TestRunTraining ───────────────────────────────────────────────────────────
 

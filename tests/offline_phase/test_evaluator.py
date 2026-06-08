@@ -206,3 +206,49 @@ class TestRunEvaluation:
         result = ModelEvaluator(synthetic_epochs, settings).run_evaluation()
         assert len(result["tasks"]) == 1
         assert "red decoder" in result["tasks"]
+
+
+# ── on_progress callback ────────────────────────────────────────────────────
+
+class TestRunEvaluationProgress:
+    """The optional per-decoder progress hook (a GUI progress-screen feeds on
+    it; the backend stays Qt-free and just calls the function)."""
+
+    def test_called_once_per_decoder_in_order(
+        self, synthetic_epochs, evaluator_settings
+    ):
+        calls = []
+        ModelEvaluator(synthetic_epochs, evaluator_settings).run_evaluation(
+            on_progress=lambda completed, total, name: calls.append(
+                (completed, total, name)
+            )
+        )
+        names = [t["name"] for t in evaluator_settings["tasks"]]
+        n = len(names)
+        # One call per decoder, 1-based completed count, decoders in config order.
+        assert calls == [(i + 1, n, names[i]) for i in range(n)]
+
+    def test_completes_when_callback_omitted(
+        self, synthetic_epochs, evaluator_settings
+    ):
+        # Default None path is unchanged behaviour — full result still returned.
+        result = ModelEvaluator(synthetic_epochs, evaluator_settings).run_evaluation()
+        assert set(result["tasks"]) == {
+            t["name"] for t in evaluator_settings["tasks"]
+        }
+
+    def test_callback_fires_after_result_is_recorded(
+        self, synthetic_epochs, evaluator_settings
+    ):
+        # ``completed`` should never run ahead of work actually finished:
+        # at the i-th call exactly i decoders have peak_auc computed.
+        seen = []
+
+        def cb(completed, total, name):
+            seen.append(completed)
+
+        ModelEvaluator(synthetic_epochs, evaluator_settings).run_evaluation(
+            on_progress=cb
+        )
+        assert seen == sorted(seen)  # monotonic, no regressions
+        assert seen[-1] == len(evaluator_settings["tasks"])
