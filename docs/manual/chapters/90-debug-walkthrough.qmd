@@ -1,0 +1,34 @@
+# Appendix: Debug walkthrough {#sec-debug}
+
+Real preprocessing takes several minutes per run, which is painful when you
+are iterating on the UI rather than processing new data. The debug walkthrough
+lets you seed the pipeline once from a real recording, then drive every screen
+instantly.
+
+::: callout-note
+This is a developer convenience, not part of a normal experiment session.
+:::
+
+## One-time seed
+
+Seed the debug snapshots from a real recording:
+
+```bash
+python -m scripts.demo_seed_debug_snapshots --data <path/to/subject>
+```
+
+The snapshots are written under `debug_snapshots/`, which is **git-ignored** —
+each developer regenerates their own. Re-run the seed command when you move to
+a new machine.
+
+## Drive the walkthrough
+
+```bash
+python -m frontend.debug.main
+```
+
+Step through the whole pipeline with **Ctrl+→**. A `--phase2` quick-jump entry
+point is available to land directly on the live-inference screen.
+
+See [`src/frontend/debug/README.md`](../../../src/frontend/debug/README.md)
+for the full walkthrough mechanics.

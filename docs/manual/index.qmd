@@ -1,0 +1,32 @@
+# Preface {.unnumbered}
+
+This is the operator manual for the **Live Reactivation Decoder** — a
+standalone PyQt6 application that trains an EEG decoder offline and then runs
+it against a live data stream in real time.
+
+The app has two phases:
+
+- **Phase 1 (offline):** an operator-driven workflow that loads a recording,
+  preprocesses it, evaluates candidate decoding timepoints, and trains the
+  final decoder, producing a `decoder_pipeline.joblib` artifact.
+- **Phase 2 (online):** real-time inference against a Lab Streaming Layer
+  (LSL) stream, consuming the artifact produced by Phase 1.
+
+## Who this manual is for
+
+This manual is written for the **operator** running an experiment session —
+the person sitting at the decoding laptop. It assumes you can open a terminal
+and run commands, but it does not assume you know the internals of the
+decoding pipeline.
+
+For architecture and developer documentation, see the references under
+[`docs/`](../) instead.
+
+## How to read this manual
+
+- If you are setting up a new machine, start with **Getting started**
+  (@sec-overview through @sec-hardware).
+- If the machine is already set up and you just need to run a session, jump to
+  **Using the app** (@sec-phase1 and @sec-phase2).
+- Keep **Reference** (configuration and troubleshooting) close by during a
+  session.

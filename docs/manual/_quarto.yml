@@ -1,0 +1,45 @@
+project:
+  type: book
+  output-dir: _book
+
+book:
+  title: "Live Reactivation Decoder — Operator Manual"
+  subtitle: "Offline training & live inference for the EEG reactivation decoder"
+  author: "Reactivation Decoder Team"
+  date: today
+  search: true
+  chapters:
+    - index.qmd
+    - part: "Getting started"
+      chapters:
+        - chapters/01-overview.qmd
+        - chapters/02-installation.qmd
+        - chapters/03-hardware-lsl.qmd
+    - part: "Using the app"
+      chapters:
+        - chapters/04-phase1-offline.qmd
+        - chapters/05-phase2-live.qmd
+    - part: "Reference"
+      chapters:
+        - chapters/06-configuration.qmd
+        - chapters/07-troubleshooting.qmd
+  appendices:
+    - chapters/90-debug-walkthrough.qmd
+
+format:
+  pdf:
+    documentclass: scrreprt
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    colorlinks: true
+    geometry:
+      - top=25mm
+      - bottom=25mm
+      - left=25mm
+      - right=25mm
+  # HTML is configured now so the future in-app Help button renders from the
+  # same sources with one command — but PDF is the milestone-1 deliverable.
+  html:
+    theme: cosmo
+    toc: true

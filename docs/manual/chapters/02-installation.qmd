@@ -1,0 +1,82 @@
+# Installation {#sec-installation}
+
+This chapter gets the application running on a fresh machine.
+
+## Prerequisites
+
+- **Python 3.10 or newer** (3.11 recommended).
+- **Windows** if you intend to run Phase 2 against live hardware (see
+  @sec-hardware). Phase 1 works on Windows, macOS, Linux, and WSL.
+
+## Create a virtual environment
+
+From the `online_decoder/` directory:
+
+```bash
+python -m venv .venv
+```
+
+Activate it:
+
+- **Windows PowerShell**
+
+  ```powershell
+  .venv\Scripts\Activate.ps1
+  ```
+
+  If PowerShell blocks the activation script the first time, allow signed
+  local scripts for your user, then activate again:
+
+  ```powershell
+  Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+  ```
+
+- **macOS / Linux / WSL**
+
+  ```bash
+  source .venv/bin/activate
+  ```
+
+## Install dependencies
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+`requirements-dev.txt` includes `requirements.txt` (via its first-line `-r`
+reference), so this single install covers both the app's runtime
+dependencies and the tooling needed to run the tests and the helper scripts.
+
+::: callout-note
+For a strict production-runtime-only install, use
+`pip install -r requirements.txt` instead — but you will not be able to run
+`pytest` or the scripts under `scripts/`.
+:::
+
+## Verify the install
+
+Run the test suite:
+
+```bash
+pytest -q --deselect tests/online_phase/test_stream_worker.py
+```
+
+A healthy install reports roughly `322 passed, 1 skipped, 11 deselected`.
+The single skip is the LSL integration test (it only runs against a real
+stream); the deselected tests need a live LSL outlet and are not regressions.
+
+## Launch the app
+
+```bash
+# Windows PowerShell
+$env:PYTHONPATH = "src"
+python -m frontend.main
+```
+
+```bash
+# macOS / Linux / WSL
+PYTHONPATH=src python -m frontend.main
+```
+
+The application opens on the welcome screen. From here, @sec-phase1 walks you
+through offline training and @sec-phase2 covers the live session.

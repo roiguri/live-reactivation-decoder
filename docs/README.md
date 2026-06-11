@@ -1,5 +1,8 @@
 # Documentation
 
+- **[manual/](manual/)** — the operator manual (Quarto book → PDF). User-facing
+  guide for running Phase 1 and Phase 2. See [manual/README.md](manual/README.md)
+  to build it.
 - **[architecture/](architecture/)** — how the system works now; the maintained,
   source-of-truth-adjacent references:
   - [backend_architecture.md](architecture/backend_architecture.md) — backend surface & contracts
