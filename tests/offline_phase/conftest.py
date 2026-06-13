@@ -66,7 +66,6 @@ def preprocessing_settings() -> dict:
             "iclabel": {"enabled": False},
         },
         "epochs": {"tmin": -0.1, "tmax": 0.5, "baseline": [None, 0]},
-        "final_resample": {"target_rate": 100},
     }
     return PreprocessingSettings(**overrides).model_dump()
 

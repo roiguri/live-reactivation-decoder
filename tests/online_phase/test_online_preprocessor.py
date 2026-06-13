@@ -66,19 +66,21 @@ def _make_online_state(
 
 
 def _make_settings(
-    target_rate: int = TARGET_SFREQ,
     resample_filter_stage: str = "early",
 ) -> dict:
-    """Build a minimal valid preprocessing_settings dict."""
+    """Build a minimal valid preprocessing_settings dict.
+
+    The target sample rate is no longer configurable (hardcoded
+    FINAL_RESAMPLE_RATE = 100); decimation tests vary input_sfreq instead.
+    """
     return {
         "highpass": {"l_freq": 1.0, "method": "iir"},
         "notch": {"freq": 50.0},
-        "final_resample": {"target_rate": target_rate},
         "resample_filter_stage": resample_filter_stage,
     }
 
 
-def _make_offline_settings(target_rate: int = TARGET_SFREQ) -> dict:
+def _make_offline_settings() -> dict:
     """Build preprocessing settings matching the new PreprocessingSettings schema.
 
     Mirrors tests/offline_phase/conftest.py — fastica + 4 components, ICLabel
@@ -96,7 +98,6 @@ def _make_offline_settings(target_rate: int = TARGET_SFREQ) -> dict:
             "iclabel": {"enabled": False},
         },
         "epochs": {"tmin": -0.1, "tmax": 0.5, "baseline": [None, 0]},
-        "final_resample": {"target_rate": int(target_rate)},
     }
     return PreprocessingSettings(**overrides).model_dump()
 
@@ -155,9 +156,9 @@ class TestConstructorValidation:
             OnlinePreprocessor(valid_settings, state)
 
     def test_raises_on_non_integer_decimation_ratio(self):
-        settings = _make_settings(target_rate=256)  # 1000 / 256 = 3.90625
+        # Target is fixed at 100 Hz; a 1050 Hz input gives ratio 10.5 (non-integer).
         with pytest.raises(ValueError, match="integer multiple"):
-            OnlinePreprocessor(settings, _make_online_state(sfreq_offline=256.0))
+            OnlinePreprocessor(_make_settings(), _make_online_state(), input_sfreq=1050.0)
 
     def test_raises_on_invalid_resample_filter_stage(self):
         settings = _make_settings(resample_filter_stage="middle")
@@ -539,46 +540,48 @@ class TestDecimate:
             np.testing.assert_array_equal(t1, t2)
 
 
-@pytest.mark.parametrize("target_sfreq", [100, 200, 250, 500])
+# Target is fixed at FINAL_RESAMPLE_RATE = 100 Hz, so decimation factors are
+# now driven by the input rate: 1000/500/400/200 → factors 10/5/4/2 (the same
+# factors the old target-rate parametrization [100,200,250,500] exercised).
+@pytest.mark.parametrize("input_sfreq", [1000.0, 500.0, 400.0, 200.0])
 class TestDecimateFrequencies:
-    """Decimation correctness across a range of integer-ratio target sample rates.
+    """Decimation correctness across a range of integer-ratio input sample rates.
 
-    Decimation now requires input_sfreq to be an integer multiple of
-    target_sfreq (see OnlinePreprocessor.__init__). Non-integer ratios
-    such as 1000→128, 1000→256, 1000→512 are rejected at construction,
-    so they're not exercised here.
+    Decimation requires input_sfreq to be an integer multiple of the fixed
+    100 Hz target (see OnlinePreprocessor.__init__). Non-integer ratios are
+    rejected at construction, so they're not exercised here.
     """
 
-    def _make_p(self, target_sfreq: int) -> OnlinePreprocessor:
+    def _make_p(self, input_sfreq: float) -> OnlinePreprocessor:
         return OnlinePreprocessor(
-            _make_settings(target_rate=target_sfreq),
-            _make_online_state(sfreq_offline=float(target_sfreq)),
-            input_sfreq=INPUT_SFREQ,
+            _make_settings(),
+            _make_online_state(),
+            input_sfreq=input_sfreq,
         )
 
-    def _make_data(self, n: int) -> tuple[np.ndarray, np.ndarray]:
+    def _make_data(self, n: int, input_sfreq: float) -> tuple[np.ndarray, np.ndarray]:
         rng = np.random.default_rng(42)
         data = rng.standard_normal((n, N_CHANNELS)) * 1e-5
-        timestamps = np.arange(n, dtype=float) / INPUT_SFREQ
+        timestamps = np.arange(n, dtype=float) / input_sfreq
         return data, timestamps
 
-    def test_output_count_approximately_correct(self, target_sfreq: int) -> None:
+    def test_output_count_approximately_correct(self, input_sfreq: float) -> None:
         """n_out must be within ±1 of n_in × target / input."""
         n_in = 1000
-        data, ts = self._make_data(n_in)
-        out, _ = self._make_p(target_sfreq)._decimate(data, ts)
-        expected = n_in * target_sfreq / INPUT_SFREQ
+        data, ts = self._make_data(n_in, input_sfreq)
+        out, _ = self._make_p(input_sfreq)._decimate(data, ts)
+        expected = n_in * TARGET_SFREQ / input_sfreq
         assert abs(out.shape[0] - expected) <= 1
 
-    def test_chunked_equals_single_pass_count(self, target_sfreq: int) -> None:
+    def test_chunked_equals_single_pass_count(self, input_sfreq: float) -> None:
         """Total output samples are the same regardless of how input is chunked."""
         n_total = 500
         chunk_size = 40
-        data, ts = self._make_data(n_total)
+        data, ts = self._make_data(n_total, input_sfreq)
 
-        _, single_ts = self._make_p(target_sfreq)._decimate(data, ts)
+        _, single_ts = self._make_p(input_sfreq)._decimate(data, ts)
 
-        p_chunked = self._make_p(target_sfreq)
+        p_chunked = self._make_p(input_sfreq)
         n_chunked = 0
         for start in range(0, n_total, chunk_size):
             _, o = p_chunked._decimate(
@@ -588,15 +591,15 @@ class TestDecimateFrequencies:
 
         assert len(single_ts) == n_chunked
 
-    def test_output_timestamps_are_subset_of_input(self, target_sfreq: int) -> None:
+    def test_output_timestamps_are_subset_of_input(self, input_sfreq: float) -> None:
         """Every output timestamp must correspond to a real input sample."""
-        data, ts = self._make_data(200)
-        _, out_ts = self._make_p(target_sfreq)._decimate(data, ts)
+        data, ts = self._make_data(200, input_sfreq)
+        _, out_ts = self._make_p(input_sfreq)._decimate(data, ts)
         for t in out_ts:
             assert np.any(np.isclose(ts, t)), f"Output timestamp {t:.6f} not in input"
 
-    def test_empty_input_returns_empty(self, target_sfreq: int) -> None:
-        out, out_ts = self._make_p(target_sfreq)._decimate(
+    def test_empty_input_returns_empty(self, input_sfreq: float) -> None:
+        out, out_ts = self._make_p(input_sfreq)._decimate(
             np.empty((0, N_CHANNELS)), np.empty((0,))
         )
         assert out.shape == (0, N_CHANNELS)

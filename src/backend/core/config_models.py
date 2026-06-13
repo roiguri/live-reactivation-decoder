@@ -101,12 +101,6 @@ class EpochSettings(BaseModel):
         return self
 
 
-class FinalResampleSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    target_rate: int = Field(default=100, ge=1)  # paper-aligned training rate
-
-
 class PreprocessingSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -120,7 +114,6 @@ class PreprocessingSettings(BaseModel):
     notch: NotchSettings = Field(default_factory=NotchSettings)
     ica: ICASettings = Field(default_factory=ICASettings)
     epochs: EpochSettings = Field(default_factory=EpochSettings)
-    final_resample: FinalResampleSettings = Field(default_factory=FinalResampleSettings)
 
 
 class CVSettings(BaseModel):

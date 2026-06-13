@@ -7,6 +7,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
+from . import preprocessing_constants as pc
 from .config_models import ExperimentConfig
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,16 @@ class SettingsManager:
         )
 
     def get_preprocessing_params(self) -> dict[str, Any]:
-        """Returns the 'preprocessing' block as a plain dict (random_state is a model field)."""
+        """Returns the configurable 'preprocessing' block as a plain dict.
+
+        This is the *backend pipeline* input — only the fields still carried in
+        the config (e.g. ``resample_filter_stage``, ``random_state``, and any
+        not-yet-hardcoded blocks). The hardcoded recipe lives in
+        :mod:`backend.core.preprocessing_constants` and is read there directly by
+        the preprocessors, so it is intentionally absent here. For the full
+        effective recipe (config + constants) used by the UI, see
+        :meth:`get_settings`.
+        """
         return self._config.preprocessing.model_dump()
 
     def get_decoder_settings(self) -> dict[str, Any]:
@@ -45,9 +55,33 @@ class SettingsManager:
         return {e.name: e.id for e in self._config.markers_mapping.events}
 
     def get_settings(self) -> dict[str, Any]:
-        """Returns all config sections in one dict for display purposes."""
+        """Returns the full effective settings in one dict for the UI.
+
+        The ``preprocessing`` section is the *effective recipe*: the configurable
+        fields (from the YAML) merged with the hardcoded blocks re-attached from
+        :mod:`backend.core.preprocessing_constants`, in their historical shape.
+        This keeps the frontend's view shape-stable across the block-by-block
+        hardcoding migration — values move from config to constants under the
+        hood, but consumers keep reading the same dict. The raw config stays
+        decapsulated behind :meth:`get_preprocessing_params` (backend pipeline).
+        """
+        preprocessing = self.get_preprocessing_params()
+        preprocessing.update(self._hardcoded_recipe())
         return {
-            "preprocessing": self.get_preprocessing_params(),
+            "preprocessing": preprocessing,
             "decoders":      self.get_decoder_settings(),
             "event_mapping": self.get_event_mapping(),
+        }
+
+    @staticmethod
+    def _hardcoded_recipe() -> dict[str, Any]:
+        """The preprocessing blocks now fixed as constants, in config-dict shape.
+
+        Single source of truth: :mod:`backend.core.preprocessing_constants`. Each
+        block migrated out of the YAML schema is re-attached here so the effective
+        recipe surfaced by :meth:`get_settings` stays complete.
+        """
+        return {
+            "lowpass": {"h_freq": pc.LOWPASS_H_FREQ, "method": pc.LOWPASS_METHOD},
+            "final_resample": {"target_rate": pc.FINAL_RESAMPLE_RATE},
         }

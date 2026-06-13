@@ -18,3 +18,8 @@ class TestLowpass:
 
     def test_method(self):
         assert pc.LOWPASS_METHOD == "iir"
+
+
+class TestFinalResample:
+    def test_rate(self):
+        assert pc.FINAL_RESAMPLE_RATE == 100

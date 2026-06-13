@@ -7,7 +7,11 @@ import mne
 import numpy as np
 from scipy.signal import firwin, iirnotch, lfilter, sosfilt, sosfilt_zi, tf2sos
 
-from backend.core.preprocessing_constants import LOWPASS_H_FREQ, LOWPASS_METHOD
+from backend.core.preprocessing_constants import (
+    FINAL_RESAMPLE_RATE,
+    LOWPASS_H_FREQ,
+    LOWPASS_METHOD,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +52,7 @@ class OnlinePreprocessor:
         self._validate_inputs(preprocessing_settings, online_state)
 
         self._input_sfreq = float(input_sfreq)
-        self._target_sfreq = float(
-            preprocessing_settings["final_resample"]["target_rate"]
-        )
+        self._target_sfreq = float(FINAL_RESAMPLE_RATE)
         self._resample_filter_stage: str = preprocessing_settings.get(
             "resample_filter_stage", "early"
         )

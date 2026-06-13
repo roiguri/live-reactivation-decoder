@@ -76,16 +76,33 @@ preprocessor only.
    `debug_snapshots/*` configs** (not committed, but they must load under the new schema);
    first check each block's value matches the constant before stripping — a divergent value
    would mean the cached `.joblib` artifact was trained with a different recipe.
-5. Add/extend `tests/core/test_preprocessing_constants.py` to pin the new constant(s) to
-   their previously-shipped value.
-6. Run `pytest tests/`; confirm green.
+5. **Re-attach the block to `SettingsManager._hardcoded_recipe()`** from its constant, in the
+   historical config-dict shape (see "Frontend settings access" below). This keeps the
+   effective recipe surfaced by `get_settings()` complete and shape-stable.
+6. Add/extend `tests/core/test_preprocessing_constants.py` to pin the new constant(s), and the
+   `TestGetSettings` assertions in `test_settings_manager.py` to cover the re-attached block.
+7. Run `pytest tests/`; confirm green.
 
 > Note: two debug snapshots (`colors_window50`, `colors_window50_restclass`) already fail to
 > load under the current schema due to experimental **decoder** keys (`feature_window_ms`,
 > `rest_class`) that predate this work — unrelated to the preprocessing migration.
 
-`get_preprocessing_params()` keeps returning a (shrinking) dict throughout; `random_state`
-stays inside it until the final cleanup step.
+### Frontend settings access (decision 2026-06-13)
+The frontend reads config only through the `session.settings` dict (it imports no backend
+internals). To keep that contract while the recipe moves to constants, `SettingsManager` has
+two distinct surfaces:
+- **`get_preprocessing_params()`** — the *backend pipeline* input. Only the fields still in
+  the config (shrinks as blocks migrate; `random_state` + `resample_filter_stage` remain).
+  The preprocessors read the hardcoded blocks from `preprocessing_constants` directly, not
+  from this dict.
+- **`get_settings()`** — the *frontend's effective view*. Takes the shrinking config params
+  and merges the hardcoded recipe back in via `_hardcoded_recipe()` (single source:
+  `preprocessing_constants`), in the historical shape. **Its output is shape-stable across the
+  whole migration** — values move config→constants under the hood, consumers are untouched.
+
+This decapsulates raw config (backend) from the effective view (frontend). It replaced an
+earlier idea of an `AppSession.target_sfreq` property / a typed `AppSettings` class — both
+rejected in favour of keeping the existing dict presentation.
 
 ---
 
@@ -109,12 +126,26 @@ stays inside it until the final cleanup step.
   test fixtures. Full suite green (445 passed, 1 skipped).
 - (Pilot chosen over `resample_filter_stage` because lowpass is truly inert — every test
   already used 40.0/iir, and it gates no code path.)
+- Recipe re-attachment to `get_settings()._hardcoded_recipe()` landed in Step 3 (when the
+  frontend-settings-access design was decided); the lowpass block is now part of the
+  shape-stable effective view.
 
-### Step 3 — `final_resample.target_rate`
-- Add `FINAL_RESAMPLE_RATE = 100`. Offline `_resample` + online `__init__`. (Both.)
-- Note: the online test suite parametrizes `target_rate` (e.g. 256 for the non-integer
-  decimation-error test) — those tests must construct the preprocessor with a forced rate
-  some other way, or move to asserting the hardcoded ratio.
+### Step 3 — `final_resample.target_rate` ✅ DONE
+- Added `FINAL_RESAMPLE_RATE = 100`; offline `_resample` + online `__init__` read it.
+- Removed `FinalResampleSettings` + field; stripped `final_resample` from the 3 tracked YAMLs
+  + the 5 debug snapshots (all were 100 — no divergence).
+- **Frontend access (decided during this step):** `phase2_screen.py` reads
+  `settings["preprocessing"]["final_resample"]["target_rate"]` to size the live chart. Rather
+  than a new accessor, `SettingsManager.get_settings()` now re-attaches the hardcoded recipe
+  via `_hardcoded_recipe()` (see "Frontend settings access" above), so the screen is
+  **unchanged**. `get_preprocessing_params()` (backend input) stays minimal.
+- Tests: rewrote `TestDecimateFrequencies` to parametrize **`input_sfreq`** ([1000,500,400,200]
+  → factors 10/5/4/2) instead of `target_rate`, since the target is now fixed at 100; rewrote
+  `test_raises_on_non_integer_decimation_ratio` to use `input_sfreq=1050`; dropped the
+  `target_rate` params from the settings factories; removed the two obsolete `final_resample`
+  range-rejection tests; added a `TestGetSettings` class asserting the re-attached recipe;
+  updated the session fake to source the rate from the constant. Full suite green
+  (448 passed, 1 skipped).
 
 ### Step 4 — `notch.freq`
 - Add `NOTCH_FREQ = 50.0` (document `None` disables). Offline `_notch` + online `__init__`. (Both.)

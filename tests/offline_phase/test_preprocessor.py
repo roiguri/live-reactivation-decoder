@@ -13,6 +13,7 @@ import mne
 import numpy as np
 import pytest
 
+from backend.core.preprocessing_constants import FINAL_RESAMPLE_RATE
 from backend.offline_phase.preprocessor import OfflinePreprocessor
 
 
@@ -133,7 +134,7 @@ class TestStage3Filter:
         p.raw = synthetic_raw.copy()
         p.settings = preprocessing_settings  # stage == "early"
         p.run_step1a_filter()
-        assert p.raw.info["sfreq"] == preprocessing_settings["final_resample"]["target_rate"]
+        assert p.raw.info["sfreq"] == FINAL_RESAMPLE_RATE
 
     def test_late_stage_keeps_raw_full_rate(
         self, make_preprocessor, synthetic_raw, preprocessing_settings
@@ -152,7 +153,7 @@ class TestStage3Filter:
         decimated data. Regression: the late path previously left a stale
         full-rate `times` (data 121 samples but len(times) 1201)."""
         p = make_preprocessor
-        p.settings = preprocessing_settings  # final_resample.target_rate == 100
+        p.settings = preprocessing_settings  # FINAL_RESAMPLE_RATE == 100
 
         # Full-rate (1000 Hz) epochs: 4 trials, 8 ch, 600 samples (-0.1..0.5 s).
         sfreq, n_times, n_trials = 1000.0, 600, 4
@@ -368,7 +369,7 @@ class TestStage7ApplyAndSave:
         p = self._prepare(make_preprocessor, synthetic_raw_with_events, preprocessing_settings)
         assert p.epochs.info["sfreq"] == synthetic_raw_with_events.info["sfreq"]
         p.run_step2_apply_and_save([], tmp_path / "epochs")
-        assert p.epochs.info["sfreq"] == preprocessing_settings["final_resample"]["target_rate"]
+        assert p.epochs.info["sfreq"] == FINAL_RESAMPLE_RATE
 
 
 # ── Stage 8: export_online_state ──────────────────────────────────────────

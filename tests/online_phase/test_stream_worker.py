@@ -11,7 +11,6 @@ from backend.online_phase.stream_worker import StreamWorker
 
 N_CHANNELS = 4
 INPUT_SFREQ = 1000.0
-TARGET_SFREQ = 250
 
 
 class FakeReceiver:
@@ -123,7 +122,6 @@ def _make_settings() -> dict:
     return {
         "highpass": {"l_freq": 1.0, "method": "iir"},
         "notch": None,
-        "final_resample": {"target_rate": TARGET_SFREQ},
         "resample_filter_stage": "early",
     }
 

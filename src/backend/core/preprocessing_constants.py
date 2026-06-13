@@ -21,3 +21,8 @@ from __future__ import annotations
 # zero-phase FIR).
 LOWPASS_H_FREQ: float = 40.0
 LOWPASS_METHOD: str = "iir"
+
+# ── Final resample ──────────────────────────────────────────────────────────────
+# Paper-aligned training/inference sample rate. The online decimation requires
+# the LSL input rate to be an integer multiple of this.
+FINAL_RESAMPLE_RATE: int = 100

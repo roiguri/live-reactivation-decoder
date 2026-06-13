@@ -43,9 +43,6 @@ preprocessing:
     tmax: 1.0
     baseline: null        # paper-aligned; set to [null, 0] to re-enable pre-stim mean subtraction
 
-  final_resample:
-    target_rate: 100      # paper-aligned training rate
-
 decoders:
   model: LDA          # LDA | Logistic | SVM
   params:             # valid keys depend on model (see config_models.py _VALID_PARAMS_BY_MODEL)

@@ -4,6 +4,7 @@ import re
 import pytest
 from pydantic import ValidationError
 
+from backend.core import preprocessing_constants as pc
 from backend.core.settings_manager import SettingsManager
 
 
@@ -53,7 +54,7 @@ class TestGetPreprocessingParams:
         params = SettingsManager(sample_config_path).get_preprocessing_params()
         assert {
             "random_state", "resample_filter_stage", "channel_hygiene",
-            "highpass", "notch", "ica", "epochs", "final_resample",
+            "highpass", "notch", "ica", "epochs",
         } <= params.keys()
 
     def test_filter_values(self, sample_config_path):
@@ -72,7 +73,6 @@ class TestGetPreprocessingParams:
 
     def test_defaults_applied_when_section_omitted(self, tmp_config_file, minimal_valid_data):
         params = SettingsManager(tmp_config_file(minimal_valid_data)).get_preprocessing_params()
-        assert params["final_resample"]["target_rate"] == 100
         assert params["resample_filter_stage"] == "early"
         assert params["ica"]["n_components"] is None
         assert params["epochs"]["baseline"] is None
@@ -121,6 +121,38 @@ class TestGetEventMapping:
         minimal_valid_data["decoders"] = {"model": "LDA", "tasks": []}
         mapping = SettingsManager(tmp_config_file(minimal_valid_data)).get_event_mapping()
         assert mapping == {"target": 99}
+
+
+class TestGetSettings:
+    """get_settings() is the UI's effective view: config + the hardcoded recipe.
+
+    Blocks hardcoded as constants are absent from get_preprocessing_params()
+    (backend input) but re-attached here so the frontend's dict stays complete
+    and shape-stable across the migration.
+    """
+
+    def test_has_all_top_level_sections(self, sample_config_path):
+        settings = SettingsManager(sample_config_path).get_settings()
+        assert set(settings.keys()) == {"preprocessing", "decoders", "event_mapping"}
+
+    def test_reattaches_hardcoded_recipe_absent_from_params(self, sample_config_path):
+        sm = SettingsManager(sample_config_path)
+        params = sm.get_preprocessing_params()
+        pre = sm.get_settings()["preprocessing"]
+        # Hardcoded blocks: missing from the backend params, present in the view.
+        for block in ("lowpass", "final_resample"):
+            assert block not in params
+            assert block in pre
+
+    def test_recipe_values_match_constants(self, sample_config_path):
+        pre = SettingsManager(sample_config_path).get_settings()["preprocessing"]
+        assert pre["lowpass"] == {"h_freq": pc.LOWPASS_H_FREQ, "method": pc.LOWPASS_METHOD}
+        assert pre["final_resample"] == {"target_rate": pc.FINAL_RESAMPLE_RATE}
+
+    def test_still_carries_configurable_fields(self, sample_config_path):
+        pre = SettingsManager(sample_config_path).get_settings()["preprocessing"]
+        assert pre["resample_filter_stage"] == "early"
+        assert "highpass" in pre
 
 
 class TestAllowedValues:
@@ -187,16 +219,6 @@ class TestRangeValidation:
 
     def test_rejects_tmin_above_tmax(self, tmp_config_file, minimal_valid_data):
         minimal_valid_data["preprocessing"] = {"epochs": {"tmin": 0.8, "tmax": -0.2}}
-        with pytest.raises(ValueError):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
-    def test_rejects_zero_final_resample_rate(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"final_resample": {"target_rate": 0}}
-        with pytest.raises(ValueError):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
-    def test_rejects_negative_final_resample_rate(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"final_resample": {"target_rate": -100}}
         with pytest.raises(ValueError):
             SettingsManager(tmp_config_file(minimal_valid_data))
 

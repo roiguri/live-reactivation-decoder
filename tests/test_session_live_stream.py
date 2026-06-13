@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from backend.core.preprocessing_constants import FINAL_RESAMPLE_RATE
 from backend.core.session_paths import SessionPaths
 from backend.online_phase.artifact_loader import DecoderPipelineArtifact
 from backend.session import AppSession, LiveStreamSession
@@ -60,7 +61,7 @@ class FakePreprocessor:
     def __init__(self, preprocessing_settings, online_state) -> None:
         self.preprocessing_settings = preprocessing_settings
         self.online_state = online_state
-        self.target_sfreq = preprocessing_settings["final_resample"]["target_rate"]
+        self.target_sfreq = float(FINAL_RESAMPLE_RATE)
         self.input_sfreq = 1000.0
         FakePreprocessor.instances.append(self)
 

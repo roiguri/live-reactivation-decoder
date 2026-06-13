@@ -33,9 +33,6 @@ preprocessing:
     tmax: 1.0
     baseline: [null, 0]
 
-  final_resample:
-    target_rate: 100
-
 decoders:
   model: LDA
   params:

@@ -48,9 +48,6 @@ preprocessing:
     tmax: 1.0
     baseline: null
 
-  final_resample:
-    target_rate: 100
-
 decoders:
   model: Logistic
   params:

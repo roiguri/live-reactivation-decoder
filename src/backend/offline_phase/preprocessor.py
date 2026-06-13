@@ -8,7 +8,11 @@ import mne
 import numpy as np
 from scipy.signal import firwin, lfilter
 
-from backend.core.preprocessing_constants import LOWPASS_H_FREQ, LOWPASS_METHOD
+from backend.core.preprocessing_constants import (
+    FINAL_RESAMPLE_RATE,
+    LOWPASS_H_FREQ,
+    LOWPASS_METHOD,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -277,7 +281,7 @@ class OfflinePreprocessor:
         ``self.epochs = self._resample(self.epochs)`` — building a new object is
         what keeps the time vector consistent with the decimated data.
         """
-        target = float(self.settings["final_resample"]["target_rate"])
+        target = float(FINAL_RESAMPLE_RATE)
         current = float(inst.info["sfreq"])
         if current <= target:
             return inst
