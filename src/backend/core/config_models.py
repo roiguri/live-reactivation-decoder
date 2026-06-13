@@ -30,12 +30,6 @@ class NotchSettings(BaseModel):
     freq: Optional[float] = Field(default=50.0, gt=0)
 
 
-class LowpassSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    h_freq: float = Field(default=40.0, gt=0)
-    method: Literal["iir", "fir"] = "iir"
-
 # TODO: verify this is correct and up-to-date with mne-icalabel. We want to be sure we catch any typos in the config's ``iclabel.drop_labels`` list, which would otherwise silently let real artifacts through (as discovered when comparing against the ``tomer_preprocessing_new`` reference).
 # The exact strings ``mne-icalabel`` returns from
 # ``label_components(..., method='iclabel')`` — see
@@ -126,7 +120,6 @@ class PreprocessingSettings(BaseModel):
     notch: NotchSettings = Field(default_factory=NotchSettings)
     ica: ICASettings = Field(default_factory=ICASettings)
     epochs: EpochSettings = Field(default_factory=EpochSettings)
-    lowpass: LowpassSettings = Field(default_factory=LowpassSettings)
     final_resample: FinalResampleSettings = Field(default_factory=FinalResampleSettings)
 
 

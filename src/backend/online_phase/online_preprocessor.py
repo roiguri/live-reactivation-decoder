@@ -7,6 +7,8 @@ import mne
 import numpy as np
 from scipy.signal import firwin, iirnotch, lfilter, sosfilt, sosfilt_zi, tf2sos
 
+from backend.core.preprocessing_constants import LOWPASS_H_FREQ, LOWPASS_METHOD
+
 logger = logging.getLogger(__name__)
 
 
@@ -104,14 +106,13 @@ class OnlinePreprocessor:
         else:
             self._notch_sos = None
 
-        # Low-pass filter (40 Hz default, IIR causal).
-        lp = preprocessing_settings["lowpass"]
+        # Low-pass filter (40 Hz, IIR causal).
         lp_params = mne.filter.create_filter(
             data=None,
             sfreq=self._input_sfreq,
             l_freq=None,
-            h_freq=lp["h_freq"],
-            method=lp.get("method", "iir"),
+            h_freq=LOWPASS_H_FREQ,
+            method=LOWPASS_METHOD,
             verbose=False,
         )
         self._lowpass_sos: np.ndarray = lp_params["sos"]
@@ -142,7 +143,7 @@ class OnlinePreprocessor:
             self._n_eeg, len(self._good_indices), len(self._bad_indices),
             self._input_sfreq, self._target_sfreq, self._decimation,
             self._resample_filter_stage, hp["l_freq"],
-            notch_freq if notch_freq is not None else "off", lp["h_freq"],
+            notch_freq if notch_freq is not None else "off", LOWPASS_H_FREQ,
             len(self._ica_exclude),
         )
 

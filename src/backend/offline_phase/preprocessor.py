@@ -8,6 +8,8 @@ import mne
 import numpy as np
 from scipy.signal import firwin, lfilter
 
+from backend.core.preprocessing_constants import LOWPASS_H_FREQ, LOWPASS_METHOD
+
 logger = logging.getLogger(__name__)
 
 
@@ -256,13 +258,12 @@ class OfflinePreprocessor:
             logger.info("Notch: %s Hz", freq)
 
     def _lowpass(self, inst) -> None:
-        lp = self.settings["lowpass"]
         # causal: parity with streaming OnlinePreprocessor (scipy.signal.sosfilt).
         inst.filter(
-            l_freq=None, h_freq=lp["h_freq"], method=lp.get("method", "iir"),
+            l_freq=None, h_freq=LOWPASS_H_FREQ, method=LOWPASS_METHOD,
             phase="forward", verbose=False,
         )
-        logger.info("Lowpass: h_freq=%s Hz (%s)", lp["h_freq"], lp.get("method", "iir"))
+        logger.info("Lowpass: h_freq=%s Hz (%s)", LOWPASS_H_FREQ, LOWPASS_METHOD)
 
     def _resample(self, inst):
         """Causal anti-alias FIR + integer decimation, mirroring online ``_decimate``.

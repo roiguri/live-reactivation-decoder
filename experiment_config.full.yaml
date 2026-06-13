@@ -48,10 +48,6 @@ preprocessing:
     tmax: 1.0
     baseline: null
 
-  lowpass:
-    h_freq: 40.0
-    method: iir
-
   final_resample:
     target_rate: 100
 

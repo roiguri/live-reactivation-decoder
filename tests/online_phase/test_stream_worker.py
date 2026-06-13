@@ -123,7 +123,6 @@ def _make_settings() -> dict:
     return {
         "highpass": {"l_freq": 1.0, "method": "iir"},
         "notch": None,
-        "lowpass": {"h_freq": 40.0, "method": "iir"},
         "final_resample": {"target_rate": TARGET_SFREQ},
         "resample_filter_stage": "early",
     }

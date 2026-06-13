@@ -73,7 +73,6 @@ def _make_settings(
     return {
         "highpass": {"l_freq": 1.0, "method": "iir"},
         "notch": {"freq": 50.0},
-        "lowpass": {"h_freq": 40.0, "method": "iir"},
         "final_resample": {"target_rate": target_rate},
         "resample_filter_stage": resample_filter_stage,
     }

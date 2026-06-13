@@ -53,14 +53,13 @@ class TestGetPreprocessingParams:
         params = SettingsManager(sample_config_path).get_preprocessing_params()
         assert {
             "random_state", "resample_filter_stage", "channel_hygiene",
-            "highpass", "notch", "ica", "epochs", "lowpass", "final_resample",
+            "highpass", "notch", "ica", "epochs", "final_resample",
         } <= params.keys()
 
     def test_filter_values(self, sample_config_path):
         params = SettingsManager(sample_config_path).get_preprocessing_params()
         assert params["highpass"]["l_freq"] == 1.0
         assert params["highpass"]["method"] == "iir"
-        assert params["lowpass"]["h_freq"] == 40.0
         assert params["notch"]["freq"] == 50.0
         assert params["resample_filter_stage"] == "early"
 
@@ -183,11 +182,6 @@ class TestAllowedValues:
 class TestRangeValidation:
     def test_rejects_non_positive_highpass(self, tmp_config_file, minimal_valid_data):
         minimal_valid_data["preprocessing"] = {"highpass": {"l_freq": 0.0}}
-        with pytest.raises(ValueError):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
-    def test_rejects_non_positive_lowpass(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"lowpass": {"h_freq": -1.0}}
         with pytest.raises(ValueError):
             SettingsManager(tmp_config_file(minimal_valid_data))
 
