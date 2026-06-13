@@ -20,6 +20,11 @@ class TestLowpass:
         assert pc.LOWPASS_METHOD == "iir"
 
 
+class TestNotch:
+    def test_freq(self):
+        assert pc.NOTCH_FREQ == 50.0
+
+
 class TestFinalResample:
     def test_rate(self):
         assert pc.FINAL_RESAMPLE_RATE == 100

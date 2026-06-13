@@ -16,9 +16,6 @@ preprocessing:
     l_freq: 1.0
     method: iir
 
-  notch:
-    freq: 50.0
-
   ica:
     method: infomax
     extended: true

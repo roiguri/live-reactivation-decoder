@@ -44,8 +44,8 @@ populated directly from the constants module.
 | Block | OfflinePreprocessor | OnlinePreprocessor | Notes | Status |
 |---|---|---|---|---|
 | `lowpass` | yes | yes | h_freq + method | **done (Step 2)** |
-| `final_resample.target_rate` | yes (`_resample`) | yes | scalar | |
-| `notch.freq` | yes | yes | scalar, `None` disables | |
+| `final_resample.target_rate` | yes (`_resample`) | yes | scalar | **done (Step 3)** |
+| `notch.freq` | yes | yes | scalar, `None` disables | **done (Step 4)** |
 | `highpass` | yes | yes | l_freq + method | |
 | `epochs` | yes | **no** | tmin/tmax/baseline; baked into matrices offline | |
 | `channel_hygiene` | yes | **no** | 4 flags | |
@@ -147,8 +147,15 @@ rejected in favour of keeping the existing dict presentation.
   updated the session fake to source the rate from the constant. Full suite green
   (448 passed, 1 skipped).
 
-### Step 4 — `notch.freq`
-- Add `NOTCH_FREQ = 50.0` (document `None` disables). Offline `_notch` + online `__init__`. (Both.)
+### Step 4 — `notch.freq` ✅ DONE
+- Added `NOTCH_FREQ: float | None = 50.0`; offline `_notch` + online `__init__` (+ log line) read it.
+- Removed `NotchSettings` + field; stripped `notch` from the 3 tracked YAMLs + 5 debug snapshots
+  (all `freq: 50.0` — no divergence). Re-attached to `_hardcoded_recipe()`.
+- Kept the `None`-disables guard in both preprocessors (notch is hardcoded **on**; the disable
+  branch survives as dev-toggleable/defensive code). Rewrote `test_no_notch_leaves_50hz_intact`
+  to monkeypatch `NOTCH_FREQ=None` (the disable path is no longer config-reachable);
+  simplified `test_notch_attenuates_50hz` to the default; extended pin + `TestGetSettings`
+  coverage. Full suite green (449 passed, 1 skipped).
 
 ### Step 5 — `highpass`
 - Add `HIGHPASS_L_FREQ = 0.1`, `HIGHPASS_METHOD = "iir"`. Offline `_highpass` + online `__init__`. (Both.)

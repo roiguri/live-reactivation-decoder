@@ -75,7 +75,6 @@ def _make_settings(
     """
     return {
         "highpass": {"l_freq": 1.0, "method": "iir"},
-        "notch": {"freq": 50.0},
         "resample_filter_stage": resample_filter_stage,
     }
 
@@ -293,24 +292,27 @@ class TestApplyFilter:
         assert ratio_db < -40, f"Expected >40 dB attenuation, got {ratio_db:.1f} dB"
 
     def test_notch_attenuates_50hz(self):
-        """50 Hz sinusoid must be strongly attenuated when notch=50."""
+        """50 Hz sinusoid must be strongly attenuated (notch is hardcoded at 50 Hz)."""
         n = int(INPUT_SFREQ * 5)
         data = _make_sinusoid(50.0, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
-        settings = _make_settings()
-        settings["notch"] = {"freq": 50.0}
-        p = OnlinePreprocessor(settings, _make_online_state(), INPUT_SFREQ)
+        p = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
         out = p._apply_filter(data)
         half = n // 2
         ratio_db = 20 * np.log10(out[half:].std() / (data[half:].std() + 1e-30) + 1e-30)
         assert ratio_db < -20, f"Expected notch attenuation, got {ratio_db:.1f} dB"
 
-    def test_no_notch_leaves_50hz_intact(self):
-        """50 Hz sinusoid must NOT be attenuated when notch is disabled."""
+    def test_no_notch_leaves_50hz_intact(self, monkeypatch):
+        """With the notch constant disabled (None), a 50 Hz sinusoid passes through.
+
+        The notch is hardcoded on (NOTCH_FREQ = 50.0); this exercises the
+        still-present disable branch by patching the constant to None.
+        """
+        monkeypatch.setattr(
+            "backend.online_phase.online_preprocessor.NOTCH_FREQ", None
+        )
         n = int(INPUT_SFREQ * 5)
         data = _make_sinusoid(50.0, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
-        settings = _make_settings()
-        settings["notch"] = None
-        p = OnlinePreprocessor(settings, _make_online_state(), INPUT_SFREQ)
+        p = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
         out = p._apply_filter(data)
         half = n // 2
         ratio_db = 20 * np.log10(out[half:].std() / (data[half:].std() + 1e-30) + 1e-30)

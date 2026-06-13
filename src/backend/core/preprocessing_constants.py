@@ -22,6 +22,11 @@ from __future__ import annotations
 LOWPASS_H_FREQ: float = 40.0
 LOWPASS_METHOD: str = "iir"
 
+# ── Notch filter ──────────────────────────────────────────────────────────────
+# Line-noise notch at the regional mains frequency. ``None`` disables the notch
+# entirely (the preprocessors keep a guard for that case).
+NOTCH_FREQ: float | None = 50.0
+
 # ── Final resample ──────────────────────────────────────────────────────────────
 # Paper-aligned training/inference sample rate. The online decimation requires
 # the LSL input rate to be an integer multiple of this.

@@ -54,14 +54,13 @@ class TestGetPreprocessingParams:
         params = SettingsManager(sample_config_path).get_preprocessing_params()
         assert {
             "random_state", "resample_filter_stage", "channel_hygiene",
-            "highpass", "notch", "ica", "epochs",
+            "highpass", "ica", "epochs",
         } <= params.keys()
 
     def test_filter_values(self, sample_config_path):
         params = SettingsManager(sample_config_path).get_preprocessing_params()
         assert params["highpass"]["l_freq"] == 1.0
         assert params["highpass"]["method"] == "iir"
-        assert params["notch"]["freq"] == 50.0
         assert params["resample_filter_stage"] == "early"
 
     def test_epoch_baseline_is_tuple(self, sample_config_path):
@@ -140,12 +139,13 @@ class TestGetSettings:
         params = sm.get_preprocessing_params()
         pre = sm.get_settings()["preprocessing"]
         # Hardcoded blocks: missing from the backend params, present in the view.
-        for block in ("lowpass", "final_resample"):
+        for block in ("notch", "lowpass", "final_resample"):
             assert block not in params
             assert block in pre
 
     def test_recipe_values_match_constants(self, sample_config_path):
         pre = SettingsManager(sample_config_path).get_settings()["preprocessing"]
+        assert pre["notch"] == {"freq": pc.NOTCH_FREQ}
         assert pre["lowpass"] == {"h_freq": pc.LOWPASS_H_FREQ, "method": pc.LOWPASS_METHOD}
         assert pre["final_resample"] == {"target_rate": pc.FINAL_RESAMPLE_RATE}
 

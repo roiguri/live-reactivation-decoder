@@ -12,6 +12,7 @@ from backend.core.preprocessing_constants import (
     FINAL_RESAMPLE_RATE,
     LOWPASS_H_FREQ,
     LOWPASS_METHOD,
+    NOTCH_FREQ,
 )
 
 logger = logging.getLogger(__name__)
@@ -256,10 +257,9 @@ class OfflinePreprocessor:
         logger.info("Highpass: l_freq=%s Hz (%s)", hp["l_freq"], hp.get("method", "iir"))
 
     def _notch(self) -> None:
-        freq = self.settings.get("notch", {}).get("freq")
-        if freq:
-            self.raw.notch_filter(freqs=freq, verbose=False)
-            logger.info("Notch: %s Hz", freq)
+        if NOTCH_FREQ:
+            self.raw.notch_filter(freqs=NOTCH_FREQ, verbose=False)
+            logger.info("Notch: %s Hz", NOTCH_FREQ)
 
     def _lowpass(self, inst) -> None:
         # causal: parity with streaming OnlinePreprocessor (scipy.signal.sosfilt).

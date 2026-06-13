@@ -23,13 +23,6 @@ class HighpassSettings(BaseModel):
     method: Literal["iir", "fir"] = "iir"
 
 
-class NotchSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    # null in YAML disables the notch filter entirely.
-    freq: Optional[float] = Field(default=50.0, gt=0)
-
-
 # TODO: verify this is correct and up-to-date with mne-icalabel. We want to be sure we catch any typos in the config's ``iclabel.drop_labels`` list, which would otherwise silently let real artifacts through (as discovered when comparing against the ``tomer_preprocessing_new`` reference).
 # The exact strings ``mne-icalabel`` returns from
 # ``label_components(..., method='iclabel')`` — see
@@ -111,7 +104,6 @@ class PreprocessingSettings(BaseModel):
     resample_filter_stage: Literal["early", "late"] = "early"
     channel_hygiene: ChannelHygieneSettings = Field(default_factory=ChannelHygieneSettings)
     highpass: HighpassSettings = Field(default_factory=HighpassSettings)
-    notch: NotchSettings = Field(default_factory=NotchSettings)
     ica: ICASettings = Field(default_factory=ICASettings)
     epochs: EpochSettings = Field(default_factory=EpochSettings)
 

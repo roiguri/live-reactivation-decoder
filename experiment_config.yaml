@@ -23,9 +23,6 @@ preprocessing:
     l_freq: 0.1
     method: iir          # IIR keeps offline/online causal parity
 
-  notch:
-    freq: 50.0           # null disables the notch filter
-
   ica:
     method: infomax
     extended: true

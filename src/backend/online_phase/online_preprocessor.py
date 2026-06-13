@@ -11,6 +11,7 @@ from backend.core.preprocessing_constants import (
     FINAL_RESAMPLE_RATE,
     LOWPASS_H_FREQ,
     LOWPASS_METHOD,
+    NOTCH_FREQ,
 )
 
 logger = logging.getLogger(__name__)
@@ -90,7 +91,6 @@ class OnlinePreprocessor:
 
         # Filter coefficients
         hp = preprocessing_settings["highpass"]
-        notch_cfg = preprocessing_settings.get("notch")
 
         iir_params = mne.filter.create_filter(
             data=None,
@@ -101,9 +101,8 @@ class OnlinePreprocessor:
             verbose=False,
         )
         self._highpass_sos: np.ndarray = iir_params["sos"]
-        notch_freq = notch_cfg.get("freq") if notch_cfg is not None else None
-        if notch_freq is not None:
-            b, a = iirnotch(w0=float(notch_freq), Q=30, fs=self._input_sfreq)
+        if NOTCH_FREQ is not None:
+            b, a = iirnotch(w0=float(NOTCH_FREQ), Q=30, fs=self._input_sfreq)
             self._notch_sos: Optional[np.ndarray] = tf2sos(b, a)
         else:
             self._notch_sos = None
@@ -145,7 +144,7 @@ class OnlinePreprocessor:
             self._n_eeg, len(self._good_indices), len(self._bad_indices),
             self._input_sfreq, self._target_sfreq, self._decimation,
             self._resample_filter_stage, hp["l_freq"],
-            notch_freq if notch_freq is not None else "off", LOWPASS_H_FREQ,
+            NOTCH_FREQ if NOTCH_FREQ is not None else "off", LOWPASS_H_FREQ,
             len(self._ica_exclude),
         )
 
