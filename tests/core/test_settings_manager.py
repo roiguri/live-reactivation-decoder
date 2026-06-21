@@ -4,6 +4,7 @@ import re
 import pytest
 from pydantic import ValidationError
 
+from backend.core import preprocessing_constants as pc
 from backend.core.settings_manager import SettingsManager
 
 
@@ -44,39 +45,13 @@ class TestLoad:
             SettingsManager(path)
 
 
-class TestGetPreprocessingParams:
-    def test_returns_dict(self, sample_config_path):
-        params = SettingsManager(sample_config_path).get_preprocessing_params()
-        assert isinstance(params, dict)
+class TestGetRandomState:
+    def test_returns_top_level_seed(self, sample_config_path):
+        assert SettingsManager(sample_config_path).get_random_state() == 42
 
-    def test_contains_all_sections(self, sample_config_path):
-        params = SettingsManager(sample_config_path).get_preprocessing_params()
-        assert {
-            "random_state", "resample_filter_stage", "channel_hygiene",
-            "highpass", "notch", "ica", "epochs", "lowpass", "final_resample",
-        } <= params.keys()
-
-    def test_filter_values(self, sample_config_path):
-        params = SettingsManager(sample_config_path).get_preprocessing_params()
-        assert params["highpass"]["l_freq"] == 1.0
-        assert params["highpass"]["method"] == "iir"
-        assert params["lowpass"]["h_freq"] == 40.0
-        assert params["notch"]["freq"] == 50.0
-        assert params["resample_filter_stage"] == "early"
-
-    def test_epoch_baseline_is_tuple(self, sample_config_path):
-        epochs = SettingsManager(sample_config_path).get_preprocessing_params()["epochs"]
-        baseline = epochs["baseline"]
-        assert isinstance(baseline, (list, tuple))
-        assert baseline[0] is None
-        assert baseline[1] == 0.0
-
-    def test_defaults_applied_when_section_omitted(self, tmp_config_file, minimal_valid_data):
-        params = SettingsManager(tmp_config_file(minimal_valid_data)).get_preprocessing_params()
-        assert params["final_resample"]["target_rate"] == 100
-        assert params["resample_filter_stage"] == "early"
-        assert params["ica"]["n_components"] is None
-        assert params["epochs"]["baseline"] is None
+    def test_reads_custom_seed(self, tmp_config_file, minimal_valid_data):
+        minimal_valid_data["random_state"] = 7
+        assert SettingsManager(tmp_config_file(minimal_valid_data)).get_random_state() == 7
 
 
 class TestGetDecoderSettings:
@@ -124,29 +99,55 @@ class TestGetEventMapping:
         assert mapping == {"target": 99}
 
 
+class TestGetSettings:
+    """get_settings()['preprocessing'] is the UI's view of the hardcoded recipe.
+
+    The recipe is no longer in the config; get_settings assembles it from
+    preprocessing_constants so the frontend keeps reading a complete dict.
+    """
+
+    def test_has_all_top_level_sections(self, sample_config_path):
+        settings = SettingsManager(sample_config_path).get_settings()
+        assert set(settings.keys()) == {"preprocessing", "decoders", "event_mapping"}
+
+    def test_preprocessing_view_has_full_recipe(self, sample_config_path):
+        pre = SettingsManager(sample_config_path).get_settings()["preprocessing"]
+        for block in (
+            "channel_hygiene", "highpass", "notch", "lowpass", "final_resample",
+            "epochs", "ica",
+        ):
+            assert block in pre
+
+    def test_recipe_values_match_constants(self, sample_config_path):
+        pre = SettingsManager(sample_config_path).get_settings()["preprocessing"]
+        assert pre["channel_hygiene"] == {
+            "drop_emg": pc.CHANNEL_DROP_EMG,
+            "rename_hegoc_to_heog": pc.CHANNEL_RENAME_HEGOC_TO_HEOG,
+            "montage_name": pc.CHANNEL_MONTAGE_NAME,
+            "afz_case_fix": pc.CHANNEL_AFZ_CASE_FIX,
+        }
+        assert pre["highpass"] == {"l_freq": pc.HIGHPASS_L_FREQ, "method": pc.HIGHPASS_METHOD}
+        assert pre["notch"] == {"freq": pc.NOTCH_FREQ}
+        assert pre["lowpass"] == {"h_freq": pc.LOWPASS_H_FREQ, "method": pc.LOWPASS_METHOD}
+        assert pre["final_resample"] == {"target_rate": pc.FINAL_RESAMPLE_RATE}
+        assert pre["epochs"] == {
+            "tmin": pc.EPOCH_TMIN, "tmax": pc.EPOCH_TMAX, "baseline": pc.EPOCH_BASELINE,
+        }
+        assert pre["ica"] == {
+            "method": pc.ICA_METHOD,
+            "extended": pc.ICA_EXTENDED,
+            "n_components": pc.ICA_N_COMPONENTS,
+            "fit_l_freq": pc.ICA_FIT_L_FREQ,
+            "iclabel": {
+                "enabled": pc.ICLABEL_ENABLED,
+                "drop_labels": list(pc.ICLABEL_DROP_LABELS),
+            },
+        }
+
+
 class TestAllowedValues:
-    def test_rejects_invalid_highpass_method(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"highpass": {"l_freq": 0.1, "method": "butterworth"}}
-        with pytest.raises(ValueError):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
-    def test_rejects_invalid_ica_method(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"ica": {"method": "extended_infomax"}}
-        with pytest.raises(ValueError):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
-    def test_rejects_invalid_resample_filter_stage(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"resample_filter_stage": "middle"}
-        with pytest.raises(ValueError):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
     def test_rejects_invalid_decoder_model(self, tmp_config_file, minimal_valid_data):
         minimal_valid_data["decoders"]["model"] = "XGBoost"
-        with pytest.raises(ValueError):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
-    def test_rejects_extra_key_in_highpass(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"highpass": {"l_freq": 0.1, "typo_key": 99}}
         with pytest.raises(ValueError):
             SettingsManager(tmp_config_file(minimal_valid_data))
 
@@ -155,64 +156,10 @@ class TestAllowedValues:
         with pytest.raises(ValueError):
             SettingsManager(tmp_config_file(minimal_valid_data))
 
-    def test_rejects_unknown_iclabel_drop_label(self, tmp_config_file, minimal_valid_data):
-        # ICLabel returns canonical strings with spaces ("muscle artifact",
-        # not "muscle"). Short-name typos used to silently match nothing
-        # downstream, letting real artifacts through. Validator must catch
-        # any string outside ICLabel's known seven categories.
-        minimal_valid_data["preprocessing"] = {
-            "ica": {"iclabel": {"drop_labels": ["muscle", "eye blink"]}}
-        }
-        with pytest.raises(ValueError, match="muscle"):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
-    def test_accepts_canonical_iclabel_labels(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {
-            "ica": {"iclabel": {"drop_labels": [
-                "muscle artifact", "eye blink", "heart beat",
-                "line noise", "channel noise", "other",
-            ]}}
-        }
-        sm = SettingsManager(tmp_config_file(minimal_valid_data))
-        assert sm.get_preprocessing_params()["ica"]["iclabel"]["drop_labels"] == [
-            "muscle artifact", "eye blink", "heart beat",
-            "line noise", "channel noise", "other",
-        ]
-
 
 class TestRangeValidation:
-    def test_rejects_non_positive_highpass(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"highpass": {"l_freq": 0.0}}
-        with pytest.raises(ValueError):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
-    def test_rejects_non_positive_lowpass(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"lowpass": {"h_freq": -1.0}}
-        with pytest.raises(ValueError):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
-    def test_rejects_tmin_above_tmax(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"epochs": {"tmin": 0.8, "tmax": -0.2}}
-        with pytest.raises(ValueError):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
-    def test_rejects_zero_final_resample_rate(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"final_resample": {"target_rate": 0}}
-        with pytest.raises(ValueError):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
-    def test_rejects_negative_final_resample_rate(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"final_resample": {"target_rate": -100}}
-        with pytest.raises(ValueError):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
     def test_rejects_cv_k_below_2(self, tmp_config_file, minimal_valid_data):
         minimal_valid_data["decoders"]["cv"] = {"k": 1}
-        with pytest.raises(ValueError):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
-    def test_rejects_zero_ica_components(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"ica": {"n_components": 0}}
         with pytest.raises(ValueError):
             SettingsManager(tmp_config_file(minimal_valid_data))
 

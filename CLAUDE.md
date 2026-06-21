@@ -75,7 +75,13 @@ python scripts/smoke_stream_worker.py --pipeline /path/to/decoder_pipeline.jobli
 
 The experiment config lives in `experiment_config.yaml`. Its schema is defined in `src/backend/core/config_models.py` using Pydantic v2. When the YAML schema changes, update the Pydantic models.
 
-The `preprocessing:` block follows the new reference pipeline (see `docs/old/preprocessing_migration_plan.md`): `resample_filter_stage` (`early`|`late`), `channel_hygiene`, `highpass`, `notch`, `ica` (incl. `iclabel`), `epochs`, `lowpass`, `final_resample`. The old `bandpass`/`resample`/`reject_criteria` sections are gone. Both offline and online phases now consume the same positional `online_state` schema (`eeg_chunk_indices`, `bad_indices`, ICA matrices, interp weights, pre_whitener — no channel names).
+The config now carries only `experiment_info`, `random_state`, `decoders`, and `markers_mapping`. **The `preprocessing:` block is gone** — the whole preprocessing recipe (channel hygiene, highpass, notch, lowpass, final resample, epochs, ICA + ICLabel, and the fixed early LP+decimate ordering) is **hardcoded as named constants in `src/backend/core/preprocessing_constants.py`** and imported directly by both preprocessors (see `docs/plans/minimize_settings_plan.md` for the block-by-block migration). To change the recipe, edit the constants, not the YAML.
+
+- `OfflinePreprocessor(data_dir, random_state, raw=None)` takes only the seed; everything else comes from the constants.
+- `OnlinePreprocessor(online_state, input_sfreq=1000.0)` is **fully config-independent** — it reads the recipe from constants, so Phase 2 can never diverge from the training recipe.
+- `SettingsManager.get_settings()["preprocessing"]` re-assembles the full recipe from the constants (in the historical dict shape) purely so the frontend's read-only view stays complete; `get_random_state()` exposes the seed for the offline ICA fit.
+
+Both offline and online phases consume the same positional `online_state` schema (`eeg_chunk_indices`, `bad_indices`, ICA matrices, interp weights, pre_whitener — no channel names).
 
 ## When to Update This File
 

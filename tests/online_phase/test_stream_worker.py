@@ -11,7 +11,6 @@ from backend.online_phase.stream_worker import StreamWorker
 
 N_CHANNELS = 4
 INPUT_SFREQ = 1000.0
-TARGET_SFREQ = 250
 
 
 class FakeReceiver:
@@ -119,18 +118,8 @@ def _make_online_state() -> dict:
     }
 
 
-def _make_settings() -> dict:
-    return {
-        "highpass": {"l_freq": 1.0, "method": "iir"},
-        "notch": None,
-        "lowpass": {"h_freq": 40.0, "method": "iir"},
-        "final_resample": {"target_rate": TARGET_SFREQ},
-        "resample_filter_stage": "early",
-    }
-
-
 def _make_preprocessor() -> OnlinePreprocessor:
-    return OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+    return OnlinePreprocessor(_make_online_state(), INPUT_SFREQ)
 
 
 def _make_worker(receiver: FakeReceiver, poll_interval_sec: float = 0.001) -> StreamWorker:

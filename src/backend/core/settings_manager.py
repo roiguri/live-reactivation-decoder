@@ -7,6 +7,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
+from . import preprocessing_constants as pc
 from .config_models import ExperimentConfig
 
 logger = logging.getLogger(__name__)
@@ -32,9 +33,9 @@ class SettingsManager:
             len(self._config.decoders.tasks),
         )
 
-    def get_preprocessing_params(self) -> dict[str, Any]:
-        """Returns the 'preprocessing' block as a plain dict (random_state is a model field)."""
-        return self._config.preprocessing.model_dump()
+    def get_random_state(self) -> int:
+        """The top-level reproducibility seed (consumed by the offline ICA fit)."""
+        return self._config.random_state
 
     def get_decoder_settings(self) -> dict[str, Any]:
         """Returns the 'decoders' block as a plain dict (random_state is a model field)."""
@@ -45,9 +46,50 @@ class SettingsManager:
         return {e.name: e.id for e in self._config.markers_mapping.events}
 
     def get_settings(self) -> dict[str, Any]:
-        """Returns all config sections in one dict for display purposes."""
+        """Returns the full effective settings in one dict for the UI.
+
+        The ``preprocessing`` section is the hardcoded recipe, assembled from
+        :mod:`backend.core.preprocessing_constants` (the recipe is no longer in the
+        config — see the migration in docs/plans/minimize_settings_plan.md). The
+        ``decoders`` / ``event_mapping`` sections come from the YAML config.
+        """
         return {
-            "preprocessing": self.get_preprocessing_params(),
+            "preprocessing": self._hardcoded_recipe(),
             "decoders":      self.get_decoder_settings(),
             "event_mapping": self.get_event_mapping(),
+        }
+
+    @staticmethod
+    def _hardcoded_recipe() -> dict[str, Any]:
+        """The full preprocessing recipe as constants, in config-dict shape.
+
+        Single source of truth: :mod:`backend.core.preprocessing_constants`. This
+        is what the UI reads as ``session.settings["preprocessing"]``.
+        """
+        return {
+            "channel_hygiene": {
+                "drop_emg": pc.CHANNEL_DROP_EMG,
+                "rename_hegoc_to_heog": pc.CHANNEL_RENAME_HEGOC_TO_HEOG,
+                "montage_name": pc.CHANNEL_MONTAGE_NAME,
+                "afz_case_fix": pc.CHANNEL_AFZ_CASE_FIX,
+            },
+            "ica": {
+                "method": pc.ICA_METHOD,
+                "extended": pc.ICA_EXTENDED,
+                "n_components": pc.ICA_N_COMPONENTS,
+                "fit_l_freq": pc.ICA_FIT_L_FREQ,
+                "iclabel": {
+                    "enabled": pc.ICLABEL_ENABLED,
+                    "drop_labels": list(pc.ICLABEL_DROP_LABELS),
+                },
+            },
+            "highpass": {"l_freq": pc.HIGHPASS_L_FREQ, "method": pc.HIGHPASS_METHOD},
+            "notch": {"freq": pc.NOTCH_FREQ},
+            "lowpass": {"h_freq": pc.LOWPASS_H_FREQ, "method": pc.LOWPASS_METHOD},
+            "final_resample": {"target_rate": pc.FINAL_RESAMPLE_RATE},
+            "epochs": {
+                "tmin": pc.EPOCH_TMIN,
+                "tmax": pc.EPOCH_TMAX,
+                "baseline": pc.EPOCH_BASELINE,
+            },
         }

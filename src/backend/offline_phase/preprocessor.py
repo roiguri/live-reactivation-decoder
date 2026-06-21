@@ -8,6 +8,28 @@ import mne
 import numpy as np
 from scipy.signal import firwin, lfilter
 
+from backend.core.preprocessing_constants import (
+    CHANNEL_AFZ_CASE_FIX,
+    CHANNEL_DROP_EMG,
+    CHANNEL_MONTAGE_NAME,
+    CHANNEL_RENAME_HEGOC_TO_HEOG,
+    EPOCH_BASELINE,
+    EPOCH_TMAX,
+    EPOCH_TMIN,
+    FINAL_RESAMPLE_RATE,
+    HIGHPASS_L_FREQ,
+    HIGHPASS_METHOD,
+    ICA_EXTENDED,
+    ICA_FIT_L_FREQ,
+    ICA_METHOD,
+    ICA_N_COMPONENTS,
+    ICLABEL_DROP_LABELS,
+    ICLABEL_ENABLED,
+    LOWPASS_H_FREQ,
+    LOWPASS_METHOD,
+    NOTCH_FREQ,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -25,28 +47,27 @@ class OfflinePreprocessor:
     interactive windows, which must run on the GUI main thread:
 
     1. ``run_step1a_filter()`` (worker)
-       Channel hygiene → high-pass → notch → (if ``resample_filter_stage ==
-       "early"``) low-pass + resample on the raw. Returns the ``Raw`` so the
-       UI can pop ``raw.plot(block=True)`` for manual bad-channel marking.
+       Channel hygiene → high-pass → notch → low-pass + resample on the raw.
+       Returns the ``Raw`` so the UI can pop ``raw.plot(block=True)`` for manual
+       bad-channel marking.
     2. ``set_bad_channels(bads)`` (main thread, after the window closes)
        Stores the operator's bad-channel selection.
     3. ``run_step1b_fit_ica(event_mapping)`` (worker)
        Interpolate bads → epoch → average reference → fit ICA (HP-only fit
        copy) → ICLabel pre-suggestion. Returns ``(ica, epochs, suggested)``.
     4. ``run_step2_apply_and_save(exclude, event_mapping, output_dir)`` (worker)
-       Apply ICA → (if ``resample_filter_stage == "late"``) low-pass +
-       resample on the epochs → save ``{subject}_epo.fif``.
+       Apply ICA → save ``{subject}_epo.fif``.
     """
 
     def __init__(
         self,
         data_dir: Path,
-        preprocessing_settings: dict[str, Any],
+        random_state: int,
         raw: Optional[mne.io.Raw] = None,
     ) -> None:
         self.data_dir = Path(data_dir)
         self.subject_id = self.data_dir.name
-        self.settings = preprocessing_settings
+        self._random_state = random_state
 
         self.raw: Optional[mne.io.Raw] = raw
         self.epochs: Optional[mne.Epochs] = None
@@ -70,8 +91,7 @@ class OfflinePreprocessor:
 
     def run_step1a_filter(self) -> mne.io.Raw:
         """
-        Channel hygiene → high-pass → notch → (early variant only) low-pass +
-        resample on the raw.
+        Channel hygiene → high-pass → notch → low-pass + resample on the raw.
 
         Returns:
             The filtered ``Raw`` for the UI's interactive bad-channel window.
@@ -86,13 +106,12 @@ class OfflinePreprocessor:
             )
 
         self._original_ch_names = list(self.raw.ch_names)
-        logger.info("Filtering raw (stage=%s)", self._stage)
+        logger.info("Filtering raw")
         self._channel_hygiene()
         self._highpass()
         self._notch()
-        if self._stage == "early":
-            self._lowpass(self.raw)
-            self.raw = self._resample(self.raw)
+        self._lowpass(self.raw)
+        self.raw = self._resample(self.raw)
         return self.raw
 
     def set_bad_channels(self, bads: list[str]) -> None:
@@ -138,7 +157,7 @@ class OfflinePreprocessor:
         output_dir: Path,
     ) -> dict[str, Any]:
         """
-        Apply ICA → (late variant only) low-pass + resample on epochs → save.
+        Apply ICA → save ``{subject}_epo.fif``.
 
         Args:
             exclude_components: Final operator-confirmed ICA component indices.
@@ -157,11 +176,6 @@ class OfflinePreprocessor:
 
         self.ica.exclude = list(exclude_components)
         self.ica.apply(self.epochs, verbose=False)
-
-        if self._stage == "late":
-            self._lowpass(self.epochs)
-            self.epochs = self._resample(self.epochs)
-
         self._save(Path(output_dir))
         # Raw has done its job (filtered/resampled in place, epoched into
         # self.epochs). Nothing past Step 2 reads it — release the reference
@@ -204,31 +218,22 @@ class OfflinePreprocessor:
             "pre_whitener": self.ica.pre_whitener_.copy(),
         }
 
-    # ── Settings helpers ──────────────────────────────────────────────────────
-
-    @property
-    def _stage(self) -> str:
-        return self.settings.get("resample_filter_stage", "early")
-
     # ── Private: channel hygiene ──────────────────────────────────────────────
 
     def _channel_hygiene(self) -> None:
         """EMG drop, HEGOC→HEOG rename, hardware montage with the AFz case fix."""
-        ch = self.settings.get("channel_hygiene", {})
-
-        if ch.get("drop_emg", True) and "EMG" in self.raw.ch_names:
+        if CHANNEL_DROP_EMG and "EMG" in self.raw.ch_names:
             self.raw.set_channel_types({"EMG": "emg"})
             self.raw.drop_channels(["EMG"])
             self._dropped_channels.append("EMG")
             logger.info("Channel hygiene: dropped EMG")
 
-        if ch.get("rename_hegoc_to_heog", True) and "HEGOC" in self.raw.ch_names:
+        if CHANNEL_RENAME_HEGOC_TO_HEOG and "HEGOC" in self.raw.ch_names:
             self.raw.rename_channels({"HEGOC": "HEOG"})
             logger.info("Channel hygiene: renamed HEGOC → HEOG")
 
-        montage_name = ch.get("montage_name", "easycap-M1")
-        montage = mne.channels.make_standard_montage(montage_name)
-        if ch.get("afz_case_fix", True) and "AFz" in montage.ch_names:
+        montage = mne.channels.make_standard_montage(CHANNEL_MONTAGE_NAME)
+        if CHANNEL_AFZ_CASE_FIX and "AFz" in montage.ch_names:
             montage.ch_names[montage.ch_names.index("AFz")] = "Afz"
         self.raw.set_montage(
             montage, match_case=False, on_missing="warn", verbose=False
@@ -241,28 +246,25 @@ class OfflinePreprocessor:
     # ── Private: filtering / resampling ───────────────────────────────────────
 
     def _highpass(self) -> None:
-        hp = self.settings["highpass"]
         # causal: parity with streaming OnlinePreprocessor (scipy.signal.sosfilt).
         self.raw.filter(
-            l_freq=hp["l_freq"], h_freq=None, method=hp.get("method", "iir"),
+            l_freq=HIGHPASS_L_FREQ, h_freq=None, method=HIGHPASS_METHOD,
             phase="forward", verbose=False,
         )
-        logger.info("Highpass: l_freq=%s Hz (%s)", hp["l_freq"], hp.get("method", "iir"))
+        logger.info("Highpass: l_freq=%s Hz (%s)", HIGHPASS_L_FREQ, HIGHPASS_METHOD)
 
     def _notch(self) -> None:
-        freq = self.settings.get("notch", {}).get("freq")
-        if freq:
-            self.raw.notch_filter(freqs=freq, verbose=False)
-            logger.info("Notch: %s Hz", freq)
+        if NOTCH_FREQ:
+            self.raw.notch_filter(freqs=NOTCH_FREQ, verbose=False)
+            logger.info("Notch: %s Hz", NOTCH_FREQ)
 
     def _lowpass(self, inst) -> None:
-        lp = self.settings["lowpass"]
         # causal: parity with streaming OnlinePreprocessor (scipy.signal.sosfilt).
         inst.filter(
-            l_freq=None, h_freq=lp["h_freq"], method=lp.get("method", "iir"),
+            l_freq=None, h_freq=LOWPASS_H_FREQ, method=LOWPASS_METHOD,
             phase="forward", verbose=False,
         )
-        logger.info("Lowpass: h_freq=%s Hz (%s)", lp["h_freq"], lp.get("method", "iir"))
+        logger.info("Lowpass: h_freq=%s Hz (%s)", LOWPASS_H_FREQ, LOWPASS_METHOD)
 
     def _resample(self, inst):
         """Causal anti-alias FIR + integer decimation, mirroring online ``_decimate``.
@@ -276,7 +278,7 @@ class OfflinePreprocessor:
         ``self.epochs = self._resample(self.epochs)`` — building a new object is
         what keeps the time vector consistent with the decimated data.
         """
-        target = float(self.settings["final_resample"]["target_rate"])
+        target = float(FINAL_RESAMPLE_RATE)
         current = float(inst.info["sfreq"])
         if current <= target:
             return inst
@@ -393,7 +395,6 @@ class OfflinePreprocessor:
     # ── Private: epoching / reference / ICA ───────────────────────────────────
 
     def _epoch(self, event_mapping: dict[str, int]) -> mne.Epochs:
-        ep = self.settings["epochs"]
         events, found_event_id = mne.events_from_annotations(self.raw, verbose=False)
         valid_event_id = {
             name: code
@@ -406,15 +407,13 @@ class OfflinePreprocessor:
             )
             valid_event_id = found_event_id
 
-        baseline = ep.get("baseline")
-        baseline = tuple(baseline) if baseline is not None else None
         return mne.Epochs(
             self.raw,
             events,
             event_id=valid_event_id,
-            tmin=ep["tmin"],
-            tmax=ep["tmax"],
-            baseline=baseline,
+            tmin=EPOCH_TMIN,
+            tmax=EPOCH_TMAX,
+            baseline=EPOCH_BASELINE,
             detrend=0,
             event_repeated="drop",
             preload=True,
@@ -425,7 +424,6 @@ class OfflinePreprocessor:
         self.epochs.set_eeg_reference("average", projection=False, verbose=False)
 
     def _fit_ica(self) -> list[int]:
-        ica_s = self.settings["ica"]
         # TODO(decision): revisit the ICA fit-copy filter method.
         # We forced method="iir" to avoid MNE's default FIR producing a
         # ~3.3 s kernel on ~1.2 s epochs ("filter_length > signal" warning,
@@ -436,20 +434,19 @@ class OfflinePreprocessor:
         #     smoother roll-off, no minimum signal length.
         #   - FIR (default): sharper transition band, needs a longer signal.
         # If we ever move ICA fitting to full-rate raw or longer epochs,
-        # FIR may again be preferable. Consider exposing this as
-        # settings.preprocessing.ica.fit_method instead of hardcoding.
+        # FIR may again be preferable.
         fit_epochs = self.epochs.copy().filter(
-            l_freq=ica_s["fit_l_freq"], h_freq=None, method="iir", verbose=False
+            l_freq=ICA_FIT_L_FREQ, h_freq=None, method="iir", verbose=False
         )
 
         fit_params = None
-        if ica_s["method"] == "infomax":
-            fit_params = dict(extended=ica_s.get("extended", True))
+        if ICA_METHOD == "infomax":
+            fit_params = dict(extended=ICA_EXTENDED)
         self.ica = mne.preprocessing.ICA(
-            n_components=ica_s.get("n_components"),
-            method=ica_s["method"],
+            n_components=ICA_N_COMPONENTS,
+            method=ICA_METHOD,
             fit_params=fit_params,
-            random_state=self.settings["random_state"],
+            random_state=self._random_state,
             max_iter="auto",
         )
         self.ica.fit(fit_epochs, verbose=False)
@@ -457,19 +454,18 @@ class OfflinePreprocessor:
         return self._iclabel_suggest(fit_epochs)
 
     def _iclabel_suggest(self, fit_epochs: mne.Epochs) -> list[int]:
-        """Pre-select components whose ICLabel class is in ``ica.iclabel.drop_labels``."""
-        ic = self.settings["ica"].get("iclabel", {})
-        if not ic.get("enabled", True):
+        """Pre-select components whose ICLabel class is in ``ICLABEL_DROP_LABELS``."""
+        if not ICLABEL_ENABLED:
             self._component_labels = None
             return []
 
         from mne_icalabel import label_components
 
-        drop = set(ic.get("drop_labels", []))
+        drop = set(ICLABEL_DROP_LABELS)
         # TODO(decision): ICLabel was trained on EEG bandpassed [1, 100] Hz
         # and prints a calibration warning here because our pipeline runs at
-        # [0.1, 40] Hz (paper-aligned: settings.preprocessing.lowpass.h_freq
-        # = 40, final_resample.target_rate = 100). Predictions still come
+        # [0.1, 40] Hz (paper-aligned: LOWPASS_H_FREQ = 40, FINAL_RESAMPLE_RATE
+        # = 100). Predictions still come
         # through — confidence near band edges may be lower. Options when
         # we revisit:
         #   (a) accept the warning (current); document it.

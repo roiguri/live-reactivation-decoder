@@ -128,7 +128,7 @@ class OfflineOrchestrator:
 
         self._preprocessor = OfflinePreprocessor(
             data_dir=self._data_dir,
-            preprocessing_settings=self._settings.get_preprocessing_params(),
+            random_state=self._settings.get_random_state(),
             raw=self._raw,
         )
         with log_duration(logger, "Filtering", level=logging.DEBUG):

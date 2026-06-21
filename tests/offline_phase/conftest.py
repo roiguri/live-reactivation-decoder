@@ -46,44 +46,31 @@ def synthetic_raw_with_events() -> mne.io.RawArray:
     return raw
 
 
-@pytest.fixture
-def preprocessing_settings() -> dict:
-    """Preprocessing settings dict matching the new config schema.
+@pytest.fixture(autouse=True)
+def fast_ica(monkeypatch):
+    """Speed/isolation patch for the hardcoded ICA recipe.
 
-    Tuned for fast unit tests: fastica + 4 components, ICLabel off by
-    default (tests that exercise the suggestion mock it explicitly), and
-    the "early" resample/filter stage so epochs are small (100 Hz).
+    The real recipe (infomax, auto components, ICLabel enabled) is slow and
+    triggers real ICLabel inference. Offline tests fit ICA with fastica + 4
+    components and ICLabel off, matching the pre-hardcoding fixtures. Tests that
+    exercise the ICLabel suggestion re-enable it and mock ``label_components``.
     """
-    from backend.core.config_models import PreprocessingSettings
-
-    overrides = {
-        "random_state": 42,
-        "resample_filter_stage": "early",
-        "ica": {
-            "method": "fastica",
-            "n_components": 4,
-            "fit_l_freq": 1.0,
-            "iclabel": {"enabled": False},
-        },
-        "epochs": {"tmin": -0.1, "tmax": 0.5, "baseline": [None, 0]},
-        "final_resample": {"target_rate": 100},
-    }
-    return PreprocessingSettings(**overrides).model_dump()
+    import backend.offline_phase.preprocessor as preproc
+    monkeypatch.setattr(preproc, "ICA_METHOD", "fastica")
+    monkeypatch.setattr(preproc, "ICA_N_COMPONENTS", 4)
+    monkeypatch.setattr(preproc, "ICLABEL_ENABLED", False)
 
 
 @pytest.fixture
-def make_preprocessor(tmp_path, preprocessing_settings):
-    """Factory fixture: returns an OfflinePreprocessor with synthetic raw pre-loaded."""
+def make_preprocessor(tmp_path):
+    """Factory fixture: returns an OfflinePreprocessor (recipe is hardcoded;
+    only the random seed is passed in)."""
     from backend.offline_phase.preprocessor import OfflinePreprocessor
 
     data_dir = tmp_path / "Sub_001"
     data_dir.mkdir(parents=True)
 
-    preprocessor = OfflinePreprocessor(
-        data_dir=data_dir,
-        preprocessing_settings=preprocessing_settings,
-    )
-    return preprocessor
+    return OfflinePreprocessor(data_dir=data_dir, random_state=42)
 
 
 # ── ModelEvaluator fixtures ───────────────────────────────────────────────────

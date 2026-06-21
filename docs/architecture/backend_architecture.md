@@ -100,6 +100,16 @@ Because EEG processing and live inference are computationally demanding, mixing 
 * **Outputs:** Per-step return dicts shaped for the UI's specific display needs. Final `online_state` dict available via `get_online_state_for_live_phase()`.
 
 ### Components Interface
+
+> **⚠ Superseded (2026-06-21) — preprocessing config hardcoded.** The code snippets below
+> that show a `preprocessing:` config block, `PreprocessingSettings`/`ICASettings`/etc.,
+> `SettingsManager.get_preprocessing_params()`, and the preprocessors taking a
+> `preprocessing_settings` dict are **out of date**. The preprocessing recipe is now hardcoded
+> in `src/backend/core/preprocessing_constants.py`; the config holds only `experiment_info`,
+> `random_state`, `decoders`, `markers_mapping`. `OfflinePreprocessor(data_dir, random_state,
+> raw=None)` and `OnlinePreprocessor(online_state, input_sfreq=1000.0)` no longer take a
+> settings dict. See CLAUDE.md § Config Schema and `docs/plans/minimize_settings_plan.md`.
+
 ```python
 from typing import Any, Literal, Optional
 

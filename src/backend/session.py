@@ -210,7 +210,6 @@ class AppSession:
         # TODO(open): Avoid unnecessary disk reload when Phase 1 already has
         # an in-memory DecoderPipelineArtifact; see stream_worker_design.md Open §2.
         artifact = load_decoder_pipeline_artifact(decoder_pipeline_path)
-        preprocessing_settings = self._settings.get_preprocessing_params()
 
         # Replay sources need longer to advertise (MNE preload before PlayerLSL).
         is_replay = self._stream_source is not None and not isinstance(
@@ -221,10 +220,7 @@ class AppSession:
             stream_name=stream_name,
             resolve_timeout_sec=resolve_timeout_sec,
         )
-        preprocessor = OnlinePreprocessor(
-            preprocessing_settings=preprocessing_settings,
-            online_state=artifact.online_state,
-        )
+        preprocessor = OnlinePreprocessor(online_state=artifact.online_state)
         inference_engine = LiveInferenceEngine(
             models=artifact.models,
             metadata=artifact.metadata,

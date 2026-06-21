@@ -13,6 +13,7 @@ import mne
 import numpy as np
 import pytest
 
+from backend.core.preprocessing_constants import FINAL_RESAMPLE_RATE
 from backend.offline_phase.preprocessor import OfflinePreprocessor
 
 
@@ -35,19 +36,19 @@ class TestStage1Init:
     def test_subject_id_is_folder_name(self, tmp_path):
         data_dir = tmp_path / "Sub_042"
         data_dir.mkdir()
-        p = OfflinePreprocessor(data_dir, {})
+        p = OfflinePreprocessor(data_dir, 42)
         assert p.subject_id == "Sub_042"
 
     def test_raw_none_by_default(self, tmp_path):
         data_dir = tmp_path / "Sub_001"
         data_dir.mkdir()
-        p = OfflinePreprocessor(data_dir, {})
+        p = OfflinePreprocessor(data_dir, 42)
         assert p.raw is None
 
     def test_raw_set_when_passed(self, tmp_path, synthetic_raw):
         data_dir = tmp_path / "Sub_001"
         data_dir.mkdir()
-        p = OfflinePreprocessor(data_dir, {}, raw=synthetic_raw)
+        p = OfflinePreprocessor(data_dir, 42, raw=synthetic_raw)
         assert p.raw is synthetic_raw
 
     def test_step1a_raises_without_raw(self, make_preprocessor):
@@ -67,29 +68,26 @@ class TestStage1Init:
 # ── Stage 2: Channel hygiene ──────────────────────────────────────────────
 
 class TestStage2ChannelHygiene:
-    def test_emg_dropped(self, make_preprocessor, synthetic_raw, preprocessing_settings):
+    def test_emg_dropped(self, make_preprocessor, synthetic_raw):
         p = make_preprocessor
         p.raw = _raw_with_extra_channels(synthetic_raw, {"EMG": "eeg"})
-        p.settings = preprocessing_settings
         assert "EMG" in p.raw.ch_names
         p._channel_hygiene()
         assert "EMG" not in p.raw.ch_names
         assert "EMG" in p._dropped_channels
 
-    def test_hegoc_renamed_to_heog(self, make_preprocessor, synthetic_raw, preprocessing_settings):
+    def test_hegoc_renamed_to_heog(self, make_preprocessor, synthetic_raw):
         p = make_preprocessor
         p.raw = _raw_with_extra_channels(synthetic_raw, {"HEGOC": "eeg"})
-        p.settings = preprocessing_settings
         p._channel_hygiene()
         assert "HEGOC" not in p.raw.ch_names
         assert "HEOG" in p.raw.ch_names
 
     def test_montage_set_and_eeg_names_captured(
-        self, make_preprocessor, synthetic_raw, preprocessing_settings
+        self, make_preprocessor, synthetic_raw
     ):
         p = make_preprocessor
         p.raw = synthetic_raw.copy()
-        p.settings = preprocessing_settings
         p._channel_hygiene()
         assert p.raw.get_montage() is not None
         assert len(p._post_hygiene_eeg_names) == len(
@@ -97,12 +95,14 @@ class TestStage2ChannelHygiene:
         )
 
     def test_hygiene_skipped_when_disabled(
-        self, make_preprocessor, synthetic_raw, preprocessing_settings
+        self, make_preprocessor, synthetic_raw, monkeypatch
     ):
+        # drop_emg is hardcoded True; flipping the constant disables the drop.
+        monkeypatch.setattr(
+            "backend.offline_phase.preprocessor.CHANNEL_DROP_EMG", False
+        )
         p = make_preprocessor
         p.raw = _raw_with_extra_channels(synthetic_raw, {"EMG": "eeg"})
-        preprocessing_settings["channel_hygiene"]["drop_emg"] = False
-        p.settings = preprocessing_settings
         p._channel_hygiene()
         assert "EMG" in p.raw.ch_names
 
@@ -110,49 +110,35 @@ class TestStage2ChannelHygiene:
 # ── Stage 3: Filtering / resampling ───────────────────────────────────────
 
 class TestStage3Filter:
-    def test_highpass_changes_data(self, make_preprocessor, synthetic_raw, preprocessing_settings):
+    def test_highpass_changes_data(self, make_preprocessor, synthetic_raw):
         p = make_preprocessor
         p.raw = synthetic_raw.copy()
-        p.settings = preprocessing_settings
         original = p.raw.get_data().copy()
         p._highpass()
         assert not np.allclose(p.raw.get_data(), original)
 
-    def test_highpass_keeps_sfreq(self, make_preprocessor, synthetic_raw, preprocessing_settings):
+    def test_highpass_keeps_sfreq(self, make_preprocessor, synthetic_raw):
         p = make_preprocessor
         p.raw = synthetic_raw.copy()
-        p.settings = preprocessing_settings
         sfreq_before = p.raw.info["sfreq"]
         p._highpass()
         assert p.raw.info["sfreq"] == sfreq_before
 
-    def test_early_stage_resamples_raw_to_target(
-        self, make_preprocessor, synthetic_raw, preprocessing_settings
+    def test_step1a_resamples_raw_to_target(
+        self, make_preprocessor, synthetic_raw
     ):
         p = make_preprocessor
         p.raw = synthetic_raw.copy()
-        p.settings = preprocessing_settings  # stage == "early"
         p.run_step1a_filter()
-        assert p.raw.info["sfreq"] == preprocessing_settings["final_resample"]["target_rate"]
-
-    def test_late_stage_keeps_raw_full_rate(
-        self, make_preprocessor, synthetic_raw, preprocessing_settings
-    ):
-        p = make_preprocessor
-        p.raw = synthetic_raw.copy()
-        preprocessing_settings["resample_filter_stage"] = "late"
-        p.settings = preprocessing_settings
-        p.run_step1a_filter()
-        assert p.raw.info["sfreq"] == synthetic_raw.info["sfreq"]
+        assert p.raw.info["sfreq"] == FINAL_RESAMPLE_RATE
 
     def test_resample_epochs_returns_consistent_times(
-        self, make_preprocessor, preprocessing_settings
+        self, make_preprocessor
     ):
         """_resample on Epochs must return epochs whose time vector matches the
         decimated data. Regression: the late path previously left a stale
         full-rate `times` (data 121 samples but len(times) 1201)."""
         p = make_preprocessor
-        p.settings = preprocessing_settings  # final_resample.target_rate == 100
 
         # Full-rate (1000 Hz) epochs: 4 trials, 8 ch, 600 samples (-0.1..0.5 s).
         sfreq, n_times, n_trials = 1000.0, 600, 4
@@ -176,11 +162,10 @@ class TestStage3Filter:
         assert out.times[0] == pytest.approx(-0.1)         # tmin preserved
 
     def test_resample_raw_returns_consistent_times(
-        self, make_preprocessor, synthetic_raw, preprocessing_settings
+        self, make_preprocessor, synthetic_raw
     ):
         """_resample on Raw returns a decimated Raw with consistent times."""
         p = make_preprocessor
-        p.settings = preprocessing_settings
         out = p._resample(synthetic_raw.copy())
         assert out.info["sfreq"] == 100.0
         assert len(out.times) == out.get_data().shape[-1]
@@ -194,21 +179,19 @@ class TestStage4BadChannels:
         assert make_preprocessor._bad_channels == ["Fp1", "Oz"]
 
     def test_no_bads_yields_none_weights(
-        self, make_preprocessor, synthetic_raw, preprocessing_settings
+        self, make_preprocessor, synthetic_raw
     ):
         p = make_preprocessor
         p.raw = synthetic_raw.copy()
-        p.settings = preprocessing_settings
         p.set_bad_channels([])
         p._interpolate_bads()
         assert p._interp_weights is None
 
     def test_interp_weights_correctness(
-        self, make_preprocessor, synthetic_raw, preprocessing_settings
+        self, make_preprocessor, synthetic_raw
     ):
         p = make_preprocessor
         p.raw = synthetic_raw.copy()
-        p.settings = preprocessing_settings
 
         eeg_picks = mne.pick_types(p.raw.info, eeg=True)
         eeg_ch_names = [p.raw.ch_names[i] for i in eeg_picks]
@@ -231,40 +214,36 @@ class TestStage4BadChannels:
 # ── Stage 5: Epoching ─────────────────────────────────────────────────────
 
 class TestStage5Epoch:
-    def test_epochs_shape(self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings):
+    def test_epochs_shape(self, make_preprocessor, synthetic_raw_with_events):
         p = make_preprocessor
         p.raw = synthetic_raw_with_events.copy()
-        p.settings = preprocessing_settings
         p.epochs = p._epoch({"red": 1, "green": 2})
         assert isinstance(p.epochs, mne.Epochs)
         assert p.epochs.get_data().ndim == 3
 
     def test_epoch_event_ids_match_mapping(
-        self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings
+        self, make_preprocessor, synthetic_raw_with_events
     ):
         p = make_preprocessor
         p.raw = synthetic_raw_with_events.copy()
-        p.settings = preprocessing_settings
         p.epochs = p._epoch({"red": 1, "green": 2})
         assert "red" in p.epochs.event_id
         assert "green" in p.epochs.event_id
 
     def test_unrecognised_events_fall_back(
-        self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings
+        self, make_preprocessor, synthetic_raw_with_events
     ):
         p = make_preprocessor
         p.raw = synthetic_raw_with_events.copy()
-        p.settings = preprocessing_settings
         p.epochs = p._epoch({"blue": 99})
         assert len(p.epochs) > 0
 
-    def test_baseline_none_supported(
-        self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings
+    def test_baseline_is_none(
+        self, make_preprocessor, synthetic_raw_with_events
     ):
+        # EPOCH_BASELINE is hardcoded to None (paper-aligned, baseline omitted).
         p = make_preprocessor
         p.raw = synthetic_raw_with_events.copy()
-        preprocessing_settings["epochs"]["baseline"] = None
-        p.settings = preprocessing_settings
         p.epochs = p._epoch({"red": 1, "green": 2})
         assert p.epochs.baseline is None
 
@@ -272,36 +251,35 @@ class TestStage5Epoch:
 # ── Stage 6: Reference + ICA ──────────────────────────────────────────────
 
 class TestStage6ReferenceAndICA:
-    def _epoch_and_ref(self, p, raw, settings):
+    def _epoch_and_ref(self, p, raw):
         p.raw = raw.copy()
-        p.settings = settings
         p.epochs = p._epoch({"red": 1, "green": 2})
         p._reference()
         return p
 
     def test_average_reference_applied(
-        self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings
+        self, make_preprocessor, synthetic_raw_with_events
     ):
-        p = self._epoch_and_ref(make_preprocessor, synthetic_raw_with_events, preprocessing_settings)
+        p = self._epoch_and_ref(make_preprocessor, synthetic_raw_with_events)
         eeg = p.epochs.get_data(picks="eeg")
         assert np.abs(eeg.mean(axis=1)).max() < 1e-12
 
     def test_fit_ica_returns_list_and_stores_ica(
-        self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings
+        self, make_preprocessor, synthetic_raw_with_events
     ):
-        p = self._epoch_and_ref(make_preprocessor, synthetic_raw_with_events, preprocessing_settings)
+        p = self._epoch_and_ref(make_preprocessor, synthetic_raw_with_events)
         suggested = p._fit_ica()
         assert isinstance(suggested, list)
         assert isinstance(p.ica, mne.preprocessing.ICA)
         assert p.ica.exclude == []
 
     def test_iclabel_suggestion_uses_drop_labels(
-        self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings
+        self, make_preprocessor, synthetic_raw_with_events, monkeypatch
     ):
-        preprocessing_settings["ica"]["iclabel"] = {
-            "enabled": True, "drop_labels": ["eye", "muscle"],
-        }
-        p = self._epoch_and_ref(make_preprocessor, synthetic_raw_with_events, preprocessing_settings)
+        import backend.offline_phase.preprocessor as preproc
+        monkeypatch.setattr(preproc, "ICLABEL_ENABLED", True)
+        monkeypatch.setattr(preproc, "ICLABEL_DROP_LABELS", ("eye", "muscle"))
+        p = self._epoch_and_ref(make_preprocessor, synthetic_raw_with_events)
         fake = {
             "labels": ["brain", "eye", "muscle", "brain"],
             "y_pred_proba": np.array([0.91, 0.99, 0.85, 0.77]),
@@ -311,12 +289,12 @@ class TestStage6ReferenceAndICA:
         assert suggested == [1, 2]
 
     def test_component_labels_populated_aligned_by_index(
-        self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings
+        self, make_preprocessor, synthetic_raw_with_events, monkeypatch
     ):
-        preprocessing_settings["ica"]["iclabel"] = {
-            "enabled": True, "drop_labels": ["eye"],
-        }
-        p = self._epoch_and_ref(make_preprocessor, synthetic_raw_with_events, preprocessing_settings)
+        import backend.offline_phase.preprocessor as preproc
+        monkeypatch.setattr(preproc, "ICLABEL_ENABLED", True)
+        monkeypatch.setattr(preproc, "ICLABEL_DROP_LABELS", ("eye",))
+        p = self._epoch_and_ref(make_preprocessor, synthetic_raw_with_events)
         fake = {
             "labels": ["brain", "eye", "muscle", "brain"],
             "y_pred_proba": np.array([0.91, 0.99, 0.85, 0.77]),
@@ -331,10 +309,10 @@ class TestStage6ReferenceAndICA:
         ]
 
     def test_iclabel_disabled_returns_empty(
-        self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings
+        self, make_preprocessor, synthetic_raw_with_events
     ):
-        p = self._epoch_and_ref(make_preprocessor, synthetic_raw_with_events, preprocessing_settings)
-        # fixture default has iclabel disabled
+        p = self._epoch_and_ref(make_preprocessor, synthetic_raw_with_events)
+        # fast_ica fixture disables ICLabel (ICLABEL_ENABLED=False)
         assert p._fit_ica() == []
         assert p.component_labels is None
 
@@ -342,18 +320,17 @@ class TestStage6ReferenceAndICA:
 # ── Stage 7: Apply + save ─────────────────────────────────────────────────
 
 class TestStage7ApplyAndSave:
-    def _prepare(self, p, raw, settings):
+    def _prepare(self, p, raw):
         p.raw = raw.copy()
-        p.settings = settings
         p.epochs = p._epoch({"red": 1, "green": 2})
         p._reference()
         p._fit_ica()
         return p
 
     def test_fif_saved_with_subject_id(
-        self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings, tmp_path
+        self, make_preprocessor, synthetic_raw_with_events, tmp_path
     ):
-        p = self._prepare(make_preprocessor, synthetic_raw_with_events, preprocessing_settings)
+        p = self._prepare(make_preprocessor, synthetic_raw_with_events)
         out = tmp_path / "epochs"
         result = p.run_step2_apply_and_save([0], out)
         saved = list(out.glob("*.fif"))
@@ -361,22 +338,12 @@ class TestStage7ApplyAndSave:
         assert p.subject_id in saved[0].name
         assert result["n_excluded"] == 1
 
-    def test_late_stage_resamples_epochs(
-        self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings, tmp_path
-    ):
-        preprocessing_settings["resample_filter_stage"] = "late"
-        p = self._prepare(make_preprocessor, synthetic_raw_with_events, preprocessing_settings)
-        assert p.epochs.info["sfreq"] == synthetic_raw_with_events.info["sfreq"]
-        p.run_step2_apply_and_save([], tmp_path / "epochs")
-        assert p.epochs.info["sfreq"] == preprocessing_settings["final_resample"]["target_rate"]
-
 
 # ── Stage 8: export_online_state ──────────────────────────────────────────
 
 class TestStage8ExportOnlineState:
-    def _full(self, p, raw, settings):
+    def _full(self, p, raw):
         p.raw = raw.copy()
-        p.settings = settings
         p._original_ch_names = list(p.raw.ch_names)
         p._post_hygiene_eeg_names = [
             p.raw.ch_names[i] for i in mne.pick_types(p.raw.info, eeg=True)
@@ -393,9 +360,9 @@ class TestStage8ExportOnlineState:
             make_preprocessor.export_online_state()
 
     def test_returns_positional_keys_only(
-        self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings
+        self, make_preprocessor, synthetic_raw_with_events
     ):
-        p = self._full(make_preprocessor, synthetic_raw_with_events, preprocessing_settings)
+        p = self._full(make_preprocessor, synthetic_raw_with_events)
         state = p.export_online_state()
         required = {
             "eeg_chunk_indices", "bad_indices", "interp_weights",
@@ -408,28 +375,27 @@ class TestStage8ExportOnlineState:
         assert "bad_channels" not in state
 
     def test_ica_matrices_are_numpy_and_exclude_matches(
-        self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings
+        self, make_preprocessor, synthetic_raw_with_events
     ):
-        p = self._full(make_preprocessor, synthetic_raw_with_events, preprocessing_settings)
+        p = self._full(make_preprocessor, synthetic_raw_with_events)
         state = p.export_online_state()
         assert isinstance(state["ica_unmixing"], np.ndarray)
         assert isinstance(state["ica_pca_components"], np.ndarray)
         assert state["ica_exclude"] == [0]
 
     def test_pre_whitener_shape(
-        self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings
+        self, make_preprocessor, synthetic_raw_with_events
     ):
-        p = self._full(make_preprocessor, synthetic_raw_with_events, preprocessing_settings)
+        p = self._full(make_preprocessor, synthetic_raw_with_events)
         state = p.export_online_state()
         n_eeg = len(p._post_hygiene_eeg_names)
         assert state["pre_whitener"].shape == (n_eeg, 1)
 
     def test_eeg_chunk_indices_drop_emg_positionally(
-        self, make_preprocessor, synthetic_raw, preprocessing_settings
+        self, make_preprocessor, synthetic_raw
     ):
         p = make_preprocessor
         p.raw = _raw_with_extra_channels(synthetic_raw, {"EMG": "eeg"})
-        p.settings = preprocessing_settings
         emg_pos = p.raw.ch_names.index("EMG")
         n_before = len(p.raw.ch_names)
         p.run_step1a_filter()
@@ -438,9 +404,9 @@ class TestStage8ExportOnlineState:
         assert len(idx) == n_before - 1
 
     def test_bad_indices_are_post_hygiene_positions(
-        self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings
+        self, make_preprocessor, synthetic_raw_with_events
     ):
-        p = self._full(make_preprocessor, synthetic_raw_with_events, preprocessing_settings)
+        p = self._full(make_preprocessor, synthetic_raw_with_events)
         p._bad_channels = [p._post_hygiene_eeg_names[3]]
         state = p.export_online_state()
         assert state["bad_indices"] == [3]
