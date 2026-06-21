@@ -8,9 +8,9 @@ recipe lives here as named constants imported directly by both the offline
 source of truth guarantees the two phases cannot drift apart.
 
 These were migrated out of ``experiment_config.yaml`` one block at a time;
-see ``docs/plans/minimize_settings_plan.md`` for the sequence. Blocks not yet
-migrated (e.g. ``resample_filter_stage``, which still toggles the early/late
-pipeline variant) remain in the YAML schema for now.
+see ``docs/plans/minimize_settings_plan.md`` for the sequence. The pipeline
+runs a single fixed ordering (LP + decimate before the spatial transforms);
+the former ``resample_filter_stage`` early/late toggle has been removed.
 """
 
 from __future__ import annotations

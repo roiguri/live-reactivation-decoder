@@ -58,7 +58,6 @@ def preprocessing_settings() -> dict:
 
     overrides = {
         "random_state": 42,
-        "resample_filter_stage": "early",
         "ica": {
             "method": "fastica",
             "n_components": 4,

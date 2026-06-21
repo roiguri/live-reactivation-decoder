@@ -37,8 +37,8 @@ class SettingsManager:
         """Returns the configurable 'preprocessing' block as a plain dict.
 
         This is the *backend pipeline* input — only the fields still carried in
-        the config (e.g. ``resample_filter_stage``, ``random_state``, and any
-        not-yet-hardcoded blocks). The hardcoded recipe lives in
+        the config (``random_state`` and any not-yet-hardcoded blocks). The
+        hardcoded recipe lives in
         :mod:`backend.core.preprocessing_constants` and is read there directly by
         the preprocessors, so it is intentionally absent here. For the full
         effective recipe (config + constants) used by the UI, see

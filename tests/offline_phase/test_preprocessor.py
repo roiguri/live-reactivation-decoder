@@ -127,24 +127,14 @@ class TestStage3Filter:
         p._highpass()
         assert p.raw.info["sfreq"] == sfreq_before
 
-    def test_early_stage_resamples_raw_to_target(
+    def test_step1a_resamples_raw_to_target(
         self, make_preprocessor, synthetic_raw, preprocessing_settings
     ):
         p = make_preprocessor
         p.raw = synthetic_raw.copy()
-        p.settings = preprocessing_settings  # stage == "early"
-        p.run_step1a_filter()
-        assert p.raw.info["sfreq"] == FINAL_RESAMPLE_RATE
-
-    def test_late_stage_keeps_raw_full_rate(
-        self, make_preprocessor, synthetic_raw, preprocessing_settings
-    ):
-        p = make_preprocessor
-        p.raw = synthetic_raw.copy()
-        preprocessing_settings["resample_filter_stage"] = "late"
         p.settings = preprocessing_settings
         p.run_step1a_filter()
-        assert p.raw.info["sfreq"] == synthetic_raw.info["sfreq"]
+        assert p.raw.info["sfreq"] == FINAL_RESAMPLE_RATE
 
     def test_resample_epochs_returns_consistent_times(
         self, make_preprocessor, preprocessing_settings
@@ -361,15 +351,6 @@ class TestStage7ApplyAndSave:
         assert len(saved) == 1
         assert p.subject_id in saved[0].name
         assert result["n_excluded"] == 1
-
-    def test_late_stage_resamples_epochs(
-        self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings, tmp_path
-    ):
-        preprocessing_settings["resample_filter_stage"] = "late"
-        p = self._prepare(make_preprocessor, synthetic_raw_with_events, preprocessing_settings)
-        assert p.epochs.info["sfreq"] == synthetic_raw_with_events.info["sfreq"]
-        p.run_step2_apply_and_save([], tmp_path / "epochs")
-        assert p.epochs.info["sfreq"] == FINAL_RESAMPLE_RATE
 
 
 # ── Stage 8: export_online_state ──────────────────────────────────────────

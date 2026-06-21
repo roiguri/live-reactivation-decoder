@@ -91,10 +91,6 @@ class PreprocessingSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     random_state: int = DEFAULT_RANDOM_STATE
-    # Where to place LPF + decimation in the pipeline.
-    #   "early" → on raw before ICA (faster ICA, paper-aligned)
-    #   "late"  → on epochs after ICA (reference order, ICA on full-rate data)
-    resample_filter_stage: Literal["early", "late"] = "early"
     channel_hygiene: ChannelHygieneSettings = Field(default_factory=ChannelHygieneSettings)
     ica: ICASettings = Field(default_factory=ICASettings)
     epochs: EpochSettings = Field(default_factory=EpochSettings)

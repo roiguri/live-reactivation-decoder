@@ -65,30 +65,27 @@ def _make_online_state(
     }
 
 
-def _make_settings(
-    resample_filter_stage: str = "early",
-) -> dict:
-    """Build a minimal valid preprocessing_settings dict.
+def _make_settings() -> dict:
+    """Build the preprocessing_settings dict OnlinePreprocessor still accepts.
 
-    The target sample rate is no longer configurable (hardcoded
-    FINAL_RESAMPLE_RATE = 100); decimation tests vary input_sfreq instead.
+    The whole recipe (filters, resample rate, pipeline ordering) is now
+    hardcoded in ``preprocessing_constants``, so the online preprocessor reads
+    nothing from this dict — it stays empty (the arg is vestigial pending the
+    final cleanup step).
     """
-    return {
-        "resample_filter_stage": resample_filter_stage,
-    }
+    return {}
 
 
 def _make_offline_settings() -> dict:
     """Build preprocessing settings matching the new PreprocessingSettings schema.
 
     Mirrors tests/offline_phase/conftest.py — fastica + 4 components, ICLabel
-    disabled, "early" resample/filter stage so epochs stay small.
+    disabled, small epochs.
     """
     from backend.core.config_models import PreprocessingSettings
 
     overrides = {
         "random_state": 42,
-        "resample_filter_stage": "early",
         "ica": {
             "method": "fastica",
             "n_components": 4,
@@ -157,11 +154,6 @@ class TestConstructorValidation:
         # Target is fixed at 100 Hz; a 1050 Hz input gives ratio 10.5 (non-integer).
         with pytest.raises(ValueError, match="integer multiple"):
             OnlinePreprocessor(_make_settings(), _make_online_state(), input_sfreq=1050.0)
-
-    def test_raises_on_invalid_resample_filter_stage(self):
-        settings = _make_settings(resample_filter_stage="middle")
-        with pytest.raises(ValueError, match="resample_filter_stage"):
-            OnlinePreprocessor(settings, _make_online_state())
 
 
 # ── Commit 2: Properties ──────────────────────────────────────────────────────
@@ -1128,13 +1120,14 @@ class TestIntegration:
         np.testing.assert_allclose(out_a[:, good_indices], out_b[:, good_indices], atol=1e-10)
 
 
-# ── Commit 2 (migration): resample_filter_stage variant ordering ─────────────
+# ── Pipeline stage ordering ──────────────────────────────────────────────────
 
 
-class TestVariantOrdering:
-    """process_batch must call its `_apply_*` stages in the order dictated by
-    `resample_filter_stage`. We monkey-patch each stage to record the call
-    order and the input shape it saw, then assert both.
+class TestPipelineOrdering:
+    """process_batch must run its `_apply_*` stages in the fixed order: HP+notch
+    → LP → decimate → interp → avg_ref → ICA (LP+decimate before the spatial
+    transforms). We monkey-patch each stage to record the call order and the
+    input shape it saw, then assert both.
     """
 
     def _instrument(self, p: OnlinePreprocessor) -> list[tuple[str, tuple]]:
@@ -1175,12 +1168,8 @@ class TestVariantOrdering:
         timestamps = np.arange(n, dtype=float) / INPUT_SFREQ
         return data, timestamps
 
-    def test_early_variant_runs_lp_decimate_before_spatial_transforms(self):
-        p = OnlinePreprocessor(
-            _make_settings(resample_filter_stage="early"),
-            _make_online_state(),
-            INPUT_SFREQ,
-        )
+    def test_runs_lp_decimate_before_spatial_transforms(self):
+        p = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
         log = self._instrument(p)
         data, timestamps = self._make_batch()
         p.process_batch(data, timestamps)
@@ -1193,42 +1182,3 @@ class TestVariantOrdering:
         # ICA must see decimated data: 100 input samples -> 10 at 100 Hz.
         ica_input_shape = next(shape for name, shape in log if name == "ica")
         assert ica_input_shape[0] == 10
-
-    def test_late_variant_runs_lp_decimate_after_spatial_transforms(self):
-        p = OnlinePreprocessor(
-            _make_settings(resample_filter_stage="late"),
-            _make_online_state(),
-            INPUT_SFREQ,
-        )
-        log = self._instrument(p)
-        data, timestamps = self._make_batch()
-        p.process_batch(data, timestamps)
-
-        stage_names = [name for name, _ in log]
-        assert stage_names == [
-            "filter", "interp", "avg_ref", "ica", "lowpass", "decimate"
-        ]
-
-        # ICA must see full-rate data: 100 input samples stay at 1000 Hz.
-        ica_input_shape = next(shape for name, shape in log if name == "ica")
-        assert ica_input_shape[0] == 100
-
-    def test_both_variants_emit_same_output_sample_count(self):
-        """Both variants decimate the same input by 10x and emit the same length."""
-        data, timestamps = self._make_batch()
-
-        p_early = OnlinePreprocessor(
-            _make_settings(resample_filter_stage="early"),
-            _make_online_state(),
-            INPUT_SFREQ,
-        )
-        out_early, _ = p_early.process_batch(data.copy(), timestamps.copy())
-
-        p_late = OnlinePreprocessor(
-            _make_settings(resample_filter_stage="late"),
-            _make_online_state(),
-            INPUT_SFREQ,
-        )
-        out_late, _ = p_late.process_batch(data.copy(), timestamps.copy())
-
-        assert out_early.shape == out_late.shape

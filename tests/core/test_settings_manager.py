@@ -53,13 +53,8 @@ class TestGetPreprocessingParams:
     def test_contains_all_sections(self, sample_config_path):
         params = SettingsManager(sample_config_path).get_preprocessing_params()
         assert {
-            "random_state", "resample_filter_stage", "channel_hygiene",
-            "ica", "epochs",
+            "random_state", "channel_hygiene", "ica", "epochs",
         } <= params.keys()
-
-    def test_filter_values(self, sample_config_path):
-        params = SettingsManager(sample_config_path).get_preprocessing_params()
-        assert params["resample_filter_stage"] == "early"
 
     def test_epoch_baseline_is_tuple(self, sample_config_path):
         epochs = SettingsManager(sample_config_path).get_preprocessing_params()["epochs"]
@@ -70,7 +65,6 @@ class TestGetPreprocessingParams:
 
     def test_defaults_applied_when_section_omitted(self, tmp_config_file, minimal_valid_data):
         params = SettingsManager(tmp_config_file(minimal_valid_data)).get_preprocessing_params()
-        assert params["resample_filter_stage"] == "early"
         assert params["ica"]["n_components"] is None
         assert params["epochs"]["baseline"] is None
 
@@ -150,18 +144,13 @@ class TestGetSettings:
 
     def test_still_carries_configurable_fields(self, sample_config_path):
         pre = SettingsManager(sample_config_path).get_settings()["preprocessing"]
-        assert pre["resample_filter_stage"] == "early"
         assert "channel_hygiene" in pre
+        assert "ica" in pre
 
 
 class TestAllowedValues:
     def test_rejects_invalid_ica_method(self, tmp_config_file, minimal_valid_data):
         minimal_valid_data["preprocessing"] = {"ica": {"method": "extended_infomax"}}
-        with pytest.raises(ValueError):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
-    def test_rejects_invalid_resample_filter_stage(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"resample_filter_stage": "middle"}
         with pytest.raises(ValueError):
             SettingsManager(tmp_config_file(minimal_valid_data))
 

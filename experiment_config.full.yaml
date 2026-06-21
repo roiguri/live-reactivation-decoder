@@ -12,8 +12,6 @@ experiment_info:
 random_state: 42
 
 preprocessing:
-  resample_filter_stage: early
-
   channel_hygiene:
     drop_emg: true
     rename_hegoc_to_heog: true

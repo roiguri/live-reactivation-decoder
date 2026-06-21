@@ -34,17 +34,16 @@ class OfflinePreprocessor:
     interactive windows, which must run on the GUI main thread:
 
     1. ``run_step1a_filter()`` (worker)
-       Channel hygiene → high-pass → notch → (if ``resample_filter_stage ==
-       "early"``) low-pass + resample on the raw. Returns the ``Raw`` so the
-       UI can pop ``raw.plot(block=True)`` for manual bad-channel marking.
+       Channel hygiene → high-pass → notch → low-pass + resample on the raw.
+       Returns the ``Raw`` so the UI can pop ``raw.plot(block=True)`` for manual
+       bad-channel marking.
     2. ``set_bad_channels(bads)`` (main thread, after the window closes)
        Stores the operator's bad-channel selection.
     3. ``run_step1b_fit_ica(event_mapping)`` (worker)
        Interpolate bads → epoch → average reference → fit ICA (HP-only fit
        copy) → ICLabel pre-suggestion. Returns ``(ica, epochs, suggested)``.
     4. ``run_step2_apply_and_save(exclude, event_mapping, output_dir)`` (worker)
-       Apply ICA → (if ``resample_filter_stage == "late"``) low-pass +
-       resample on the epochs → save ``{subject}_epo.fif``.
+       Apply ICA → save ``{subject}_epo.fif``.
     """
 
     def __init__(
@@ -79,8 +78,7 @@ class OfflinePreprocessor:
 
     def run_step1a_filter(self) -> mne.io.Raw:
         """
-        Channel hygiene → high-pass → notch → (early variant only) low-pass +
-        resample on the raw.
+        Channel hygiene → high-pass → notch → low-pass + resample on the raw.
 
         Returns:
             The filtered ``Raw`` for the UI's interactive bad-channel window.
@@ -95,13 +93,12 @@ class OfflinePreprocessor:
             )
 
         self._original_ch_names = list(self.raw.ch_names)
-        logger.info("Filtering raw (stage=%s)", self._stage)
+        logger.info("Filtering raw")
         self._channel_hygiene()
         self._highpass()
         self._notch()
-        if self._stage == "early":
-            self._lowpass(self.raw)
-            self.raw = self._resample(self.raw)
+        self._lowpass(self.raw)
+        self.raw = self._resample(self.raw)
         return self.raw
 
     def set_bad_channels(self, bads: list[str]) -> None:
@@ -147,7 +144,7 @@ class OfflinePreprocessor:
         output_dir: Path,
     ) -> dict[str, Any]:
         """
-        Apply ICA → (late variant only) low-pass + resample on epochs → save.
+        Apply ICA → save ``{subject}_epo.fif``.
 
         Args:
             exclude_components: Final operator-confirmed ICA component indices.
@@ -166,11 +163,6 @@ class OfflinePreprocessor:
 
         self.ica.exclude = list(exclude_components)
         self.ica.apply(self.epochs, verbose=False)
-
-        if self._stage == "late":
-            self._lowpass(self.epochs)
-            self.epochs = self._resample(self.epochs)
-
         self._save(Path(output_dir))
         # Raw has done its job (filtered/resampled in place, epoched into
         # self.epochs). Nothing past Step 2 reads it — release the reference
@@ -212,12 +204,6 @@ class OfflinePreprocessor:
             # Required for online ICA to match offline numerically.
             "pre_whitener": self.ica.pre_whitener_.copy(),
         }
-
-    # ── Settings helpers ──────────────────────────────────────────────────────
-
-    @property
-    def _stage(self) -> str:
-        return self.settings.get("resample_filter_stage", "early")
 
     # ── Private: channel hygiene ──────────────────────────────────────────────
 

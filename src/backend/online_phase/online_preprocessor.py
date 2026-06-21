@@ -26,24 +26,14 @@ class OnlinePreprocessor:
     Replicates the offline pipeline's spatial transforms using matrices
     exported from Phase 1, applied to streaming micro-batches.
 
-    Pipeline order (mirrors offline). Two variants selected by
-    settings["preprocessing"]["resample_filter_stage"]:
-
-      "early" — LP + decimate run before the spatial transforms:
+    Pipeline order (mirrors offline — LP + decimate run before the spatial
+    transforms):
         1. High-pass + notch filter (causal IIR, persistent zi)
         2. Low-pass filter at h_freq Hz (causal IIR, persistent zi)
         3. Decimate to target rate (FIR anti-alias + integer subsample)
         4. Interpolate bad channels (fixed weight matrix)
         5. Average reference
         6. Apply ICA (fixed unmixing/mixing matrices)
-
-      "late" — LP + decimate run after the spatial transforms:
-        1. High-pass + notch filter (causal IIR, persistent zi)
-        2. Interpolate bad channels (fixed weight matrix)
-        3. Average reference
-        4. Apply ICA (fixed unmixing/mixing matrices)
-        5. Low-pass filter at h_freq Hz (causal IIR, persistent zi)
-        6. Decimate to target rate (FIR anti-alias + integer subsample)
     """
 
     def __init__(
@@ -56,14 +46,6 @@ class OnlinePreprocessor:
 
         self._input_sfreq = float(input_sfreq)
         self._target_sfreq = float(FINAL_RESAMPLE_RATE)
-        self._resample_filter_stage: str = preprocessing_settings.get(
-            "resample_filter_stage", "early"
-        )
-        if self._resample_filter_stage not in ("early", "late"):
-            raise ValueError(
-                f"resample_filter_stage must be 'early' or 'late', got "
-                f"{self._resample_filter_stage!r}."
-            )
 
         # Spatial transform matrices from Phase 1
         self._eeg_chunk_indices: list[int] = list(online_state["eeg_chunk_indices"])
@@ -140,10 +122,10 @@ class OnlinePreprocessor:
 
         logger.info(
             "OnlinePreprocessor ready: %d ch (%d good / %d bad), %g→%g Hz "
-            "(decim %d, stage=%s), HP %g Hz, notch %s Hz, LP %g Hz, %d ICA excluded",
+            "(decim %d), HP %g Hz, notch %s Hz, LP %g Hz, %d ICA excluded",
             self._n_eeg, len(self._good_indices), len(self._bad_indices),
             self._input_sfreq, self._target_sfreq, self._decimation,
-            self._resample_filter_stage, HIGHPASS_L_FREQ,
+            HIGHPASS_L_FREQ,
             NOTCH_FREQ if NOTCH_FREQ is not None else "off", LOWPASS_H_FREQ,
             len(self._ica_exclude),
         )
@@ -207,20 +189,12 @@ class OnlinePreprocessor:
         # Apply positional EEG hygiene.
         data = eeg_batch[:, self._eeg_chunk_indices].astype(float)
         data = self._apply_filter(data)
-        if self._resample_filter_stage == "early":
-            # LP + decimate happen before spatial transforms
-            data = self._apply_lowpass(data)
-            data, out_timestamps = self._decimate(data, timestamps)
-            self._apply_bad_channel_interpolation(data)
-            self._apply_average_reference(data)
-            self._apply_ica(data)
-        else:
-            # spatial transforms at input_sfreq, then LP + decimate
-            self._apply_bad_channel_interpolation(data)
-            self._apply_average_reference(data)
-            self._apply_ica(data)
-            data = self._apply_lowpass(data)
-            data, out_timestamps = self._decimate(data, timestamps)
+        # LP + decimate happen before the spatial transforms.
+        data = self._apply_lowpass(data)
+        data, out_timestamps = self._decimate(data, timestamps)
+        self._apply_bad_channel_interpolation(data)
+        self._apply_average_reference(data)
+        self._apply_ica(data)
         return data, out_timestamps
 
     # ── Private: filtering ────────────────────────────────────────────────────

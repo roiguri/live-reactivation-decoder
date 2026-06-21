@@ -8,11 +8,6 @@ experiment_info:
 random_state: 42
 
 preprocessing:
-  # Where to place LPF + decimation in the pipeline.
-  #   "early" → on raw before ICA (faster ICA, paper-aligned)
-  #   "late"  → on epochs after ICA (reference order, ICA on full-rate data)
-  resample_filter_stage: early   # the A/B comparison toggles this
-
   channel_hygiene:
     drop_emg: true
     rename_hegoc_to_heog: true

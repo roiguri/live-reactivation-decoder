@@ -119,9 +119,7 @@ def _make_online_state() -> dict:
 
 
 def _make_settings() -> dict:
-    return {
-        "resample_filter_stage": "early",
-    }
+    return {}
 
 
 def _make_preprocessor() -> OnlinePreprocessor:

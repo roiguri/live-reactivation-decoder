@@ -47,21 +47,21 @@ populated directly from the constants module.
 | `final_resample.target_rate` | yes (`_resample`) | yes | scalar | **done (Step 3)** |
 | `notch.freq` | yes | yes | scalar, `None` disables | **done (Step 4)** |
 | `highpass` | yes | yes | l_freq + method | **done (Step 5)** |
+| `resample_filter_stage` | yes (`_stage`) | yes | gated two pipeline paths — **late path removed** | **done (Step 5b)** |
 | `epochs` | yes | **no** | tmin/tmax/baseline; baked into matrices offline | |
 | `channel_hygiene` | yes | **no** | 4 flags | |
 | `ica` (+ iclabel) | yes | **no** | most complex; touches `random_state` | |
-| `resample_filter_stage` | yes (`_stage`) | yes | scalar, but **gates two pipeline code paths** | **deferred** |
 
-The online preprocessor reads `lowpass`/`final_resample`/`notch`/`highpass`/
-`resample_filter_stage`; `epochs`, `channel_hygiene`, and `ica` touch the offline
-preprocessor only.
+The online preprocessor reads `lowpass`/`final_resample`/`notch`/`highpass` (now all
+constants); `epochs`, `channel_hygiene`, and `ica` touch the offline preprocessor only.
 
-> **Deferred — `resample_filter_stage`.** Unlike the other blocks it selects between two
-> live code paths (`early` vs `late` LP+resample ordering) in both preprocessors, with a
-> dedicated "late"-variant test suite. Per decision (2026-06-13) the early/late toggle stays
-> configurable for now. Consequence: the schema's `PreprocessingSettings` and both
-> preprocessors must keep reading the stage flag from settings, so the final cleanup (Step 9)
-> can only *shrink* the preprocessing config down to `resample_filter_stage`, not remove it.
+> **`resample_filter_stage` — removed (Step 5b, 2026-06-21, reversing the earlier deferral).**
+> Originally kept configurable because it selected two live LP+decimate orderings
+> (`early`/`late`). Per new decision the early ordering is the only one used, so the toggle
+> **and the entire `late` code path** were deleted from both preprocessors (along with the
+> late-variant tests + the "rejects invalid stage" validation). The online preprocessor now
+> reads **nothing** from its `preprocessing_settings` arg (it's vestigial — the final cleanup
+> step will drop the arg). This unblocks the full removal of the online-side settings coupling.
 
 ## The pattern (every block-migration step does exactly this)
 
@@ -92,9 +92,9 @@ The frontend reads config only through the `session.settings` dict (it imports n
 internals). To keep that contract while the recipe moves to constants, `SettingsManager` has
 two distinct surfaces:
 - **`get_preprocessing_params()`** — the *backend pipeline* input. Only the fields still in
-  the config (shrinks as blocks migrate; `random_state` + `resample_filter_stage` remain).
-  The preprocessors read the hardcoded blocks from `preprocessing_constants` directly, not
-  from this dict.
+  the config (shrinks as blocks migrate; ultimately just `random_state` + the not-yet-migrated
+  blocks). The preprocessors read the hardcoded blocks from `preprocessing_constants` directly,
+  not from this dict.
 - **`get_settings()`** — the *frontend's effective view*. Takes the shrinking config params
   and merges the hardcoded recipe back in via `_hardcoded_recipe()` (single source:
   `preprocessing_constants`), in the historical shape. **Its output is shape-stable across the
@@ -173,6 +173,20 @@ rejected in favour of keeping the existing dict presentation.
 - Removed three now-obsolete highpass config-validation tests (method/extra-key/non-positive);
   added `TestHighpass` pin + extended `TestGetSettings`. Full suite green (448 passed, 1 skipped).
 
+### Step 5b — Remove `resample_filter_stage` + the `late` code path ✅ DONE
+- Reverses the earlier deferral. Deleted the `resample_filter_stage` field from the schema and
+  all YAMLs (no constant — there is now a single fixed ordering, not a toggle).
+- Offline: removed the `_stage` property; `run_step1a_filter` always does LP+resample on raw,
+  `run_step2_apply_and_save` no longer has a late LP+resample branch. (`_resample` stays a
+  general Raw/Epochs helper — still unit-tested directly.)
+- Online: removed the `_resample_filter_stage` read/validation and the `process_batch`
+  early/late branch (kept the early ordering); dropped `stage=` from the ready-log. The
+  online preprocessor now reads **nothing** from `preprocessing_settings` (vestigial arg).
+- Tests: removed the late-variant ordering test, the both-variants test, the invalid-stage
+  tests (online + settings-manager), and the offline late-path tests; renamed the survivors
+  (`TestPipelineOrdering`, `test_step1a_resamples_raw_to_target`). Full suite green
+  (441 passed, 1 skipped).
+
 ### Step 6 — `epochs` (offline only)
 - Add `EPOCH_TMIN = -0.2`, `EPOCH_TMAX = 1.0`, `EPOCH_BASELINE = None`
   (+ module-level assert `EPOCH_TMIN < EPOCH_TMAX`). Offline `_epoch`.
@@ -191,36 +205,35 @@ rejected in favour of keeping the existing dict presentation.
   `IclabelSettings` from `config_models.py`.
 - ICA fit keeps reading `random_state` from the settings dict (it stays a top-level knob).
 
-### Step 9 — Cleanup: shrink the preprocessing plumbing to just `resample_filter_stage`
-With `resample_filter_stage` deferred (still configurable), the preprocessing config can't be
-removed outright — but everything else collapses:
-- `PreprocessingSettings` is reduced to `random_state` + `resample_filter_stage` only (all
-  sub-models gone). The `preprocessing:` YAML block shrinks to a single `resample_filter_stage`
-  line.
-- Both preprocessors still receive a (now tiny) `preprocessing_settings` dict, read **only**
-  the stage flag from it, and import everything else from `preprocessing_constants`. So the
-  constructor signatures keep the dict arg; `OfflinePreprocessor` still pulls `random_state`
-  from it (no signature change needed yet).
-- `SettingsManager.get_preprocessing_params()` stays (returns the small dict). `random_state`
-  remains a top-level config knob, so ICA keeps reading it from the dict.
+### Step 9 — Cleanup: collapse the preprocessing plumbing
+With `resample_filter_stage` now removed (Step 5b), the preprocessing config holds only
+`random_state` (+ whatever blocks remain un-migrated at this point — after Steps 6–8, none):
+- `PreprocessingSettings` is reduced to `random_state` only (all sub-models gone). The
+  `preprocessing:` YAML block disappears (or holds nothing).
+- **Online side:** `OnlinePreprocessor` already reads nothing from `preprocessing_settings`
+  (Step 5b) — drop the arg from its constructor + `_validate_inputs`, and stop passing it in
+  `session.py`. This makes the online phase fully config-independent and kills the
+  `session.py:213` footgun (Phase 2 reading live config that may differ from training).
+- **Offline side:** `OfflinePreprocessor` still needs `random_state` for ICA — switch its
+  constructor to take `random_state: int` directly instead of the settings dict.
+- `SettingsManager.get_preprocessing_params()` shrinks to `{random_state}` (or is folded into
+  a `get_random_state()`); `get_settings()` keeps assembling the full recipe via
+  `_hardcoded_recipe()` for the UI.
 - Docs: `CLAUDE.md` Config Schema section + `docs/architecture/backend_architecture.md`
   (+ note in `docs/old/preprocessing_migration_*`).
-- **Full removal of the `preprocessing` plumbing (drop the dict arg, make the online phase
-  config-independent, kill the `session.py:213` footgun) is blocked until the
-  `resample_filter_stage` early/late decision is made.** Track that as a follow-up.
 
-> **End of the minimizing-settings feature (modulo the deferred `resample_filter_stage`).**
-> The config's preprocessing block is down to one line; the rest of the recipe is hardcoded
-> constants imported by both phases. Step 10 is a follow-on UI addition.
+> **End of the minimizing-settings feature.** The `preprocessing:` config block is gone; the
+> recipe is hardcoded constants imported by both phases, and the online phase no longer reads
+> live config. Step 10 is a follow-on UI addition.
 
 ### Step 10 — Preprocessing-stages overview on the Node 3 "Ready" page (separate, after the above)
 - Add a compact read-only **"Preprocessing stages" overview** to
   `PreprocessingView._build_ready_page()` (preprocessing_view.py:388), shown before the
   operator starts preprocessing.
 - Render it from `preprocessing_constants.py` (never the config) — an ordered stage list
-  reflecting the actual pipeline:
-  channel hygiene → highpass → notch → [if `early`: LP + resample] → interpolate/avg-ref →
-  ICA + ICLabel → epoching → [if `late`: LP + resample], with the key values per stage.
+  reflecting the actual (single, fixed) pipeline:
+  channel hygiene → highpass → notch → LP + resample → interpolate/avg-ref → ICA + ICLabel →
+  epoching, with the key values per stage.
 - Pure UI addition; no backend change. Optionally add a headless render test under
   `tests/frontend/`.
 
@@ -237,11 +250,10 @@ removed outright — but everything else collapses:
   at the end a `demo_seed_debug_snapshots.py` retrain + offline inference check producing
   identical artifacts. The per-step value-pin test catches transcription errors.
 - **Ordering rationale:** `lowpass` was the pilot (Step 2) — truly inert, every test already
-  used 40.0/iir. Then the remaining online-read scalars (steps 3–5), then offline-only blocks
-  (6–8), then the cleanup (9). Steps 1–9 complete the minimizing feature (modulo the deferred
-  `resample_filter_stage`); the operator-facing overview (step 10) is a separate follow-on.
-- **Deferred `resample_filter_stage`** (see the block table) keeps the `preprocessing:` block
-  alive as a single line and blocks the full removal of the preprocessing plumbing.
+  used 40.0/iir. Then the remaining online-read scalars (steps 3–5), then the
+  `resample_filter_stage` toggle + `late` path removal (Step 5b), then offline-only blocks
+  (6–8), then the cleanup (9). Steps 1–9 complete the minimizing feature; the operator-facing
+  overview (step 10) is a separate follow-on.
 
 ## Resulting `experiment_config.yaml` (target, after step 9)
 
@@ -250,9 +262,6 @@ experiment_info:
   name: Reactivation_Study_V1
 
 random_state: 42
-
-preprocessing:
-  resample_filter_stage: early   # deferred — still selects early/late pipeline ordering
 
 decoders:
   model: LDA
