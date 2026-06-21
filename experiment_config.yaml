@@ -7,19 +7,6 @@ experiment_info:
 
 random_state: 42
 
-preprocessing:
-  ica:
-    method: infomax
-    extended: true
-    n_components: null    # let MNE/infomax decide (rank = n_electrodes - 1 after avg ref)
-    fit_l_freq: 1.0       # HP-only ICA fit copy; no LPF on the fit copy
-    iclabel:
-      enabled: true
-      # Canonical mne-icalabel strings (with spaces). "other" is the
-      # low-confidence catch-all — deliberately omitted so the operator
-      # decides on those manually in the topomap review window.
-      drop_labels: ["muscle artifact", "eye blink", "heart beat", "line noise", "channel noise"]
-
 decoders:
   model: LDA          # LDA | Logistic | SVM
   params:             # valid keys depend on model (see config_models.py _VALID_PARAMS_BY_MODEL)

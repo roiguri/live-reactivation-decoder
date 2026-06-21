@@ -290,11 +290,11 @@ class TestStage6ReferenceAndICA:
         assert p.ica.exclude == []
 
     def test_iclabel_suggestion_uses_drop_labels(
-        self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings
+        self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings, monkeypatch
     ):
-        preprocessing_settings["ica"]["iclabel"] = {
-            "enabled": True, "drop_labels": ["eye", "muscle"],
-        }
+        import backend.offline_phase.preprocessor as preproc
+        monkeypatch.setattr(preproc, "ICLABEL_ENABLED", True)
+        monkeypatch.setattr(preproc, "ICLABEL_DROP_LABELS", ("eye", "muscle"))
         p = self._epoch_and_ref(make_preprocessor, synthetic_raw_with_events, preprocessing_settings)
         fake = {
             "labels": ["brain", "eye", "muscle", "brain"],
@@ -305,11 +305,11 @@ class TestStage6ReferenceAndICA:
         assert suggested == [1, 2]
 
     def test_component_labels_populated_aligned_by_index(
-        self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings
+        self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings, monkeypatch
     ):
-        preprocessing_settings["ica"]["iclabel"] = {
-            "enabled": True, "drop_labels": ["eye"],
-        }
+        import backend.offline_phase.preprocessor as preproc
+        monkeypatch.setattr(preproc, "ICLABEL_ENABLED", True)
+        monkeypatch.setattr(preproc, "ICLABEL_DROP_LABELS", ("eye",))
         p = self._epoch_and_ref(make_preprocessor, synthetic_raw_with_events, preprocessing_settings)
         fake = {
             "labels": ["brain", "eye", "muscle", "brain"],
@@ -328,7 +328,7 @@ class TestStage6ReferenceAndICA:
         self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings
     ):
         p = self._epoch_and_ref(make_preprocessor, synthetic_raw_with_events, preprocessing_settings)
-        # fixture default has iclabel disabled
+        # fast_ica fixture disables ICLabel (ICLABEL_ENABLED=False)
         assert p._fit_ica() == []
         assert p.component_labels is None
 

@@ -19,6 +19,12 @@ from backend.core.preprocessing_constants import (
     FINAL_RESAMPLE_RATE,
     HIGHPASS_L_FREQ,
     HIGHPASS_METHOD,
+    ICA_EXTENDED,
+    ICA_FIT_L_FREQ,
+    ICA_METHOD,
+    ICA_N_COMPONENTS,
+    ICLABEL_DROP_LABELS,
+    ICLABEL_ENABLED,
     LOWPASS_H_FREQ,
     LOWPASS_METHOD,
     NOTCH_FREQ,
@@ -418,7 +424,6 @@ class OfflinePreprocessor:
         self.epochs.set_eeg_reference("average", projection=False, verbose=False)
 
     def _fit_ica(self) -> list[int]:
-        ica_s = self.settings["ica"]
         # TODO(decision): revisit the ICA fit-copy filter method.
         # We forced method="iir" to avoid MNE's default FIR producing a
         # ~3.3 s kernel on ~1.2 s epochs ("filter_length > signal" warning,
@@ -429,18 +434,17 @@ class OfflinePreprocessor:
         #     smoother roll-off, no minimum signal length.
         #   - FIR (default): sharper transition band, needs a longer signal.
         # If we ever move ICA fitting to full-rate raw or longer epochs,
-        # FIR may again be preferable. Consider exposing this as
-        # settings.preprocessing.ica.fit_method instead of hardcoding.
+        # FIR may again be preferable.
         fit_epochs = self.epochs.copy().filter(
-            l_freq=ica_s["fit_l_freq"], h_freq=None, method="iir", verbose=False
+            l_freq=ICA_FIT_L_FREQ, h_freq=None, method="iir", verbose=False
         )
 
         fit_params = None
-        if ica_s["method"] == "infomax":
-            fit_params = dict(extended=ica_s.get("extended", True))
+        if ICA_METHOD == "infomax":
+            fit_params = dict(extended=ICA_EXTENDED)
         self.ica = mne.preprocessing.ICA(
-            n_components=ica_s.get("n_components"),
-            method=ica_s["method"],
+            n_components=ICA_N_COMPONENTS,
+            method=ICA_METHOD,
             fit_params=fit_params,
             random_state=self.settings["random_state"],
             max_iter="auto",
@@ -450,19 +454,18 @@ class OfflinePreprocessor:
         return self._iclabel_suggest(fit_epochs)
 
     def _iclabel_suggest(self, fit_epochs: mne.Epochs) -> list[int]:
-        """Pre-select components whose ICLabel class is in ``ica.iclabel.drop_labels``."""
-        ic = self.settings["ica"].get("iclabel", {})
-        if not ic.get("enabled", True):
+        """Pre-select components whose ICLabel class is in ``ICLABEL_DROP_LABELS``."""
+        if not ICLABEL_ENABLED:
             self._component_labels = None
             return []
 
         from mne_icalabel import label_components
 
-        drop = set(ic.get("drop_labels", []))
+        drop = set(ICLABEL_DROP_LABELS)
         # TODO(decision): ICLabel was trained on EEG bandpassed [1, 100] Hz
         # and prints a calibration warning here because our pipeline runs at
-        # [0.1, 40] Hz (paper-aligned: settings.preprocessing.lowpass.h_freq
-        # = 40, final_resample.target_rate = 100). Predictions still come
+        # [0.1, 40] Hz (paper-aligned: LOWPASS_H_FREQ = 40, FINAL_RESAMPLE_RATE
+        # = 100). Predictions still come
         # through — confidence near band edges may be lower. Options when
         # we revisit:
         #   (a) accept the warning (current); document it.

@@ -77,23 +77,28 @@ def _make_settings() -> dict:
 
 
 def _make_offline_settings() -> dict:
-    """Build preprocessing settings matching the new PreprocessingSettings schema.
+    """The (now minimal) offline preprocessing settings — just the seed.
 
-    Mirrors tests/offline_phase/conftest.py — fastica + 4 components, ICLabel
-    disabled, small epochs.
+    The recipe is hardcoded in ``preprocessing_constants``. Tests that fit ICA
+    via these settings patch the ICA constants to fastica + 4 components +
+    ICLabel off for speed (see ``_patch_fast_ica``).
     """
     from backend.core.config_models import PreprocessingSettings
 
-    overrides = {
-        "random_state": 42,
-        "ica": {
-            "method": "fastica",
-            "n_components": 4,
-            "fit_l_freq": 1.0,
-            "iclabel": {"enabled": False},
-        },
-    }
-    return PreprocessingSettings(**overrides).model_dump()
+    return PreprocessingSettings(random_state=42).model_dump()
+
+
+@pytest.fixture(autouse=True)
+def _fast_ica(monkeypatch):
+    """Patch the hardcoded ICA recipe to fast/isolated values.
+
+    Only the offline-fit parity tests in this module read these constants
+    (via OfflinePreprocessor._fit_ica); harmless for the rest.
+    """
+    import backend.offline_phase.preprocessor as preproc
+    monkeypatch.setattr(preproc, "ICA_METHOD", "fastica")
+    monkeypatch.setattr(preproc, "ICA_N_COMPONENTS", 4)
+    monkeypatch.setattr(preproc, "ICLABEL_ENABLED", False)
 
 
 @pytest.fixture

@@ -50,7 +50,7 @@ populated directly from the constants module.
 | `resample_filter_stage` | yes (`_stage`) | yes | gated two pipeline paths — **late path removed** | **done (Step 5b)** |
 | `epochs` | yes | **no** | tmin/tmax/baseline; baked into matrices offline | **done (Step 6)** |
 | `channel_hygiene` | yes | **no** | 4 flags | **done (Step 7)** |
-| `ica` (+ iclabel) | yes | **no** | most complex; touches `random_state` | |
+| `ica` (+ iclabel) | yes | **no** | most complex; touches `random_state` | **done (Step 8)** |
 
 The online preprocessor reads `lowpass`/`final_resample`/`notch`/`highpass` (now all
 constants); `epochs`, `channel_hygiene`, and `ica` touch the offline preprocessor only.
@@ -211,15 +211,25 @@ rejected in favour of keeping the existing dict presentation.
   `TestGetSettings`. Full suite green (447 passed, 1 skipped). After this, the config's
   `preprocessing:` block holds only `random_state` (model field) + `ica`.
 
-### Step 8 — `ica` (+ iclabel) (offline only; most complex)
-- Add `ICA_METHOD`, `ICA_EXTENDED`, `ICA_N_COMPONENTS`, `ICA_FIT_L_FREQ`, `ICLABEL_ENABLED`,
-  `ICLABEL_DROP_LABELS`.
-- Move `_ICLABEL_VALID_LABELS` from `config_models.py` into the constants module, plus a
-  module-level assert that `ICLABEL_DROP_LABELS` ⊆ valid labels (preserves the typo-guard).
-- Carry over the two `# TODO(decision)` comments (ICA fit-copy method; ICLabel band mismatch).
-- Offline `_fit_ica` / `_iclabel_suggest` read the constants; remove `ICASettings` /
-  `IclabelSettings` from `config_models.py`.
-- ICA fit keeps reading `random_state` from the settings dict (it stays a top-level knob).
+### Step 8 — `ica` (+ iclabel) (offline only; most complex) ✅ DONE
+- Added `ICA_METHOD`, `ICA_EXTENDED`, `ICA_N_COMPONENTS` (=None), `ICA_FIT_L_FREQ`,
+  `ICLABEL_ENABLED`, `ICLABEL_DROP_LABELS`; offline `_fit_ica` / `_iclabel_suggest` read them.
+  Removed `ICASettings` / `IclabelSettings` (+ the `Optional` import) from `config_models.py`;
+  re-attached `ica` to `_hardcoded_recipe()`. Carried over the two `# TODO(decision)` comments.
+- **Typo-guard dropped** (per decision): `_ICLABEL_VALID_LABELS` + the validator are gone, not
+  relocated — `drop_labels` is hardcoded so a config typo is impossible.
+- ICA fit keeps reading `random_state` from the settings dict (top-level knob).
+- **`preprocessing:` block now fully removed from all configs.** Made `_propagate_random_state`
+  materialise an omitted section (`if sub is None: data[section] = {}`) so the top-level seed
+  still reaches `PreprocessingSettings.random_state` with no `preprocessing:` block present.
+- **Test-speed wrinkle:** the real recipe (infomax / auto components / ICLabel on) is slow and
+  triggers real ICLabel inference. Added an autouse `fast_ica` fixture (offline conftest +
+  online module) monkeypatching `ICA_METHOD=fastica`, `ICA_N_COMPONENTS=4`,
+  `ICLABEL_ENABLED=False` — reproducing the old fast/isolated fixtures. Converted the two
+  ICLabel-suggestion tests to monkeypatch `ICLABEL_ENABLED`/`ICLABEL_DROP_LABELS` (still mocking
+  `label_components`). Removed the obsolete ica/iclabel schema-validation tests; added
+  `TestIca`/`TestIclabel` pins + extended `TestGetSettings`. Full suite green (449 passed, 1 skipped).
+- After this, `PreprocessingSettings` holds **only `random_state`** — Step 9 collapses the rest.
 
 ### Step 9 — Cleanup: collapse the preprocessing plumbing
 With `resample_filter_stage` now removed (Step 5b), the preprocessing config holds only

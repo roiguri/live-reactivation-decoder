@@ -11,23 +11,6 @@ experiment_info:
 
 random_state: 42
 
-preprocessing:
-  ica:
-    method: infomax
-    extended: true
-    n_components: null
-    fit_l_freq: 1.0
-    iclabel:
-      enabled: true
-      drop_labels:
-        [
-          "muscle artifact",
-          "eye blink",
-          "heart beat",
-          "line noise",
-          "channel noise",
-        ]
-
 decoders:
   model: Logistic
   params:

@@ -52,6 +52,30 @@ class TestFinalResample:
         assert pc.FINAL_RESAMPLE_RATE == 100
 
 
+class TestIca:
+    def test_method(self):
+        assert pc.ICA_METHOD == "infomax"
+
+    def test_extended(self):
+        assert pc.ICA_EXTENDED is True
+
+    def test_n_components_auto(self):
+        assert pc.ICA_N_COMPONENTS is None
+
+    def test_fit_l_freq(self):
+        assert pc.ICA_FIT_L_FREQ == 1.0
+
+
+class TestIclabel:
+    def test_enabled(self):
+        assert pc.ICLABEL_ENABLED is True
+
+    def test_drop_labels(self):
+        assert pc.ICLABEL_DROP_LABELS == (
+            "muscle artifact", "eye blink", "heart beat", "line noise", "channel noise",
+        )
+
+
 class TestEpochs:
     def test_tmin(self):
         assert pc.EPOCH_TMIN == -0.2

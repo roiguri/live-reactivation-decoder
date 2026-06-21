@@ -50,13 +50,14 @@ class TestGetPreprocessingParams:
         params = SettingsManager(sample_config_path).get_preprocessing_params()
         assert isinstance(params, dict)
 
-    def test_contains_all_sections(self, sample_config_path):
+    def test_only_carries_random_state(self, sample_config_path):
+        # The recipe is hardcoded; only the seed remains in the backend params.
         params = SettingsManager(sample_config_path).get_preprocessing_params()
-        assert {"random_state", "ica"} <= params.keys()
+        assert "random_state" in params
 
-    def test_defaults_applied_when_section_omitted(self, tmp_config_file, minimal_valid_data):
+    def test_seed_propagated_when_preprocessing_omitted(self, tmp_config_file, minimal_valid_data):
         params = SettingsManager(tmp_config_file(minimal_valid_data)).get_preprocessing_params()
-        assert params["ica"]["n_components"] is None
+        assert params["random_state"] == minimal_valid_data.get("random_state", 42)
 
 
 class TestGetDecoderSettings:
@@ -122,7 +123,8 @@ class TestGetSettings:
         pre = sm.get_settings()["preprocessing"]
         # Hardcoded blocks: missing from the backend params, present in the view.
         for block in (
-            "channel_hygiene", "highpass", "notch", "lowpass", "final_resample", "epochs",
+            "channel_hygiene", "highpass", "notch", "lowpass", "final_resample",
+            "epochs", "ica",
         ):
             assert block not in params
             assert block in pre
@@ -142,19 +144,24 @@ class TestGetSettings:
         assert pre["epochs"] == {
             "tmin": pc.EPOCH_TMIN, "tmax": pc.EPOCH_TMAX, "baseline": pc.EPOCH_BASELINE,
         }
+        assert pre["ica"] == {
+            "method": pc.ICA_METHOD,
+            "extended": pc.ICA_EXTENDED,
+            "n_components": pc.ICA_N_COMPONENTS,
+            "fit_l_freq": pc.ICA_FIT_L_FREQ,
+            "iclabel": {
+                "enabled": pc.ICLABEL_ENABLED,
+                "drop_labels": list(pc.ICLABEL_DROP_LABELS),
+            },
+        }
 
-    def test_still_carries_configurable_fields(self, sample_config_path):
+    def test_still_carries_configurable_random_state(self, sample_config_path):
+        # random_state is the only field still sourced from the config.
         pre = SettingsManager(sample_config_path).get_settings()["preprocessing"]
         assert "random_state" in pre
-        assert "ica" in pre
 
 
 class TestAllowedValues:
-    def test_rejects_invalid_ica_method(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"ica": {"method": "extended_infomax"}}
-        with pytest.raises(ValueError):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
     def test_rejects_invalid_decoder_model(self, tmp_config_file, minimal_valid_data):
         minimal_valid_data["decoders"]["model"] = "XGBoost"
         with pytest.raises(ValueError):
@@ -165,39 +172,10 @@ class TestAllowedValues:
         with pytest.raises(ValueError):
             SettingsManager(tmp_config_file(minimal_valid_data))
 
-    def test_rejects_unknown_iclabel_drop_label(self, tmp_config_file, minimal_valid_data):
-        # ICLabel returns canonical strings with spaces ("muscle artifact",
-        # not "muscle"). Short-name typos used to silently match nothing
-        # downstream, letting real artifacts through. Validator must catch
-        # any string outside ICLabel's known seven categories.
-        minimal_valid_data["preprocessing"] = {
-            "ica": {"iclabel": {"drop_labels": ["muscle", "eye blink"]}}
-        }
-        with pytest.raises(ValueError, match="muscle"):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
-    def test_accepts_canonical_iclabel_labels(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {
-            "ica": {"iclabel": {"drop_labels": [
-                "muscle artifact", "eye blink", "heart beat",
-                "line noise", "channel noise", "other",
-            ]}}
-        }
-        sm = SettingsManager(tmp_config_file(minimal_valid_data))
-        assert sm.get_preprocessing_params()["ica"]["iclabel"]["drop_labels"] == [
-            "muscle artifact", "eye blink", "heart beat",
-            "line noise", "channel noise", "other",
-        ]
-
 
 class TestRangeValidation:
     def test_rejects_cv_k_below_2(self, tmp_config_file, minimal_valid_data):
         minimal_valid_data["decoders"]["cv"] = {"k": 1}
-        with pytest.raises(ValueError):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
-    def test_rejects_zero_ica_components(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"ica": {"n_components": 0}}
         with pytest.raises(ValueError):
             SettingsManager(tmp_config_file(minimal_valid_data))
 

@@ -46,26 +46,31 @@ def synthetic_raw_with_events() -> mne.io.RawArray:
     return raw
 
 
+@pytest.fixture(autouse=True)
+def fast_ica(monkeypatch):
+    """Speed/isolation patch for the hardcoded ICA recipe.
+
+    The real recipe (infomax, auto components, ICLabel enabled) is slow and
+    triggers real ICLabel inference. Offline tests fit ICA with fastica + 4
+    components and ICLabel off, matching the pre-hardcoding fixtures. Tests that
+    exercise the ICLabel suggestion re-enable it and mock ``label_components``.
+    """
+    import backend.offline_phase.preprocessor as preproc
+    monkeypatch.setattr(preproc, "ICA_METHOD", "fastica")
+    monkeypatch.setattr(preproc, "ICA_N_COMPONENTS", 4)
+    monkeypatch.setattr(preproc, "ICLABEL_ENABLED", False)
+
+
 @pytest.fixture
 def preprocessing_settings() -> dict:
-    """Preprocessing settings dict matching the new config schema.
+    """The (now minimal) preprocessing settings dict — just the seed.
 
-    Tuned for fast unit tests: fastica + 4 components, ICLabel off by
-    default (tests that exercise the suggestion mock it explicitly), and
-    the "early" resample/filter stage so epochs are small (100 Hz).
+    The recipe is hardcoded in ``preprocessing_constants``; only ``random_state``
+    remains in the config and is read by the ICA fit.
     """
     from backend.core.config_models import PreprocessingSettings
 
-    overrides = {
-        "random_state": 42,
-        "ica": {
-            "method": "fastica",
-            "n_components": 4,
-            "fit_l_freq": 1.0,
-            "iclabel": {"enabled": False},
-        },
-    }
-    return PreprocessingSettings(**overrides).model_dump()
+    return PreprocessingSettings(random_state=42).model_dump()
 
 
 @pytest.fixture

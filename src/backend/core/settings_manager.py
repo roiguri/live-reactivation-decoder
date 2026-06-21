@@ -88,6 +88,16 @@ class SettingsManager:
                 "montage_name": pc.CHANNEL_MONTAGE_NAME,
                 "afz_case_fix": pc.CHANNEL_AFZ_CASE_FIX,
             },
+            "ica": {
+                "method": pc.ICA_METHOD,
+                "extended": pc.ICA_EXTENDED,
+                "n_components": pc.ICA_N_COMPONENTS,
+                "fit_l_freq": pc.ICA_FIT_L_FREQ,
+                "iclabel": {
+                    "enabled": pc.ICLABEL_ENABLED,
+                    "drop_labels": list(pc.ICLABEL_DROP_LABELS),
+                },
+            },
             "highpass": {"l_freq": pc.HIGHPASS_L_FREQ, "method": pc.HIGHPASS_METHOD},
             "notch": {"freq": pc.NOTCH_FREQ},
             "lowpass": {"h_freq": pc.LOWPASS_H_FREQ, "method": pc.LOWPASS_METHOD},
