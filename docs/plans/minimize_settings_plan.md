@@ -253,7 +253,7 @@ With `resample_filter_stage` now removed (Step 5b), the preprocessing config hol
 > recipe is hardcoded constants imported by both phases, and the online phase no longer reads
 > live config. Step 10 is a follow-on UI addition.
 
-### Step 10 — Preprocessing-stages overview on the Node 3 "Ready" page (separate, after the above)
+### Step 10 — Preprocessing-stages overview on the Node 3 "Ready" page (separate follow-on — tracked in GitHub issue #53)
 - Add a compact read-only **"Preprocessing stages" overview** to
   `PreprocessingView._build_ready_page()` (preprocessing_view.py:388), shown before the
   operator starts preprocessing.
