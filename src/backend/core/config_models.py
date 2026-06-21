@@ -7,15 +7,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 DEFAULT_RANDOM_STATE: int = 42
 
 
-class ChannelHygieneSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    drop_emg: bool = True
-    rename_hegoc_to_heog: bool = True
-    montage_name: str = "easycap-M1"
-    afz_case_fix: bool = True
-
-
 # TODO: verify this is correct and up-to-date with mne-icalabel. We want to be sure we catch any typos in the config's ``iclabel.drop_labels`` list, which would otherwise silently let real artifacts through (as discovered when comparing against the ``tomer_preprocessing_new`` reference).
 # The exact strings ``mne-icalabel`` returns from
 # ``label_components(..., method='iclabel')`` — see
@@ -73,7 +64,6 @@ class PreprocessingSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     random_state: int = DEFAULT_RANDOM_STATE
-    channel_hygiene: ChannelHygieneSettings = Field(default_factory=ChannelHygieneSettings)
     ica: ICASettings = Field(default_factory=ICASettings)
 
 

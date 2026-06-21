@@ -20,6 +20,20 @@ class TestLowpass:
         assert pc.LOWPASS_METHOD == "iir"
 
 
+class TestChannelHygiene:
+    def test_drop_emg(self):
+        assert pc.CHANNEL_DROP_EMG is True
+
+    def test_rename_hegoc_to_heog(self):
+        assert pc.CHANNEL_RENAME_HEGOC_TO_HEOG is True
+
+    def test_montage_name(self):
+        assert pc.CHANNEL_MONTAGE_NAME == "easycap-M1"
+
+    def test_afz_case_fix(self):
+        assert pc.CHANNEL_AFZ_CASE_FIX is True
+
+
 class TestHighpass:
     def test_l_freq(self):
         assert pc.HIGHPASS_L_FREQ == 0.1

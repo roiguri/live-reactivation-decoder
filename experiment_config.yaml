@@ -8,12 +8,6 @@ experiment_info:
 random_state: 42
 
 preprocessing:
-  channel_hygiene:
-    drop_emg: true
-    rename_hegoc_to_heog: true
-    montage_name: easycap-M1
-    afz_case_fix: true
-
   ica:
     method: infomax
     extended: true

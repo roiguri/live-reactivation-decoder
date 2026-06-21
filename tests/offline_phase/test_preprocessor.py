@@ -98,11 +98,14 @@ class TestStage2ChannelHygiene:
         )
 
     def test_hygiene_skipped_when_disabled(
-        self, make_preprocessor, synthetic_raw, preprocessing_settings
+        self, make_preprocessor, synthetic_raw, preprocessing_settings, monkeypatch
     ):
+        # drop_emg is hardcoded True; flipping the constant disables the drop.
+        monkeypatch.setattr(
+            "backend.offline_phase.preprocessor.CHANNEL_DROP_EMG", False
+        )
         p = make_preprocessor
         p.raw = _raw_with_extra_channels(synthetic_raw, {"EMG": "eeg"})
-        preprocessing_settings["channel_hygiene"]["drop_emg"] = False
         p.settings = preprocessing_settings
         p._channel_hygiene()
         assert "EMG" in p.raw.ch_names

@@ -82,6 +82,12 @@ class SettingsManager:
         recipe surfaced by :meth:`get_settings` stays complete.
         """
         return {
+            "channel_hygiene": {
+                "drop_emg": pc.CHANNEL_DROP_EMG,
+                "rename_hegoc_to_heog": pc.CHANNEL_RENAME_HEGOC_TO_HEOG,
+                "montage_name": pc.CHANNEL_MONTAGE_NAME,
+                "afz_case_fix": pc.CHANNEL_AFZ_CASE_FIX,
+            },
             "highpass": {"l_freq": pc.HIGHPASS_L_FREQ, "method": pc.HIGHPASS_METHOD},
             "notch": {"freq": pc.NOTCH_FREQ},
             "lowpass": {"h_freq": pc.LOWPASS_H_FREQ, "method": pc.LOWPASS_METHOD},

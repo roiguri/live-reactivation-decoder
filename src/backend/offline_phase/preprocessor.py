@@ -9,6 +9,10 @@ import numpy as np
 from scipy.signal import firwin, lfilter
 
 from backend.core.preprocessing_constants import (
+    CHANNEL_AFZ_CASE_FIX,
+    CHANNEL_DROP_EMG,
+    CHANNEL_MONTAGE_NAME,
+    CHANNEL_RENAME_HEGOC_TO_HEOG,
     EPOCH_BASELINE,
     EPOCH_TMAX,
     EPOCH_TMIN,
@@ -212,21 +216,18 @@ class OfflinePreprocessor:
 
     def _channel_hygiene(self) -> None:
         """EMG drop, HEGOC→HEOG rename, hardware montage with the AFz case fix."""
-        ch = self.settings.get("channel_hygiene", {})
-
-        if ch.get("drop_emg", True) and "EMG" in self.raw.ch_names:
+        if CHANNEL_DROP_EMG and "EMG" in self.raw.ch_names:
             self.raw.set_channel_types({"EMG": "emg"})
             self.raw.drop_channels(["EMG"])
             self._dropped_channels.append("EMG")
             logger.info("Channel hygiene: dropped EMG")
 
-        if ch.get("rename_hegoc_to_heog", True) and "HEGOC" in self.raw.ch_names:
+        if CHANNEL_RENAME_HEGOC_TO_HEOG and "HEGOC" in self.raw.ch_names:
             self.raw.rename_channels({"HEGOC": "HEOG"})
             logger.info("Channel hygiene: renamed HEGOC → HEOG")
 
-        montage_name = ch.get("montage_name", "easycap-M1")
-        montage = mne.channels.make_standard_montage(montage_name)
-        if ch.get("afz_case_fix", True) and "AFz" in montage.ch_names:
+        montage = mne.channels.make_standard_montage(CHANNEL_MONTAGE_NAME)
+        if CHANNEL_AFZ_CASE_FIX and "AFz" in montage.ch_names:
             montage.ch_names[montage.ch_names.index("AFz")] = "Afz"
         self.raw.set_montage(
             montage, match_case=False, on_missing="warn", verbose=False

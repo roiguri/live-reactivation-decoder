@@ -22,6 +22,16 @@ from __future__ import annotations
 LOWPASS_H_FREQ: float = 40.0
 LOWPASS_METHOD: str = "iir"
 
+# ── Channel hygiene (offline only) ──────────────────────────────────────────────
+# Dataset-specific channel fixups applied before filtering: drop the EMG channel,
+# rename HEGOC → HEOG, set the hardware montage, and fix the AFz/Afz case mismatch
+# in MNE's standard montage. The boolean flags keep their guards so a dev can
+# disable a step by flipping the constant.
+CHANNEL_DROP_EMG: bool = True
+CHANNEL_RENAME_HEGOC_TO_HEOG: bool = True
+CHANNEL_MONTAGE_NAME: str = "easycap-M1"
+CHANNEL_AFZ_CASE_FIX: bool = True
+
 # ── High-pass filter ────────────────────────────────────────────────────────────
 # Paper-aligned HP. IIR keeps offline/online causal parity (matched by the
 # streaming side's scipy.signal.sosfilt).

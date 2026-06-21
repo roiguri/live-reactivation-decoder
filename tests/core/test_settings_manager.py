@@ -52,9 +52,7 @@ class TestGetPreprocessingParams:
 
     def test_contains_all_sections(self, sample_config_path):
         params = SettingsManager(sample_config_path).get_preprocessing_params()
-        assert {
-            "random_state", "channel_hygiene", "ica",
-        } <= params.keys()
+        assert {"random_state", "ica"} <= params.keys()
 
     def test_defaults_applied_when_section_omitted(self, tmp_config_file, minimal_valid_data):
         params = SettingsManager(tmp_config_file(minimal_valid_data)).get_preprocessing_params()
@@ -123,12 +121,20 @@ class TestGetSettings:
         params = sm.get_preprocessing_params()
         pre = sm.get_settings()["preprocessing"]
         # Hardcoded blocks: missing from the backend params, present in the view.
-        for block in ("highpass", "notch", "lowpass", "final_resample", "epochs"):
+        for block in (
+            "channel_hygiene", "highpass", "notch", "lowpass", "final_resample", "epochs",
+        ):
             assert block not in params
             assert block in pre
 
     def test_recipe_values_match_constants(self, sample_config_path):
         pre = SettingsManager(sample_config_path).get_settings()["preprocessing"]
+        assert pre["channel_hygiene"] == {
+            "drop_emg": pc.CHANNEL_DROP_EMG,
+            "rename_hegoc_to_heog": pc.CHANNEL_RENAME_HEGOC_TO_HEOG,
+            "montage_name": pc.CHANNEL_MONTAGE_NAME,
+            "afz_case_fix": pc.CHANNEL_AFZ_CASE_FIX,
+        }
         assert pre["highpass"] == {"l_freq": pc.HIGHPASS_L_FREQ, "method": pc.HIGHPASS_METHOD}
         assert pre["notch"] == {"freq": pc.NOTCH_FREQ}
         assert pre["lowpass"] == {"h_freq": pc.LOWPASS_H_FREQ, "method": pc.LOWPASS_METHOD}
@@ -139,7 +145,7 @@ class TestGetSettings:
 
     def test_still_carries_configurable_fields(self, sample_config_path):
         pre = SettingsManager(sample_config_path).get_settings()["preprocessing"]
-        assert "channel_hygiene" in pre
+        assert "random_state" in pre
         assert "ica" in pre
 
 

@@ -49,7 +49,7 @@ populated directly from the constants module.
 | `highpass` | yes | yes | l_freq + method | **done (Step 5)** |
 | `resample_filter_stage` | yes (`_stage`) | yes | gated two pipeline paths — **late path removed** | **done (Step 5b)** |
 | `epochs` | yes | **no** | tmin/tmax/baseline; baked into matrices offline | **done (Step 6)** |
-| `channel_hygiene` | yes | **no** | 4 flags | |
+| `channel_hygiene` | yes | **no** | 4 flags | **done (Step 7)** |
 | `ica` (+ iclabel) | yes | **no** | most complex; touches `random_state` | |
 
 The online preprocessor reads `lowpass`/`final_resample`/`notch`/`highpass` (now all
@@ -200,9 +200,16 @@ rejected in favour of keeping the existing dict presentation.
   `test_epoch_baseline_is_tuple` + `test_rejects_tmin_above_tmax`; added `TestEpochs` pin +
   extended `TestGetSettings`. Full suite green (443 passed, 1 skipped).
 
-### Step 7 — `channel_hygiene` (offline only)
-- Add `CHANNEL_DROP_EMG`, `CHANNEL_RENAME_HEGOC_TO_HEOG`, `CHANNEL_MONTAGE_NAME`,
-  `CHANNEL_AFZ_CASE_FIX`. Offline `_channel_hygiene`.
+### Step 7 — `channel_hygiene` (offline only) ✅ DONE
+- Added `CHANNEL_DROP_EMG`, `CHANNEL_RENAME_HEGOC_TO_HEOG`, `CHANNEL_MONTAGE_NAME`,
+  `CHANNEL_AFZ_CASE_FIX`; offline `_channel_hygiene` reads them (boolean guards kept, so a dev
+  can disable a step by flipping the constant). Removed `ChannelHygieneSettings` + field;
+  re-attached to `_hardcoded_recipe()`. Stripped from 3 tracked YAMLs + 5 debug snapshots
+  (all identical `true/true/easycap-M1/true` — no divergence).
+- Rewrote `test_hygiene_skipped_when_disabled` to monkeypatch `CHANNEL_DROP_EMG=False` (the
+  disable path is no longer config-reachable); added `TestChannelHygiene` pin + extended
+  `TestGetSettings`. Full suite green (447 passed, 1 skipped). After this, the config's
+  `preprocessing:` block holds only `random_state` (model field) + `ica`.
 
 ### Step 8 — `ica` (+ iclabel) (offline only; most complex)
 - Add `ICA_METHOD`, `ICA_EXTENDED`, `ICA_N_COMPONENTS`, `ICA_FIT_L_FREQ`, `ICLABEL_ENABLED`,
