@@ -54,13 +54,11 @@ class TestGetPreprocessingParams:
         params = SettingsManager(sample_config_path).get_preprocessing_params()
         assert {
             "random_state", "resample_filter_stage", "channel_hygiene",
-            "highpass", "ica", "epochs",
+            "ica", "epochs",
         } <= params.keys()
 
     def test_filter_values(self, sample_config_path):
         params = SettingsManager(sample_config_path).get_preprocessing_params()
-        assert params["highpass"]["l_freq"] == 1.0
-        assert params["highpass"]["method"] == "iir"
         assert params["resample_filter_stage"] == "early"
 
     def test_epoch_baseline_is_tuple(self, sample_config_path):
@@ -139,12 +137,13 @@ class TestGetSettings:
         params = sm.get_preprocessing_params()
         pre = sm.get_settings()["preprocessing"]
         # Hardcoded blocks: missing from the backend params, present in the view.
-        for block in ("notch", "lowpass", "final_resample"):
+        for block in ("highpass", "notch", "lowpass", "final_resample"):
             assert block not in params
             assert block in pre
 
     def test_recipe_values_match_constants(self, sample_config_path):
         pre = SettingsManager(sample_config_path).get_settings()["preprocessing"]
+        assert pre["highpass"] == {"l_freq": pc.HIGHPASS_L_FREQ, "method": pc.HIGHPASS_METHOD}
         assert pre["notch"] == {"freq": pc.NOTCH_FREQ}
         assert pre["lowpass"] == {"h_freq": pc.LOWPASS_H_FREQ, "method": pc.LOWPASS_METHOD}
         assert pre["final_resample"] == {"target_rate": pc.FINAL_RESAMPLE_RATE}
@@ -152,15 +151,10 @@ class TestGetSettings:
     def test_still_carries_configurable_fields(self, sample_config_path):
         pre = SettingsManager(sample_config_path).get_settings()["preprocessing"]
         assert pre["resample_filter_stage"] == "early"
-        assert "highpass" in pre
+        assert "channel_hygiene" in pre
 
 
 class TestAllowedValues:
-    def test_rejects_invalid_highpass_method(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"highpass": {"l_freq": 0.1, "method": "butterworth"}}
-        with pytest.raises(ValueError):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
     def test_rejects_invalid_ica_method(self, tmp_config_file, minimal_valid_data):
         minimal_valid_data["preprocessing"] = {"ica": {"method": "extended_infomax"}}
         with pytest.raises(ValueError):
@@ -173,11 +167,6 @@ class TestAllowedValues:
 
     def test_rejects_invalid_decoder_model(self, tmp_config_file, minimal_valid_data):
         minimal_valid_data["decoders"]["model"] = "XGBoost"
-        with pytest.raises(ValueError):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
-    def test_rejects_extra_key_in_highpass(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"highpass": {"l_freq": 0.1, "typo_key": 99}}
         with pytest.raises(ValueError):
             SettingsManager(tmp_config_file(minimal_valid_data))
 
@@ -212,11 +201,6 @@ class TestAllowedValues:
 
 
 class TestRangeValidation:
-    def test_rejects_non_positive_highpass(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"highpass": {"l_freq": 0.0}}
-        with pytest.raises(ValueError):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
     def test_rejects_tmin_above_tmax(self, tmp_config_file, minimal_valid_data):
         minimal_valid_data["preprocessing"] = {"epochs": {"tmin": 0.8, "tmax": -0.2}}
         with pytest.raises(ValueError):

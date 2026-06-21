@@ -20,6 +20,14 @@ class TestLowpass:
         assert pc.LOWPASS_METHOD == "iir"
 
 
+class TestHighpass:
+    def test_l_freq(self):
+        assert pc.HIGHPASS_L_FREQ == 0.1
+
+    def test_method(self):
+        assert pc.HIGHPASS_METHOD == "iir"
+
+
 class TestNotch:
     def test_freq(self):
         assert pc.NOTCH_FREQ == 50.0

@@ -12,10 +12,6 @@ preprocessing:
     montage_name: easycap-M1
     afz_case_fix: true
 
-  highpass:
-    l_freq: 1.0
-    method: iir
-
   ica:
     method: infomax
     extended: true

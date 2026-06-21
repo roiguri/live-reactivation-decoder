@@ -19,10 +19,6 @@ preprocessing:
     montage_name: easycap-M1
     afz_case_fix: true
 
-  highpass:
-    l_freq: 0.1
-    method: iir          # IIR keeps offline/online causal parity
-
   ica:
     method: infomax
     extended: true

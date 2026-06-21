@@ -9,6 +9,8 @@ from scipy.signal import firwin, iirnotch, lfilter, sosfilt, sosfilt_zi, tf2sos
 
 from backend.core.preprocessing_constants import (
     FINAL_RESAMPLE_RATE,
+    HIGHPASS_L_FREQ,
+    HIGHPASS_METHOD,
     LOWPASS_H_FREQ,
     LOWPASS_METHOD,
     NOTCH_FREQ,
@@ -90,14 +92,12 @@ class OnlinePreprocessor:
         ]
 
         # Filter coefficients
-        hp = preprocessing_settings["highpass"]
-
         iir_params = mne.filter.create_filter(
             data=None,
             sfreq=self._input_sfreq,
-            l_freq=hp["l_freq"],
+            l_freq=HIGHPASS_L_FREQ,
             h_freq=None,
-            method=hp.get("method", "iir"),
+            method=HIGHPASS_METHOD,
             verbose=False,
         )
         self._highpass_sos: np.ndarray = iir_params["sos"]
@@ -143,7 +143,7 @@ class OnlinePreprocessor:
             "(decim %d, stage=%s), HP %g Hz, notch %s Hz, LP %g Hz, %d ICA excluded",
             self._n_eeg, len(self._good_indices), len(self._bad_indices),
             self._input_sfreq, self._target_sfreq, self._decimation,
-            self._resample_filter_stage, hp["l_freq"],
+            self._resample_filter_stage, HIGHPASS_L_FREQ,
             NOTCH_FREQ if NOTCH_FREQ is not None else "off", LOWPASS_H_FREQ,
             len(self._ica_exclude),
         )

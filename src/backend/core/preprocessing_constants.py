@@ -22,6 +22,12 @@ from __future__ import annotations
 LOWPASS_H_FREQ: float = 40.0
 LOWPASS_METHOD: str = "iir"
 
+# ── High-pass filter ────────────────────────────────────────────────────────────
+# Paper-aligned HP. IIR keeps offline/online causal parity (matched by the
+# streaming side's scipy.signal.sosfilt).
+HIGHPASS_L_FREQ: float = 0.1
+HIGHPASS_METHOD: str = "iir"
+
 # ── Notch filter ──────────────────────────────────────────────────────────────
 # Line-noise notch at the regional mains frequency. ``None`` disables the notch
 # entirely (the preprocessors keep a guard for that case).

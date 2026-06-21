@@ -46,7 +46,7 @@ populated directly from the constants module.
 | `lowpass` | yes | yes | h_freq + method | **done (Step 2)** |
 | `final_resample.target_rate` | yes (`_resample`) | yes | scalar | **done (Step 3)** |
 | `notch.freq` | yes | yes | scalar, `None` disables | **done (Step 4)** |
-| `highpass` | yes | yes | l_freq + method | |
+| `highpass` | yes | yes | l_freq + method | **done (Step 5)** |
 | `epochs` | yes | **no** | tmin/tmax/baseline; baked into matrices offline | |
 | `channel_hygiene` | yes | **no** | 4 flags | |
 | `ica` (+ iclabel) | yes | **no** | most complex; touches `random_state` | |
@@ -157,11 +157,21 @@ rejected in favour of keeping the existing dict presentation.
   simplified `test_notch_attenuates_50hz` to the default; extended pin + `TestGetSettings`
   coverage. Full suite green (449 passed, 1 skipped).
 
-### Step 5 — `highpass`
-- Add `HIGHPASS_L_FREQ = 0.1`, `HIGHPASS_METHOD = "iir"`. Offline `_highpass` + online `__init__`. (Both.)
-- Note: test fixtures use `l_freq = 1.0` (≠ the real 0.1) — hardcoding shifts their filter;
-  check the offline↔online parity tests still hold (they compare the two sides, which both
-  move to 0.1 together, so parity is preserved) and update any absolute-value asserts.
+### Step 5 — `highpass` ✅ DONE
+- Added `HIGHPASS_L_FREQ = 0.1`, `HIGHPASS_METHOD = "iir"`; offline `_highpass` + online
+  `__init__` (+ log line) read them. Removed `HighpassSettings` + field; re-attached to
+  `_hardcoded_recipe()`. Stripped `highpass` from the 3 tracked YAMLs + 5 debug snapshots
+  (all `0.1/iir` — no divergence).
+- **Resolved the fixture wrinkle:** online fixtures + `sample_config.yaml` used `l_freq = 1.0`
+  (a test-convenience value, ≠ real 0.1). The `_apply_ica` offline↔online parity test doesn't
+  exercise HP, so the mismatch was harmless. Two HP-cutoff tests (`test_lowfreq_attenuated`,
+  the drift half of `test_apply_filter_passes_high_frequencies`) were designed for the 1.0 Hz
+  cutoff and assumed sub-1Hz heavy attenuation — invalid at 0.1 Hz, and time-domain probing
+  below 0.1 Hz needs impractically long signals. Reworked `test_lowfreq_attenuated` to check
+  the HP **SOS frequency response** (`sosfreqz`) at 0.01 Hz (a decade below cutoff → <−40 dB),
+  mirroring the existing LP response test; trimmed the passing-only assertion in the other.
+- Removed three now-obsolete highpass config-validation tests (method/extra-key/non-positive);
+  added `TestHighpass` pin + extended `TestGetSettings`. Full suite green (448 passed, 1 skipped).
 
 ### Step 6 — `epochs` (offline only)
 - Add `EPOCH_TMIN = -0.2`, `EPOCH_TMAX = 1.0`, `EPOCH_BASELINE = None`

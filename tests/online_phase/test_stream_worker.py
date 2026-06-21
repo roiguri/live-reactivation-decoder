@@ -120,7 +120,6 @@ def _make_online_state() -> dict:
 
 def _make_settings() -> dict:
     return {
-        "highpass": {"l_freq": 1.0, "method": "iir"},
         "resample_filter_stage": "early",
     }
 

@@ -10,6 +10,8 @@ from scipy.signal import firwin, lfilter
 
 from backend.core.preprocessing_constants import (
     FINAL_RESAMPLE_RATE,
+    HIGHPASS_L_FREQ,
+    HIGHPASS_METHOD,
     LOWPASS_H_FREQ,
     LOWPASS_METHOD,
     NOTCH_FREQ,
@@ -248,13 +250,12 @@ class OfflinePreprocessor:
     # ── Private: filtering / resampling ───────────────────────────────────────
 
     def _highpass(self) -> None:
-        hp = self.settings["highpass"]
         # causal: parity with streaming OnlinePreprocessor (scipy.signal.sosfilt).
         self.raw.filter(
-            l_freq=hp["l_freq"], h_freq=None, method=hp.get("method", "iir"),
+            l_freq=HIGHPASS_L_FREQ, h_freq=None, method=HIGHPASS_METHOD,
             phase="forward", verbose=False,
         )
-        logger.info("Highpass: l_freq=%s Hz (%s)", hp["l_freq"], hp.get("method", "iir"))
+        logger.info("Highpass: l_freq=%s Hz (%s)", HIGHPASS_L_FREQ, HIGHPASS_METHOD)
 
     def _notch(self) -> None:
         if NOTCH_FREQ:

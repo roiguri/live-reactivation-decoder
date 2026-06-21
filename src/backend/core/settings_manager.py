@@ -82,6 +82,7 @@ class SettingsManager:
         recipe surfaced by :meth:`get_settings` stays complete.
         """
         return {
+            "highpass": {"l_freq": pc.HIGHPASS_L_FREQ, "method": pc.HIGHPASS_METHOD},
             "notch": {"freq": pc.NOTCH_FREQ},
             "lowpass": {"h_freq": pc.LOWPASS_H_FREQ, "method": pc.LOWPASS_METHOD},
             "final_resample": {"target_rate": pc.FINAL_RESAMPLE_RATE},

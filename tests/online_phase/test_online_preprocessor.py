@@ -74,7 +74,6 @@ def _make_settings(
     FINAL_RESAMPLE_RATE = 100); decimation tests vary input_sfreq instead.
     """
     return {
-        "highpass": {"l_freq": 1.0, "method": "iir"},
         "resample_filter_stage": resample_filter_stage,
     }
 
@@ -247,17 +246,15 @@ class TestApplyFilter:
         np.testing.assert_allclose(result_single, result_chunked, atol=1e-10)
 
     def test_apply_filter_passes_high_frequencies(self):
-        """HP-only stage must pass frequencies above the HP cutoff that aren't on the notch.
+        """HP-only stage must pass frequencies above the cutoff (no upper rolloff).
 
-        Confirms the filter is HP-only (no upper rolloff) and that the 0.05 Hz drift
-        below the HP cutoff is suppressed. Together these pin the stage as HP+notch,
-        not bandpass.
+        A 100 Hz tone (above the former 40 Hz bandpass edge, off the 50 Hz notch)
+        passes nearly untouched — confirming the stage is HP-only, not bandpass.
+        Sub-cutoff attenuation is covered analytically by test_lowfreq_attenuated.
         """
         n = int(INPUT_SFREQ * 5)
         p = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
 
-        # 100 Hz tone is above the (former) bandpass upper edge of 40 Hz and not at the
-        # 50 Hz notch — under HP-only it should pass through nearly untouched.
         high_data = _make_sinusoid(100.0, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
         high_out = p._apply_filter(high_data.copy())
         half = n // 2
@@ -268,28 +265,20 @@ class TestApplyFilter:
             f"100 Hz should pass through HP-only stage, got {high_ratio_db:.1f} dB"
         )
 
-        # 0.05 Hz drift is well below the 1 Hz HP cutoff — must be heavily attenuated.
-        p.reset_state()
-        n_long = int(INPUT_SFREQ * 30)  # need a long signal to see sub-1 Hz
-        drift = _make_sinusoid(0.05, n_long, N_CHANNELS, INPUT_SFREQ) * 1e-5
-        drift_out = p._apply_filter(drift.copy())
-        half_long = n_long // 2
-        drift_ratio_db = 20 * np.log10(
-            drift_out[half_long:].std() / (drift[half_long:].std() + 1e-30) + 1e-30
-        )
-        assert drift_ratio_db < -40, (
-            f"0.05 Hz drift should be suppressed, got {drift_ratio_db:.1f} dB"
-        )
-
     def test_lowfreq_attenuated(self):
-        """Sinusoid well below l_freq=1 Hz must be strongly attenuated."""
-        n = int(INPUT_SFREQ * 30)  # need longer signal to see sub-1 Hz
-        data = _make_sinusoid(0.1, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
+        """A frequency a decade below the 0.1 Hz HP cutoff must be strongly attenuated.
+
+        Checked analytically via the HP SOS frequency response — time-domain
+        probing below 0.1 Hz would need impractically long signals.
+        """
+        from scipy.signal import sosfreqz
+
         p = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
-        out = p._apply_filter(data)
-        half = n // 2
-        ratio_db = 20 * np.log10(out[half:].std() / data[half:].std() + 1e-30)
-        assert ratio_db < -40, f"Expected >40 dB attenuation, got {ratio_db:.1f} dB"
+        # 0.01 Hz is a decade below the hardcoded 0.1 Hz cutoff.
+        worN = 2 * np.pi * np.array([0.01]) / INPUT_SFREQ
+        _, h = sosfreqz(p._highpass_sos, worN=worN)
+        mag_db = 20 * np.log10(np.abs(h[0]) + 1e-30)
+        assert mag_db < -40, f"0.01 Hz should be suppressed, got {mag_db:.1f} dB"
 
     def test_notch_attenuates_50hz(self):
         """50 Hz sinusoid must be strongly attenuated (notch is hardcoded at 50 Hz)."""
