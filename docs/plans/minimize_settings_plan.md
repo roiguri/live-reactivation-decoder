@@ -48,7 +48,7 @@ populated directly from the constants module.
 | `notch.freq` | yes | yes | scalar, `None` disables | **done (Step 4)** |
 | `highpass` | yes | yes | l_freq + method | **done (Step 5)** |
 | `resample_filter_stage` | yes (`_stage`) | yes | gated two pipeline paths — **late path removed** | **done (Step 5b)** |
-| `epochs` | yes | **no** | tmin/tmax/baseline; baked into matrices offline | |
+| `epochs` | yes | **no** | tmin/tmax/baseline; baked into matrices offline | **done (Step 6)** |
 | `channel_hygiene` | yes | **no** | 4 flags | |
 | `ica` (+ iclabel) | yes | **no** | most complex; touches `random_state` | |
 
@@ -187,9 +187,18 @@ rejected in favour of keeping the existing dict presentation.
   (`TestPipelineOrdering`, `test_step1a_resamples_raw_to_target`). Full suite green
   (441 passed, 1 skipped).
 
-### Step 6 — `epochs` (offline only)
-- Add `EPOCH_TMIN = -0.2`, `EPOCH_TMAX = 1.0`, `EPOCH_BASELINE = None`
-  (+ module-level assert `EPOCH_TMIN < EPOCH_TMAX`). Offline `_epoch`.
+### Step 6 — `epochs` (offline only) ✅ DONE
+- Added `EPOCH_TMIN = -0.2`, `EPOCH_TMAX = 1.0`, `EPOCH_BASELINE = None` (+ module-level assert
+  `EPOCH_TMIN < EPOCH_TMAX`, replacing the old `EpochSettings._tmin_below_tmax` validator).
+  Offline `_epoch` reads them; removed `EpochSettings` + field; re-attached to `_hardcoded_recipe()`.
+  Stripped `epochs` from the 3 tracked YAMLs + 5 debug snapshots (all `-0.2/1.0/null` — no divergence).
+- **Fixture wrinkle (like highpass):** the offline fixtures used `tmin=-0.1, tmax=0.5,
+  baseline=[None,0]` (small/fast); the real values are `-0.2/1.0/None`. The 10 s synthetic raw
+  (events at 2–7 s) fits the larger window fine, and `baseline=None` actually *removes* the
+  baseline-corrected-ICA warnings (18→4 warnings). Reworked `test_baseline_none_supported` →
+  `test_baseline_is_none` (no longer mutates settings); removed the obsolete
+  `test_epoch_baseline_is_tuple` + `test_rejects_tmin_above_tmax`; added `TestEpochs` pin +
+  extended `TestGetSettings`. Full suite green (443 passed, 1 skipped).
 
 ### Step 7 — `channel_hygiene` (offline only)
 - Add `CHANNEL_DROP_EMG`, `CHANNEL_RENAME_HEGOC_TO_HEOG`, `CHANNEL_MONTAGE_NAME`,

@@ -69,31 +69,12 @@ class ICASettings(BaseModel):
     iclabel: IclabelSettings = Field(default_factory=IclabelSettings)
 
 
-class EpochSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    tmin: float = -0.2
-    tmax: float = 1.0
-    # null in YAML → None (paper-aligned, baseline correction omitted).
-    # [null, 0] → (None, 0.0); passed directly to mne.Epochs.
-    baseline: Optional[tuple[Optional[float], Optional[float]]] = None
-
-    @model_validator(mode="after")
-    def _tmin_below_tmax(self) -> EpochSettings:
-        if self.tmin >= self.tmax:
-            raise ValueError(
-                f"tmin ({self.tmin}) must be less than tmax ({self.tmax})"
-            )
-        return self
-
-
 class PreprocessingSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     random_state: int = DEFAULT_RANDOM_STATE
     channel_hygiene: ChannelHygieneSettings = Field(default_factory=ChannelHygieneSettings)
     ica: ICASettings = Field(default_factory=ICASettings)
-    epochs: EpochSettings = Field(default_factory=EpochSettings)
 
 
 class CVSettings(BaseModel):

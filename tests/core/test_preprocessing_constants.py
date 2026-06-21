@@ -36,3 +36,17 @@ class TestNotch:
 class TestFinalResample:
     def test_rate(self):
         assert pc.FINAL_RESAMPLE_RATE == 100
+
+
+class TestEpochs:
+    def test_tmin(self):
+        assert pc.EPOCH_TMIN == -0.2
+
+    def test_tmax(self):
+        assert pc.EPOCH_TMAX == 1.0
+
+    def test_baseline_is_none(self):
+        assert pc.EPOCH_BASELINE is None
+
+    def test_tmin_below_tmax(self):
+        assert pc.EPOCH_TMIN < pc.EPOCH_TMAX

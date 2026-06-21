@@ -9,6 +9,9 @@ import numpy as np
 from scipy.signal import firwin, lfilter
 
 from backend.core.preprocessing_constants import (
+    EPOCH_BASELINE,
+    EPOCH_TMAX,
+    EPOCH_TMIN,
     FINAL_RESAMPLE_RATE,
     HIGHPASS_L_FREQ,
     HIGHPASS_METHOD,
@@ -385,7 +388,6 @@ class OfflinePreprocessor:
     # ── Private: epoching / reference / ICA ───────────────────────────────────
 
     def _epoch(self, event_mapping: dict[str, int]) -> mne.Epochs:
-        ep = self.settings["epochs"]
         events, found_event_id = mne.events_from_annotations(self.raw, verbose=False)
         valid_event_id = {
             name: code
@@ -398,15 +400,13 @@ class OfflinePreprocessor:
             )
             valid_event_id = found_event_id
 
-        baseline = ep.get("baseline")
-        baseline = tuple(baseline) if baseline is not None else None
         return mne.Epochs(
             self.raw,
             events,
             event_id=valid_event_id,
-            tmin=ep["tmin"],
-            tmax=ep["tmax"],
-            baseline=baseline,
+            tmin=EPOCH_TMIN,
+            tmax=EPOCH_TMAX,
+            baseline=EPOCH_BASELINE,
             detrend=0,
             event_repeated="drop",
             preload=True,

@@ -37,3 +37,13 @@ NOTCH_FREQ: float | None = 50.0
 # Paper-aligned training/inference sample rate. The online decimation requires
 # the LSL input rate to be an integer multiple of this.
 FINAL_RESAMPLE_RATE: int = 100
+
+# ── Epoching (offline only) ─────────────────────────────────────────────────────
+# Epoch window around each stimulus. ``EPOCH_BASELINE = None`` is paper-aligned —
+# baseline correction is omitted (set to e.g. (None, 0.0) to re-enable pre-stim
+# mean subtraction). Passed directly to ``mne.Epochs``.
+EPOCH_TMIN: float = -0.2
+EPOCH_TMAX: float = 1.0
+EPOCH_BASELINE: tuple[float | None, float | None] | None = None
+
+assert EPOCH_TMIN < EPOCH_TMAX, "EPOCH_TMIN must be less than EPOCH_TMAX"

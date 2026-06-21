@@ -86,4 +86,9 @@ class SettingsManager:
             "notch": {"freq": pc.NOTCH_FREQ},
             "lowpass": {"h_freq": pc.LOWPASS_H_FREQ, "method": pc.LOWPASS_METHOD},
             "final_resample": {"target_rate": pc.FINAL_RESAMPLE_RATE},
+            "epochs": {
+                "tmin": pc.EPOCH_TMIN,
+                "tmax": pc.EPOCH_TMAX,
+                "baseline": pc.EPOCH_BASELINE,
+            },
         }

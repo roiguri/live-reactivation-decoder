@@ -249,12 +249,12 @@ class TestStage5Epoch:
         p.epochs = p._epoch({"blue": 99})
         assert len(p.epochs) > 0
 
-    def test_baseline_none_supported(
+    def test_baseline_is_none(
         self, make_preprocessor, synthetic_raw_with_events, preprocessing_settings
     ):
+        # EPOCH_BASELINE is hardcoded to None (paper-aligned, baseline omitted).
         p = make_preprocessor
         p.raw = synthetic_raw_with_events.copy()
-        preprocessing_settings["epochs"]["baseline"] = None
         p.settings = preprocessing_settings
         p.epochs = p._epoch({"red": 1, "green": 2})
         assert p.epochs.baseline is None

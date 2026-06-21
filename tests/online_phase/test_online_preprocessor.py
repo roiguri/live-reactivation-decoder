@@ -92,7 +92,6 @@ def _make_offline_settings() -> dict:
             "fit_l_freq": 1.0,
             "iclabel": {"enabled": False},
         },
-        "epochs": {"tmin": -0.1, "tmax": 0.5, "baseline": [None, 0]},
     }
     return PreprocessingSettings(**overrides).model_dump()
 

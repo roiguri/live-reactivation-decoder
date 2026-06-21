@@ -53,20 +53,12 @@ class TestGetPreprocessingParams:
     def test_contains_all_sections(self, sample_config_path):
         params = SettingsManager(sample_config_path).get_preprocessing_params()
         assert {
-            "random_state", "channel_hygiene", "ica", "epochs",
+            "random_state", "channel_hygiene", "ica",
         } <= params.keys()
-
-    def test_epoch_baseline_is_tuple(self, sample_config_path):
-        epochs = SettingsManager(sample_config_path).get_preprocessing_params()["epochs"]
-        baseline = epochs["baseline"]
-        assert isinstance(baseline, (list, tuple))
-        assert baseline[0] is None
-        assert baseline[1] == 0.0
 
     def test_defaults_applied_when_section_omitted(self, tmp_config_file, minimal_valid_data):
         params = SettingsManager(tmp_config_file(minimal_valid_data)).get_preprocessing_params()
         assert params["ica"]["n_components"] is None
-        assert params["epochs"]["baseline"] is None
 
 
 class TestGetDecoderSettings:
@@ -131,7 +123,7 @@ class TestGetSettings:
         params = sm.get_preprocessing_params()
         pre = sm.get_settings()["preprocessing"]
         # Hardcoded blocks: missing from the backend params, present in the view.
-        for block in ("highpass", "notch", "lowpass", "final_resample"):
+        for block in ("highpass", "notch", "lowpass", "final_resample", "epochs"):
             assert block not in params
             assert block in pre
 
@@ -141,6 +133,9 @@ class TestGetSettings:
         assert pre["notch"] == {"freq": pc.NOTCH_FREQ}
         assert pre["lowpass"] == {"h_freq": pc.LOWPASS_H_FREQ, "method": pc.LOWPASS_METHOD}
         assert pre["final_resample"] == {"target_rate": pc.FINAL_RESAMPLE_RATE}
+        assert pre["epochs"] == {
+            "tmin": pc.EPOCH_TMIN, "tmax": pc.EPOCH_TMAX, "baseline": pc.EPOCH_BASELINE,
+        }
 
     def test_still_carries_configurable_fields(self, sample_config_path):
         pre = SettingsManager(sample_config_path).get_settings()["preprocessing"]
@@ -190,11 +185,6 @@ class TestAllowedValues:
 
 
 class TestRangeValidation:
-    def test_rejects_tmin_above_tmax(self, tmp_config_file, minimal_valid_data):
-        minimal_valid_data["preprocessing"] = {"epochs": {"tmin": 0.8, "tmax": -0.2}}
-        with pytest.raises(ValueError):
-            SettingsManager(tmp_config_file(minimal_valid_data))
-
     def test_rejects_cv_k_below_2(self, tmp_config_file, minimal_valid_data):
         minimal_valid_data["decoders"]["cv"] = {"k": 1}
         with pytest.raises(ValueError):

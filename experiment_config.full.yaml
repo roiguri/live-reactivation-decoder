@@ -34,11 +34,6 @@ preprocessing:
           "channel noise",
         ]
 
-  epochs:
-    tmin: -0.2
-    tmax: 1.0
-    baseline: null
-
 decoders:
   model: Logistic
   params:

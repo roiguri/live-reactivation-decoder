@@ -19,11 +19,6 @@ preprocessing:
       enabled: true
       drop_labels: ["muscle artifact", "eye blink", "heart beat", "line noise", "channel noise"]
 
-  epochs:
-    tmin: -0.2
-    tmax: 1.0
-    baseline: [null, 0]
-
 decoders:
   model: LDA
   params:

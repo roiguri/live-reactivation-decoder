@@ -26,11 +26,6 @@ preprocessing:
       # decides on those manually in the topomap review window.
       drop_labels: ["muscle artifact", "eye blink", "heart beat", "line noise", "channel noise"]
 
-  epochs:
-    tmin: -0.2
-    tmax: 1.0
-    baseline: null        # paper-aligned; set to [null, 0] to re-enable pre-stim mean subtraction
-
 decoders:
   model: LDA          # LDA | Logistic | SVM
   params:             # valid keys depend on model (see config_models.py _VALID_PARAMS_BY_MODEL)
