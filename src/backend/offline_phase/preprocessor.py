@@ -62,12 +62,12 @@ class OfflinePreprocessor:
     def __init__(
         self,
         data_dir: Path,
-        preprocessing_settings: dict[str, Any],
+        random_state: int,
         raw: Optional[mne.io.Raw] = None,
     ) -> None:
         self.data_dir = Path(data_dir)
         self.subject_id = self.data_dir.name
-        self.settings = preprocessing_settings
+        self._random_state = random_state
 
         self.raw: Optional[mne.io.Raw] = raw
         self.epochs: Optional[mne.Epochs] = None
@@ -446,7 +446,7 @@ class OfflinePreprocessor:
             n_components=ICA_N_COMPONENTS,
             method=ICA_METHOD,
             fit_params=fit_params,
-            random_state=self.settings["random_state"],
+            random_state=self._random_state,
             max_iter="auto",
         )
         self.ica.fit(fit_epochs, verbose=False)

@@ -21,7 +21,7 @@ def _make_orchestrator(
 ) -> OfflineOrchestrator:
     if settings_manager is None:
         settings_manager = MagicMock()
-        settings_manager.get_preprocessing_params.return_value = {}
+        settings_manager.get_random_state.return_value = 42
         settings_manager.get_decoder_settings.return_value = {}
         settings_manager.get_event_mapping.return_value = {}
     return OfflineOrchestrator(settings_manager, SessionPaths(tmp_path))

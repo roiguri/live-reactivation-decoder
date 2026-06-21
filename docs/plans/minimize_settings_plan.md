@@ -231,7 +231,8 @@ rejected in favour of keeping the existing dict presentation.
   `TestIca`/`TestIclabel` pins + extended `TestGetSettings`. Full suite green (449 passed, 1 skipped).
 - After this, `PreprocessingSettings` holds **only `random_state`** — Step 9 collapses the rest.
 
-### Step 9 — Cleanup: collapse the preprocessing plumbing
+### Step 9 — Cleanup: collapse the preprocessing plumbing ✅ DONE
+Implemented as described below.
 With `resample_filter_stage` now removed (Step 5b), the preprocessing config holds only
 `random_state` (+ whatever blocks remain un-migrated at this point — after Steps 6–8, none):
 - `PreprocessingSettings` is reduced to `random_state` only (all sub-models gone). The

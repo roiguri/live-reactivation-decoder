@@ -118,12 +118,8 @@ def _make_online_state() -> dict:
     }
 
 
-def _make_settings() -> dict:
-    return {}
-
-
 def _make_preprocessor() -> OnlinePreprocessor:
-    return OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+    return OnlinePreprocessor(_make_online_state(), INPUT_SFREQ)
 
 
 def _make_worker(receiver: FakeReceiver, poll_interval_sec: float = 0.001) -> StreamWorker:

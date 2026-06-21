@@ -38,11 +38,10 @@ class OnlinePreprocessor:
 
     def __init__(
         self,
-        preprocessing_settings: dict,
         online_state: dict,
         input_sfreq: float = 1000.0,
     ) -> None:
-        self._validate_inputs(preprocessing_settings, online_state)
+        self._validate_inputs(online_state)
 
         self._input_sfreq = float(input_sfreq)
         self._target_sfreq = float(FINAL_RESAMPLE_RATE)
@@ -336,11 +335,7 @@ class OnlinePreprocessor:
     # ── Validation ────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _validate_inputs(
-        preprocessing_settings: dict,
-        online_state: dict,
-    ) -> None:
-
+    def _validate_inputs(online_state: dict) -> None:
         eeg_chunk_indices = list(online_state["eeg_chunk_indices"])
         n_eeg = len(eeg_chunk_indices)
 

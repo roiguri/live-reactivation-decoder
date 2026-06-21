@@ -7,12 +7,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 DEFAULT_RANDOM_STATE: int = 42
 
 
-class PreprocessingSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    random_state: int = DEFAULT_RANDOM_STATE
-
-
 class CVSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -98,7 +92,6 @@ class ExperimentConfig(BaseModel):
 
     experiment_info: ExperimentInfo
     random_state: int = DEFAULT_RANDOM_STATE
-    preprocessing: PreprocessingSettings = Field(default_factory=PreprocessingSettings)
     decoders: DecoderSettings = Field(default_factory=DecoderSettings)
     markers_mapping: MarkersMapping
 
@@ -108,19 +101,14 @@ class ExperimentConfig(BaseModel):
         if not isinstance(data, dict):
             return data
         rs = data.get("random_state", DEFAULT_RANDOM_STATE)
-        for section in ("preprocessing", "decoders"):
-            sub = data.get(section)
-            # Materialise an omitted/null section so the seed still propagates
-            # (the `preprocessing:` block is now empty once the recipe is hardcoded).
-            if sub is None:
-                sub = data[section] = {}
-            if isinstance(sub, dict):
-                if "random_state" in sub:
-                    raise ValueError(
-                        f"'random_state' must be set at the top level only, "
-                        f"not under '{section}'"
-                    )
-                sub["random_state"] = rs
+        sub = data.get("decoders")
+        if isinstance(sub, dict):
+            if "random_state" in sub:
+                raise ValueError(
+                    "'random_state' must be set at the top level only, "
+                    "not under 'decoders'"
+                )
+            sub["random_state"] = rs
         return data
 
     @model_validator(mode="after")

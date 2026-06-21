@@ -62,30 +62,15 @@ def fast_ica(monkeypatch):
 
 
 @pytest.fixture
-def preprocessing_settings() -> dict:
-    """The (now minimal) preprocessing settings dict — just the seed.
-
-    The recipe is hardcoded in ``preprocessing_constants``; only ``random_state``
-    remains in the config and is read by the ICA fit.
-    """
-    from backend.core.config_models import PreprocessingSettings
-
-    return PreprocessingSettings(random_state=42).model_dump()
-
-
-@pytest.fixture
-def make_preprocessor(tmp_path, preprocessing_settings):
-    """Factory fixture: returns an OfflinePreprocessor with synthetic raw pre-loaded."""
+def make_preprocessor(tmp_path):
+    """Factory fixture: returns an OfflinePreprocessor (recipe is hardcoded;
+    only the random seed is passed in)."""
     from backend.offline_phase.preprocessor import OfflinePreprocessor
 
     data_dir = tmp_path / "Sub_001"
     data_dir.mkdir(parents=True)
 
-    preprocessor = OfflinePreprocessor(
-        data_dir=data_dir,
-        preprocessing_settings=preprocessing_settings,
-    )
-    return preprocessor
+    return OfflinePreprocessor(data_dir=data_dir, random_state=42)
 
 
 # ── ModelEvaluator fixtures ───────────────────────────────────────────────────

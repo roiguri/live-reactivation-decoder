@@ -33,18 +33,9 @@ class SettingsManager:
             len(self._config.decoders.tasks),
         )
 
-    def get_preprocessing_params(self) -> dict[str, Any]:
-        """Returns the configurable 'preprocessing' block as a plain dict.
-
-        This is the *backend pipeline* input — only the fields still carried in
-        the config (``random_state`` and any not-yet-hardcoded blocks). The
-        hardcoded recipe lives in
-        :mod:`backend.core.preprocessing_constants` and is read there directly by
-        the preprocessors, so it is intentionally absent here. For the full
-        effective recipe (config + constants) used by the UI, see
-        :meth:`get_settings`.
-        """
-        return self._config.preprocessing.model_dump()
+    def get_random_state(self) -> int:
+        """The top-level reproducibility seed (consumed by the offline ICA fit)."""
+        return self._config.random_state
 
     def get_decoder_settings(self) -> dict[str, Any]:
         """Returns the 'decoders' block as a plain dict (random_state is a model field)."""
@@ -57,29 +48,23 @@ class SettingsManager:
     def get_settings(self) -> dict[str, Any]:
         """Returns the full effective settings in one dict for the UI.
 
-        The ``preprocessing`` section is the *effective recipe*: the configurable
-        fields (from the YAML) merged with the hardcoded blocks re-attached from
-        :mod:`backend.core.preprocessing_constants`, in their historical shape.
-        This keeps the frontend's view shape-stable across the block-by-block
-        hardcoding migration — values move from config to constants under the
-        hood, but consumers keep reading the same dict. The raw config stays
-        decapsulated behind :meth:`get_preprocessing_params` (backend pipeline).
+        The ``preprocessing`` section is the hardcoded recipe, assembled from
+        :mod:`backend.core.preprocessing_constants` (the recipe is no longer in the
+        config — see the migration in docs/plans/minimize_settings_plan.md). The
+        ``decoders`` / ``event_mapping`` sections come from the YAML config.
         """
-        preprocessing = self.get_preprocessing_params()
-        preprocessing.update(self._hardcoded_recipe())
         return {
-            "preprocessing": preprocessing,
+            "preprocessing": self._hardcoded_recipe(),
             "decoders":      self.get_decoder_settings(),
             "event_mapping": self.get_event_mapping(),
         }
 
     @staticmethod
     def _hardcoded_recipe() -> dict[str, Any]:
-        """The preprocessing blocks now fixed as constants, in config-dict shape.
+        """The full preprocessing recipe as constants, in config-dict shape.
 
-        Single source of truth: :mod:`backend.core.preprocessing_constants`. Each
-        block migrated out of the YAML schema is re-attached here so the effective
-        recipe surfaced by :meth:`get_settings` stays complete.
+        Single source of truth: :mod:`backend.core.preprocessing_constants`. This
+        is what the UI reads as ``session.settings["preprocessing"]``.
         """
         return {
             "channel_hygiene": {

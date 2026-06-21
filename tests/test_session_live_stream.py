@@ -58,8 +58,7 @@ class FakeProxySource:
 class FakePreprocessor:
     instances = []
 
-    def __init__(self, preprocessing_settings, online_state) -> None:
-        self.preprocessing_settings = preprocessing_settings
+    def __init__(self, online_state) -> None:
         self.online_state = online_state
         self.target_sfreq = float(FINAL_RESAMPLE_RATE)
         self.input_sfreq = 1000.0

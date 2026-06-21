@@ -45,19 +45,13 @@ class TestLoad:
             SettingsManager(path)
 
 
-class TestGetPreprocessingParams:
-    def test_returns_dict(self, sample_config_path):
-        params = SettingsManager(sample_config_path).get_preprocessing_params()
-        assert isinstance(params, dict)
+class TestGetRandomState:
+    def test_returns_top_level_seed(self, sample_config_path):
+        assert SettingsManager(sample_config_path).get_random_state() == 42
 
-    def test_only_carries_random_state(self, sample_config_path):
-        # The recipe is hardcoded; only the seed remains in the backend params.
-        params = SettingsManager(sample_config_path).get_preprocessing_params()
-        assert "random_state" in params
-
-    def test_seed_propagated_when_preprocessing_omitted(self, tmp_config_file, minimal_valid_data):
-        params = SettingsManager(tmp_config_file(minimal_valid_data)).get_preprocessing_params()
-        assert params["random_state"] == minimal_valid_data.get("random_state", 42)
+    def test_reads_custom_seed(self, tmp_config_file, minimal_valid_data):
+        minimal_valid_data["random_state"] = 7
+        assert SettingsManager(tmp_config_file(minimal_valid_data)).get_random_state() == 7
 
 
 class TestGetDecoderSettings:
@@ -106,27 +100,22 @@ class TestGetEventMapping:
 
 
 class TestGetSettings:
-    """get_settings() is the UI's effective view: config + the hardcoded recipe.
+    """get_settings()['preprocessing'] is the UI's view of the hardcoded recipe.
 
-    Blocks hardcoded as constants are absent from get_preprocessing_params()
-    (backend input) but re-attached here so the frontend's dict stays complete
-    and shape-stable across the migration.
+    The recipe is no longer in the config; get_settings assembles it from
+    preprocessing_constants so the frontend keeps reading a complete dict.
     """
 
     def test_has_all_top_level_sections(self, sample_config_path):
         settings = SettingsManager(sample_config_path).get_settings()
         assert set(settings.keys()) == {"preprocessing", "decoders", "event_mapping"}
 
-    def test_reattaches_hardcoded_recipe_absent_from_params(self, sample_config_path):
-        sm = SettingsManager(sample_config_path)
-        params = sm.get_preprocessing_params()
-        pre = sm.get_settings()["preprocessing"]
-        # Hardcoded blocks: missing from the backend params, present in the view.
+    def test_preprocessing_view_has_full_recipe(self, sample_config_path):
+        pre = SettingsManager(sample_config_path).get_settings()["preprocessing"]
         for block in (
             "channel_hygiene", "highpass", "notch", "lowpass", "final_resample",
             "epochs", "ica",
         ):
-            assert block not in params
             assert block in pre
 
     def test_recipe_values_match_constants(self, sample_config_path):
@@ -154,11 +143,6 @@ class TestGetSettings:
                 "drop_labels": list(pc.ICLABEL_DROP_LABELS),
             },
         }
-
-    def test_still_carries_configurable_random_state(self, sample_config_path):
-        # random_state is the only field still sourced from the config.
-        pre = SettingsManager(sample_config_path).get_settings()["preprocessing"]
-        assert "random_state" in pre
 
 
 class TestAllowedValues:

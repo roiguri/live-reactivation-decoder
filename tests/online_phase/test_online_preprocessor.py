@@ -65,29 +65,6 @@ def _make_online_state(
     }
 
 
-def _make_settings() -> dict:
-    """Build the preprocessing_settings dict OnlinePreprocessor still accepts.
-
-    The whole recipe (filters, resample rate, pipeline ordering) is now
-    hardcoded in ``preprocessing_constants``, so the online preprocessor reads
-    nothing from this dict — it stays empty (the arg is vestigial pending the
-    final cleanup step).
-    """
-    return {}
-
-
-def _make_offline_settings() -> dict:
-    """The (now minimal) offline preprocessing settings — just the seed.
-
-    The recipe is hardcoded in ``preprocessing_constants``. Tests that fit ICA
-    via these settings patch the ICA constants to fastica + 4 components +
-    ICLabel off for speed (see ``_patch_fast_ica``).
-    """
-    from backend.core.config_models import PreprocessingSettings
-
-    return PreprocessingSettings(random_state=42).model_dump()
-
-
 @pytest.fixture(autouse=True)
 def _fast_ica(monkeypatch):
     """Patch the hardcoded ICA recipe to fast/isolated values.
@@ -102,62 +79,57 @@ def _fast_ica(monkeypatch):
 
 
 @pytest.fixture
-def valid_settings() -> dict:
-    return _make_settings()
-
-
-@pytest.fixture
 def valid_online_state() -> dict:
     return _make_online_state()
 
 
 @pytest.fixture
-def preprocessor(valid_settings, valid_online_state) -> OnlinePreprocessor:
+def preprocessor(valid_online_state) -> OnlinePreprocessor:
     return OnlinePreprocessor(
-        valid_settings, valid_online_state, input_sfreq=INPUT_SFREQ,
+        valid_online_state, input_sfreq=INPUT_SFREQ,
     )
 
 
 # ── Commit 2: Constructor validation ─────────────────────────────────────────
 
 class TestConstructorValidation:
-    def test_valid_construction_succeeds(self, valid_settings, valid_online_state):
-        p = OnlinePreprocessor(valid_settings, valid_online_state, input_sfreq=INPUT_SFREQ)
+    def test_valid_construction_succeeds(self, valid_online_state):
+        p = OnlinePreprocessor(valid_online_state, input_sfreq=INPUT_SFREQ)
         assert p is not None
 
-    def test_raises_if_pca_cols_inconsistent_with_eeg_chunk_indices(self, valid_settings):
+    def test_raises_if_pca_cols_inconsistent_with_eeg_chunk_indices(self):
         state = _make_online_state()
         state["ica_pca_components"] = np.zeros((4, N_CHANNELS + 5))
         with pytest.raises(ValueError, match="eeg_chunk_indices"):
-            OnlinePreprocessor(valid_settings, state)
+            OnlinePreprocessor(state)
 
-    def test_raises_on_negative_eeg_chunk_index(self, valid_settings):
+    def test_raises_on_negative_eeg_chunk_index(self):
         state = _make_online_state(eeg_chunk_indices=[0, 1, -1] + list(range(3, N_CHANNELS)))
         with pytest.raises(ValueError, match="eeg_chunk_indices"):
-            OnlinePreprocessor(valid_settings, state)
+            OnlinePreprocessor(state)
 
-    def test_raises_on_duplicate_eeg_chunk_indices(self, valid_settings):
+    def test_raises_on_duplicate_eeg_chunk_indices(self):
         dup = list(range(N_CHANNELS))
         dup[0] = dup[1]
         state = _make_online_state(eeg_chunk_indices=dup)
         with pytest.raises(ValueError, match="duplicates"):
-            OnlinePreprocessor(valid_settings, state)
+            OnlinePreprocessor(state)
 
-    def test_raises_on_out_of_range_bad_indices(self, valid_settings):
+    def test_raises_on_out_of_range_bad_indices(self):
         state = _make_online_state(bad_indices=[N_CHANNELS + 1])
         with pytest.raises(ValueError, match="bad_indices"):
-            OnlinePreprocessor(valid_settings, state)
+            OnlinePreprocessor(state)
 
-    def test_raises_on_out_of_range_ica_exclude(self, valid_settings):
+    def test_raises_on_out_of_range_ica_exclude(self):
         state = _make_online_state(n_components=4)
         state["ica_exclude"] = [99]  # n_components=4, so 99 is out of range
         with pytest.raises(ValueError, match="ica_exclude"):
-            OnlinePreprocessor(valid_settings, state)
+            OnlinePreprocessor(state)
 
     def test_raises_on_non_integer_decimation_ratio(self):
         # Target is fixed at 100 Hz; a 1050 Hz input gives ratio 10.5 (non-integer).
         with pytest.raises(ValueError, match="integer multiple"):
-            OnlinePreprocessor(_make_settings(), _make_online_state(), input_sfreq=1050.0)
+            OnlinePreprocessor(_make_online_state(), input_sfreq=1050.0)
 
 
 # ── Commit 2: Properties ──────────────────────────────────────────────────────
@@ -215,10 +187,10 @@ class TestApplyFilter:
         rng = np.random.default_rng(1)
         data = rng.standard_normal((1000, N_CHANNELS)) * 1e-5
 
-        p1 = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+        p1 = OnlinePreprocessor(_make_online_state(), INPUT_SFREQ)
         result_single = p1._apply_filter(data.copy())
 
-        p2 = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+        p2 = OnlinePreprocessor(_make_online_state(), INPUT_SFREQ)
         chunks = [p2._apply_filter(data[i * 100:(i + 1) * 100].copy()) for i in range(10)]
         result_chunked = np.concatenate(chunks)
 
@@ -228,10 +200,10 @@ class TestApplyFilter:
         rng = np.random.default_rng(2)
         data = rng.standard_normal((1000, N_CHANNELS)) * 1e-5
 
-        p1 = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+        p1 = OnlinePreprocessor(_make_online_state(), INPUT_SFREQ)
         result_single = p1._apply_filter(data.copy())
 
-        p2 = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+        p2 = OnlinePreprocessor(_make_online_state(), INPUT_SFREQ)
         sizes = [37, 51, 29, 83, 100, 200, 500]  # sums to 1000
         chunks, idx = [], 0
         for s in sizes:
@@ -249,7 +221,7 @@ class TestApplyFilter:
         Sub-cutoff attenuation is covered analytically by test_lowfreq_attenuated.
         """
         n = int(INPUT_SFREQ * 5)
-        p = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+        p = OnlinePreprocessor(_make_online_state(), INPUT_SFREQ)
 
         high_data = _make_sinusoid(100.0, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
         high_out = p._apply_filter(high_data.copy())
@@ -269,7 +241,7 @@ class TestApplyFilter:
         """
         from scipy.signal import sosfreqz
 
-        p = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+        p = OnlinePreprocessor(_make_online_state(), INPUT_SFREQ)
         # 0.01 Hz is a decade below the hardcoded 0.1 Hz cutoff.
         worN = 2 * np.pi * np.array([0.01]) / INPUT_SFREQ
         _, h = sosfreqz(p._highpass_sos, worN=worN)
@@ -280,7 +252,7 @@ class TestApplyFilter:
         """50 Hz sinusoid must be strongly attenuated (notch is hardcoded at 50 Hz)."""
         n = int(INPUT_SFREQ * 5)
         data = _make_sinusoid(50.0, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
-        p = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+        p = OnlinePreprocessor(_make_online_state(), INPUT_SFREQ)
         out = p._apply_filter(data)
         half = n // 2
         ratio_db = 20 * np.log10(out[half:].std() / (data[half:].std() + 1e-30) + 1e-30)
@@ -297,7 +269,7 @@ class TestApplyFilter:
         )
         n = int(INPUT_SFREQ * 5)
         data = _make_sinusoid(50.0, n, N_CHANNELS, INPUT_SFREQ) * 1e-5
-        p = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+        p = OnlinePreprocessor(_make_online_state(), INPUT_SFREQ)
         out = p._apply_filter(data)
         half = n // 2
         ratio_db = 20 * np.log10(out[half:].std() / (data[half:].std() + 1e-30) + 1e-30)
@@ -327,7 +299,7 @@ class TestApplyLowpass:
     """
 
     def _make_p(self) -> OnlinePreprocessor:
-        return OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+        return OnlinePreprocessor(_make_online_state(), INPUT_SFREQ)
 
     def test_passband_fidelity_5hz_preserved(self):
         """A 5 Hz tone (well below the 40 Hz cutoff) should pass with negligible attenuation."""
@@ -437,7 +409,7 @@ class TestApplyLowpass:
 
 class TestDecimate:
     def _make_p(self) -> OnlinePreprocessor:
-        return OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+        return OnlinePreprocessor(_make_online_state(), INPUT_SFREQ)
 
     def _make_data(self, n: int) -> tuple[np.ndarray, np.ndarray]:
         rng = np.random.default_rng(7)
@@ -541,7 +513,6 @@ class TestDecimateFrequencies:
 
     def _make_p(self, input_sfreq: float) -> OnlinePreprocessor:
         return OnlinePreprocessor(
-            _make_settings(),
             _make_online_state(),
             input_sfreq=input_sfreq,
         )
@@ -624,7 +595,7 @@ def _make_preprocessor_with_bad_channel() -> OnlinePreprocessor:
         bad_indices=[bad_idx],
         interp_weights=weights,
     )
-    return OnlinePreprocessor(_make_settings(), state, INPUT_SFREQ)
+    return OnlinePreprocessor(state, INPUT_SFREQ)
 
 
 class TestApplyBadChannelInterpolation:
@@ -745,7 +716,7 @@ class TestApplyICA:
         state["ica_exclude"] = list(ica.exclude)
         state["pre_whitener"] = ica.pre_whitener_.copy()
 
-        p = OnlinePreprocessor(_make_settings(), state, INPUT_SFREQ)
+        p = OnlinePreprocessor(state, INPUT_SFREQ)
         return p, ica, raw
 
     def test_ica_matches_mne_apply(self):
@@ -776,7 +747,7 @@ class TestApplyICA:
 
         offline = OfflinePreprocessor(
             data_dir=tmp_path / "Sub_001",
-            preprocessing_settings=_make_offline_settings(),
+            random_state=42,
         )
         offline.raw = raw.copy()
         offline._original_ch_names = list(offline.raw.ch_names)
@@ -795,7 +766,6 @@ class TestApplyICA:
 
         state = offline.export_online_state()
         online = OnlinePreprocessor(
-            preprocessing_settings=_make_settings(),
             online_state=state,
             input_sfreq=INPUT_SFREQ,
         )
@@ -823,7 +793,7 @@ class TestApplyICA:
     def test_pca_mean_none_does_not_crash(self):
         state = _make_online_state()
         state["ica_pca_mean"] = None
-        p = OnlinePreprocessor(_make_settings(), state, INPUT_SFREQ)
+        p = OnlinePreprocessor(state, INPUT_SFREQ)
         data = np.random.default_rng(9).standard_normal((20, N_CHANNELS))
         p._apply_ica(data)  # must not raise
 
@@ -866,7 +836,7 @@ class TestApplyICA:
 
 class TestProcessBatch:
     def _make_p(self) -> OnlinePreprocessor:
-        return OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+        return OnlinePreprocessor(_make_online_state(), INPUT_SFREQ)
 
     def _make_batch(self, n: int) -> tuple[np.ndarray, np.ndarray]:
         rng = np.random.default_rng(11)
@@ -980,7 +950,7 @@ class TestProcessBatchHygiene:
         keep = list(range(0, 8)) + list(range(9, raw_n))  # drop position 8 (1 channel)
         n_eeg = len(keep)  # 21
         state = _make_online_state(n_eeg=n_eeg, eeg_chunk_indices=keep)
-        p = OnlinePreprocessor(_make_settings(), state, INPUT_SFREQ)
+        p = OnlinePreprocessor(state, INPUT_SFREQ)
 
         # Build a 40-sample batch where each raw column has a distinct value
         # equal to its index, so we can verify which survived.
@@ -1043,7 +1013,7 @@ class TestIntegration:
 
         offline = OfflinePreprocessor(
             data_dir=tmp_path / "Sub_001",
-            preprocessing_settings=_make_offline_settings(),
+            random_state=42,
         )
         offline.raw = raw.copy()
         offline._original_ch_names = list(offline.raw.ch_names)
@@ -1068,7 +1038,6 @@ class TestIntegration:
         state = offline.export_online_state()
 
         online = OnlinePreprocessor(
-            preprocessing_settings=_make_settings(),
             online_state=state,
             input_sfreq=INPUT_SFREQ,
         )
@@ -1097,7 +1066,6 @@ class TestIntegration:
         assert offline_state["bad_indices"] == [0]  # Fp1 is at position 0 in EEG_CH_NAMES
 
         online = OnlinePreprocessor(
-            preprocessing_settings=_make_settings(),
             online_state=offline_state,
             input_sfreq=INPUT_SFREQ,
         )
@@ -1173,7 +1141,7 @@ class TestPipelineOrdering:
         return data, timestamps
 
     def test_runs_lp_decimate_before_spatial_transforms(self):
-        p = OnlinePreprocessor(_make_settings(), _make_online_state(), INPUT_SFREQ)
+        p = OnlinePreprocessor(_make_online_state(), INPUT_SFREQ)
         log = self._instrument(p)
         data, timestamps = self._make_batch()
         p.process_batch(data, timestamps)
