@@ -3,8 +3,8 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt, QThread, pyqtSignal as Signal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QMessageBox,
-    QScrollArea, QVBoxLayout, QWidget,
+    QFileDialog, QFrame, QHBoxLayout, QLabel, QMessageBox,
+    QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
 from frontend.styles.theme import (
@@ -34,6 +34,9 @@ class SettingsView(QWidget):
     loading_done = Signal()
     # Ready protocol — gates the journey-panel action button for this node
     ready_changed = Signal(bool)
+    # Alternate entry: operator chose an existing output folder to open live mode
+    # directly, bypassing the Phase 1 journey. Carries the chosen directory path.
+    live_from_output_requested = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -117,6 +120,20 @@ class SettingsView(QWidget):
         self._output_picker = FilePicker("Select Output Directory", mode="dir")
         self._output_picker.path_selected.connect(self._on_output_dir_selected)
         card.body.addWidget(self._output_picker)
+
+        # Alternate entry: skip the Phase 1 journey and open live mode straight
+        # from a folder a prior run already trained into.
+        live_row = QHBoxLayout()
+        live_row.setSpacing(10)
+        live_hint = QLabel("Already trained?")
+        live_hint.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        live_row.addWidget(live_hint)
+        self._live_from_output_btn = QPushButton("Open Live from Existing Output…")
+        self._live_from_output_btn.setProperty("class", "secondary")
+        self._live_from_output_btn.clicked.connect(self._on_live_from_output_clicked)
+        live_row.addWidget(self._live_from_output_btn)
+        live_row.addStretch()
+        card.body.addLayout(live_row)
 
         self._content.addWidget(card)
 
@@ -272,6 +289,18 @@ class SettingsView(QWidget):
     def _on_output_dir_selected(self, path: str) -> None:
         self._output_dir = path
         self._update_continue_state()
+
+    def _on_live_from_output_clicked(self) -> None:
+        """Pick an existing output folder and request a direct jump to Phase 2.
+
+        Validation (config + trained pipeline present) and navigation live in
+        Phase1Screen, which owns the screen stack; here we only choose the folder.
+        """
+        path = QFileDialog.getExistingDirectory(
+            self, "Select an existing output folder"
+        )
+        if path:
+            self.live_from_output_requested.emit(path)
 
     def _update_continue_state(self) -> None:
         ready = bool(self._config_path and self._output_dir)
