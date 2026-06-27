@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import QApplication
 
 from backend.core.logging_setup import configure_logging
 from frontend.main_window import MainWindow
-from frontend.screens.phase1_screen import Phase1Screen
+from frontend.screens.launch_screen import LaunchScreen
 from frontend.styles.theme import GLOBAL_QSS
 
 
@@ -51,8 +51,7 @@ def main():
     app.setStyleSheet(GLOBAL_QSS)
 
     window = MainWindow()
-    screen = Phase1Screen()
-    window.show_screen(screen)
+    window.show_screen(LaunchScreen())
     window.show()
 
     sys.exit(app.exec())

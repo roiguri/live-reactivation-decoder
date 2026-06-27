@@ -126,9 +126,6 @@ class Phase1Screen(QWidget):
         self._settings_view.session_ready.connect(self._on_session_ready)
         self._settings_view.loading_requested.connect(self.show_loading)
         self._settings_view.loading_done.connect(self.hide_loading)
-        self._settings_view.live_from_output_requested.connect(
-            self._on_live_from_output
-        )
 
         # Node 2: Load Data
         self._journey_panel.set_node_action(1, self._load_data_view.trigger_load)
@@ -270,41 +267,6 @@ class Phase1Screen(QWidget):
             QMessageBox.critical(
                 self, "Could not open live inference",
                 f"Failed to load the decoder pipeline:\n{exc}",
-            )
-            return
-        mw.show_screen(phase2)
-
-    def _on_live_from_output(self, output_dir: str) -> None:
-        """Open Phase 2 directly from an existing output folder (alternate entry).
-
-        Bypasses the Phase 1 journey: validate the folder has a config + trained
-        pipeline, then build a live-only session and show Phase 2. A missing file
-        or a corrupt config keeps the operator here with a clear message.
-        """
-        from PyQt6.QtWidgets import QMessageBox
-        from frontend.screens.phase2_launch import (
-            build_phase2_from_output, missing_live_artifacts,
-        )
-
-        missing = missing_live_artifacts(output_dir)
-        if missing:
-            QMessageBox.critical(
-                self, "Not a live-ready output folder",
-                f"{output_dir}\n\nMissing required file(s):\n"
-                + "\n".join(f"  • {name}" for name in missing),
-            )
-            return
-
-        mw = self.window()
-        if mw is None or not hasattr(mw, "show_screen"):
-            return
-        try:
-            phase2 = build_phase2_from_output(output_dir)
-        except Exception as exc:
-            logger.exception("Failed to open live inference from output folder")
-            QMessageBox.critical(
-                self, "Could not open live inference",
-                f"Failed to open live mode from:\n{output_dir}\n\n{exc}",
             )
             return
         mw.show_screen(phase2)
