@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import QMainWindow, QStackedWidget, QWidget
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("EEG Decoder — Phase 1")
+        self.setWindowTitle("Live Reactivation Decoder")
         self.resize(1280, 800)
         self.setMinimumSize(960, 600)
 
