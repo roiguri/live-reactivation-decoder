@@ -179,6 +179,13 @@ class OfflineOrchestrator:
             return None
         return self._preprocessor.component_labels
 
+    @property
+    def epochs(self) -> Optional[mne.Epochs]:
+        """The cleaned epochs produced by preprocessing, or ``None`` before
+        ``run_step1b_fit_ica()`` has run. Read-only view for the UI (e.g. the
+        per-class epoch breakdown on the preprocessing-complete page)."""
+        return self._epochs
+
     def run_step2_apply_and_save(
         self, excluded_components: list[int]
     ) -> dict[str, Any]:

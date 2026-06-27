@@ -219,6 +219,19 @@ class TestRunStep1bFitIca:
         assert (ica, epochs, suggested) == ("ica", "epochs", [0, 2])
         assert orc._epochs == "epochs"
 
+    def test_epochs_property_none_before_step1b(self, tmp_path: Path) -> None:
+        assert _make_orchestrator(tmp_path).epochs is None
+
+    def test_epochs_property_exposes_epochs_after_step1b(self, tmp_path: Path) -> None:
+        sm = MagicMock()
+        sm.get_event_mapping.return_value = {"red": 1}
+        sm.get_intervals.return_value = []
+        orc = _make_orchestrator(tmp_path, sm)
+        stub = _attach_preprocessor_stub(orc)
+        stub.run_step1b_fit_ica.return_value = ("ica", "epochs", [])
+        orc.run_step1b_fit_ica()
+        assert orc.epochs == "epochs"
+
     def test_ica_component_labels_none_without_preprocessor(
         self, tmp_path: Path
     ) -> None:

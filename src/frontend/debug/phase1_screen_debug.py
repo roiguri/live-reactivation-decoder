@@ -277,7 +277,7 @@ class DebugPhase1Screen(Phase1Screen):
             return False
         load_snapshot(self.session.offline, preproc_snap)
         pre = self.session.offline._preprocessor
-        epochs = self.session.offline._epochs
+        epochs = self.session.offline.epochs
         n_epochs = len(epochs) if epochs is not None else 0
         n_excluded = len(pre.ica.exclude) if pre is not None and pre.ica is not None else 0
 
@@ -287,6 +287,7 @@ class DebugPhase1Screen(Phase1Screen):
         pv._excluded_count = n_excluded
         pv._epochs_value.setText(str(n_epochs))
         pv._components_value.setText(str(n_excluded))
+        pv._render_per_class(pv._per_class_counts(epochs))
         pv._pages.setCurrentIndex(1)  # complete page
         pv._update_ready_state()
         pv.step2_complete.emit()
