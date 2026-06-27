@@ -70,10 +70,17 @@ class TestIclabel:
     def test_enabled(self):
         assert pc.ICLABEL_ENABLED is True
 
-    def test_drop_labels(self):
-        assert pc.ICLABEL_DROP_LABELS == (
-            "muscle artifact", "eye blink", "heart beat", "line noise", "channel noise",
-        )
+    def test_reject_thresholds(self):
+        assert pc.ICLABEL_REJECT_THRESHOLDS == {
+            "muscle artifact": 0.85,
+            "eye blink": 0.85,
+            "heart beat": 0.0,
+            "line noise": 0.80,
+            "channel noise": 0.90,
+        }
+
+    def test_reject_thresholds_in_unit_range(self):
+        assert all(0.0 <= t <= 1.0 for t in pc.ICLABEL_REJECT_THRESHOLDS.values())
 
 
 class TestEpochs:

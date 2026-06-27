@@ -142,7 +142,7 @@ class TestGetSettings:
             "fit_l_freq": pc.ICA_FIT_L_FREQ,
             "iclabel": {
                 "enabled": pc.ICLABEL_ENABLED,
-                "drop_labels": list(pc.ICLABEL_DROP_LABELS),
+                "reject_thresholds": dict(pc.ICLABEL_REJECT_THRESHOLDS),
             },
         }
 
