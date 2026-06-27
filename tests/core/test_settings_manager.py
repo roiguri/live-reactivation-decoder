@@ -253,6 +253,21 @@ class TestIntervals:
         with pytest.raises(ValueError, match="Duplicate interval"):
             SettingsManager(tmp_config_file(minimal_valid_data))
 
+    def test_rejects_start_equals_stop(self, tmp_config_file, minimal_valid_data):
+        # An interval whose span is a single marker can never tile a window.
+        self._with_interval(minimal_valid_data, start="red", stop="red")
+        with pytest.raises(ValueError, match="identical"):
+            SettingsManager(tmp_config_file(minimal_valid_data))
+
+    def test_rejects_duplicate_start_stop_pair(self, tmp_config_file, minimal_valid_data):
+        # Distinct names but the same markers tile colliding windows.
+        minimal_valid_data["intervals"] = [
+            {"name": "rest", "start": "red", "stop": "green"},
+            {"name": "baseline", "start": "red", "stop": "green"},
+        ]
+        with pytest.raises(ValueError, match="duplicate \\(start, stop\\) pair"):
+            SettingsManager(tmp_config_file(minimal_valid_data))
+
     def test_task_referencing_unknown_label_still_rejected(
         self, tmp_config_file, minimal_valid_data
     ):

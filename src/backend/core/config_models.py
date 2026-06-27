@@ -132,6 +132,7 @@ class ExperimentConfig(BaseModel):
     def _validate_intervals(self) -> ExperimentConfig:
         event_names = {e.name for e in self.markers_mapping.events}
         seen: set[str] = set()
+        seen_pairs: set[tuple[str, str]] = set()
         for spec in self.intervals:
             for role, marker in (("start", spec.start), ("stop", spec.stop)):
                 if marker not in event_names:
@@ -139,6 +140,11 @@ class ExperimentConfig(BaseModel):
                         f"Interval '{spec.name}': {role} marker '{marker}' not found "
                         f"in markers_mapping.events. Known names: {sorted(event_names)}"
                     )
+            if spec.start == spec.stop:
+                raise ValueError(
+                    f"Interval '{spec.name}': start and stop markers are identical "
+                    f"('{spec.start}'); the span would always be empty."
+                )
             if spec.name in event_names:
                 raise ValueError(
                     f"Interval name '{spec.name}' collides with a stimulus event "
@@ -146,7 +152,14 @@ class ExperimentConfig(BaseModel):
                 )
             if spec.name in seen:
                 raise ValueError(f"Duplicate interval name '{spec.name}'.")
+            if (spec.start, spec.stop) in seen_pairs:
+                raise ValueError(
+                    f"Interval '{spec.name}': duplicate (start, stop) pair "
+                    f"('{spec.start}' → '{spec.stop}') already used by another "
+                    f"interval; the tiled windows would collide."
+                )
             seen.add(spec.name)
+            seen_pairs.add((spec.start, spec.stop))
         return self
 
     @model_validator(mode="after")
