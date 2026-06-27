@@ -201,6 +201,70 @@ class TestCrossModelValidation:
         assert sm.get_decoder_settings()["tasks"] == []
 
 
+class TestIntervals:
+    """Validation and accessor behaviour for the `intervals:` config block."""
+
+    def _with_interval(self, data, **overrides):
+        spec = {"name": "rest", "start": "red", "stop": "green", **overrides}
+        data["intervals"] = [spec]
+        return data
+
+    def test_get_intervals_empty_by_default(self, tmp_config_file, minimal_valid_data):
+        sm = SettingsManager(tmp_config_file(minimal_valid_data))
+        assert sm.get_intervals() == []
+
+    def test_valid_interval_loads_and_is_returned(self, tmp_config_file, minimal_valid_data):
+        self._with_interval(minimal_valid_data)
+        sm = SettingsManager(tmp_config_file(minimal_valid_data))
+        assert sm.get_intervals() == [
+            {"name": "rest", "start": "red", "stop": "green"}
+        ]
+        assert "intervals" in sm.get_settings()
+
+    def test_task_may_reference_interval_name(self, tmp_config_file, minimal_valid_data):
+        # Regression: interval names are valid task labels (validator extension).
+        self._with_interval(minimal_valid_data)
+        minimal_valid_data["decoders"]["tasks"] = [
+            {"name": "red vs rest", "pos_labels": ["red"], "neg_labels": ["rest"]}
+        ]
+        sm = SettingsManager(tmp_config_file(minimal_valid_data))
+        assert sm.get_decoder_settings()["tasks"][0]["neg_labels"] == ["rest"]
+
+    def test_rejects_start_not_in_events(self, tmp_config_file, minimal_valid_data):
+        self._with_interval(minimal_valid_data, start="ghost")
+        with pytest.raises(ValueError, match="ghost"):
+            SettingsManager(tmp_config_file(minimal_valid_data))
+
+    def test_rejects_stop_not_in_events(self, tmp_config_file, minimal_valid_data):
+        self._with_interval(minimal_valid_data, stop="ghost")
+        with pytest.raises(ValueError, match="ghost"):
+            SettingsManager(tmp_config_file(minimal_valid_data))
+
+    def test_rejects_name_colliding_with_event(self, tmp_config_file, minimal_valid_data):
+        self._with_interval(minimal_valid_data, name="red")
+        with pytest.raises(ValueError, match="collides"):
+            SettingsManager(tmp_config_file(minimal_valid_data))
+
+    def test_rejects_duplicate_interval_names(self, tmp_config_file, minimal_valid_data):
+        minimal_valid_data["intervals"] = [
+            {"name": "rest", "start": "red", "stop": "green"},
+            {"name": "rest", "start": "green", "stop": "red"},
+        ]
+        with pytest.raises(ValueError, match="Duplicate interval"):
+            SettingsManager(tmp_config_file(minimal_valid_data))
+
+    def test_task_referencing_unknown_label_still_rejected(
+        self, tmp_config_file, minimal_valid_data
+    ):
+        # The validator extension must not let through truly unknown labels.
+        self._with_interval(minimal_valid_data)
+        minimal_valid_data["decoders"]["tasks"] = [
+            {"name": "t", "pos_labels": ["ghost"], "neg_labels": ["red"]}
+        ]
+        with pytest.raises(ValueError, match="ghost"):
+            SettingsManager(tmp_config_file(minimal_valid_data))
+
+
 class TestLogisticPenaltyMigration:
     """sklearn 1.8 deprecated LogisticRegression(penalty=); we use l1_ratio."""
 
