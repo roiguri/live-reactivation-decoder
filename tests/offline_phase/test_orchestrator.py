@@ -203,13 +203,19 @@ class TestRunStep1bFitIca:
     ) -> None:
         sm = MagicMock()
         sm.get_event_mapping.return_value = {"red": 1}
+        sm.get_intervals.return_value = [
+            {"name": "rest", "start": "trial_start", "stop": "trial_end"}
+        ]
         orc = _make_orchestrator(tmp_path, sm)
         stub = _attach_preprocessor_stub(orc)
         stub.run_step1b_fit_ica.return_value = ("ica", "epochs", [0, 2])
 
         ica, epochs, suggested = orc.run_step1b_fit_ica()
 
-        stub.run_step1b_fit_ica.assert_called_once_with({"red": 1})
+        stub.run_step1b_fit_ica.assert_called_once_with(
+            {"red": 1},
+            [{"name": "rest", "start": "trial_start", "stop": "trial_end"}],
+        )
         assert (ica, epochs, suggested) == ("ica", "epochs", [0, 2])
         assert orc._epochs == "epochs"
 

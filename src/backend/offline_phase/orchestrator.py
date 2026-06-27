@@ -163,7 +163,8 @@ class OfflineOrchestrator:
 
         with log_duration(logger, "ICA fit", level=logging.DEBUG):
             ica, epochs, suggested = self._preprocessor.run_step1b_fit_ica(
-                self._settings.get_event_mapping()
+                self._settings.get_event_mapping(),
+                self._settings.get_intervals(),
             )
             self._epochs = epochs
             logger.info("ICA fitted. %d component(s) suggested.", len(suggested))
