@@ -33,6 +33,89 @@ from backend.core.preprocessing_constants import (
 logger = logging.getLogger(__name__)
 
 
+def build_interval_events(
+    events: np.ndarray,
+    sfreq: float,
+    intervals: list[dict[str, str]],
+    event_mapping: dict[str, int],
+) -> tuple[np.ndarray, dict[str, int]]:
+    """Tile synthetic epoch events inside each ``[start, stop]`` interval.
+
+    Pure helper (no MNE objects) so it is unit-testable in isolation.
+
+    For every interval spec, each start-marker occurrence is paired with the
+    first stop-marker occurrence after it (and before the next start). Within
+    that span, contiguous windows the size of a normal epoch
+    (``EPOCH_TMAX - EPOCH_TMIN`` seconds) are tiled; the trailing partial is
+    dropped. Each spec gets one synthetic event code, chosen disjoint from all
+    existing config ids and event codes.
+
+    Args:
+        events: ``(N, 3)`` MNE events array — columns ``[sample, prev, code]``.
+        sfreq: Sampling rate of the raw the events index into (Hz).
+        intervals: List of ``{"name", "start", "stop"}`` specs.
+        event_mapping: ``{event_name: trigger_id}`` from markers_mapping.
+
+    Returns:
+        ``(new_rows, name_to_code)`` — synthetic event rows ``(M, 3)`` and the
+        ``{interval_name: synthetic_code}`` mapping. ``M`` may be 0.
+    """
+    if not intervals:
+        return np.empty((0, 3), dtype=int), {}
+
+    # Window length in samples. tmin is negative; offset shifts the synthetic
+    # event so the resulting mne window [ev+tmin, ev+tmax] starts at window_start.
+    win = round((EPOCH_TMAX - EPOCH_TMIN) * sfreq)
+    offset = round(EPOCH_TMIN * sfreq)
+
+    existing = set(event_mapping.values()) | {int(c) for c in events[:, 2]}
+    next_code = (max(existing) + 1) if existing else 1
+
+    samples = events[:, 0]
+    codes = events[:, 2]
+    new_rows: list[list[int]] = []
+    name_to_code: dict[str, int] = {}
+
+    for spec in intervals:
+        name, start_name, stop_name = spec["name"], spec["start"], spec["stop"]
+        code = next_code
+        next_code += 1
+        name_to_code[name] = code
+
+        start_samples = np.sort(samples[codes == event_mapping[start_name]])
+        stop_samples = np.sort(samples[codes == event_mapping[stop_name]])
+        n_before = len(new_rows)
+
+        for idx, s in enumerate(start_samples):
+            next_start = start_samples[idx + 1] if idx + 1 < len(start_samples) else None
+            later_stops = stop_samples[stop_samples > s]
+            if later_stops.size == 0:
+                logger.warning(
+                    "Interval '%s': start at sample %d has no following stop — skipped.",
+                    name, int(s),
+                )
+                continue
+            e = int(later_stops[0])
+            if next_start is not None and e >= next_start:
+                logger.warning(
+                    "Interval '%s': start at sample %d has no stop before the next "
+                    "start — skipped.", name, int(s),
+                )
+                continue
+            window_start = int(s)
+            while window_start + win <= e:
+                new_rows.append([window_start - offset, 0, code])
+                window_start += win
+
+        logger.info(
+            "Interval '%s' (%s→%s): %d window(s) over %d span(s).",
+            name, start_name, stop_name, len(new_rows) - n_before, len(start_samples),
+        )
+
+    arr = np.array(new_rows, dtype=int) if new_rows else np.empty((0, 3), dtype=int)
+    return arr, name_to_code
+
+
 class OfflinePreprocessor:
     """
     Executes the offline cleaning pipeline for a single subject recording,
