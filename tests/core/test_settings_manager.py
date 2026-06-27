@@ -108,7 +108,9 @@ class TestGetSettings:
 
     def test_has_all_top_level_sections(self, sample_config_path):
         settings = SettingsManager(sample_config_path).get_settings()
-        assert set(settings.keys()) == {"preprocessing", "decoders", "event_mapping"}
+        assert set(settings.keys()) == {
+            "preprocessing", "decoders", "event_mapping", "intervals",
+        }
 
     def test_preprocessing_view_has_full_recipe(self, sample_config_path):
         pre = SettingsManager(sample_config_path).get_settings()["preprocessing"]
