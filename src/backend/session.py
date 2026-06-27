@@ -50,6 +50,16 @@ class LiveStreamSession:
         """Forward worker runtime diagnostics without exposing worker internals."""
         return self._worker.latency_ready
 
+    @property
+    def batch_size_samples(self) -> int:
+        """Micro-batch size the worker accumulates before each inference.
+
+        Exposed so diagnostics consumers (the header's buffer-health chip)
+        can scale the backlog threshold to the batch size without reaching
+        into ``_worker``.
+        """
+        return self._worker.batch_size_samples
+
     def start(self) -> None:
         """Start receiver and worker. Safe to call more than once."""
         if self._started:
