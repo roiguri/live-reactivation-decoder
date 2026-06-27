@@ -68,6 +68,7 @@ class SettingsView(QWidget):
 
         self._build_setup_section()
         self._build_annotations_section()
+        self._build_intervals_section()
         self._build_model_section()
         self._content.addStretch()
 
@@ -127,6 +128,17 @@ class SettingsView(QWidget):
         self._annot_layout.setContentsMargins(0, 4, 0, 0)
         self._annot_layout.setSpacing(2)
         card.body.addWidget(self._annot_container)
+
+        self._content.addWidget(card)
+
+    def _build_intervals_section(self) -> None:
+        card = SectionCard("Intervals")
+
+        self._intervals_container = QWidget()
+        self._intervals_layout = QVBoxLayout(self._intervals_container)
+        self._intervals_layout.setContentsMargins(0, 4, 0, 0)
+        self._intervals_layout.setSpacing(4)
+        card.body.addWidget(self._intervals_container)
 
         self._content.addWidget(card)
 
@@ -275,6 +287,7 @@ class SettingsView(QWidget):
             self._scale_method_field.set_value(None)
             self._cv_folds.set_value(None)
             _clear_layout(self._annot_layout)
+            _clear_layout(self._intervals_layout)
             _clear_layout(self._decoders_layout)
             _clear_layout(self._params_layout)
             for lbl in self._model_labels.values():
@@ -343,6 +356,17 @@ class SettingsView(QWidget):
             ph = QLabel("No annotations")
             ph.setStyleSheet(f"color: {TEXT_MUTED}; font-style: italic; font-size: 11px;")
             self._annot_layout.addWidget(ph)
+
+        # Intervals (read-only: name : start → stop)
+        _clear_layout(self._intervals_layout)
+        intervals = settings.get("intervals", [])
+        if intervals:
+            for interval in intervals:
+                self._intervals_layout.addWidget(self._make_interval_card(interval))
+        else:
+            ph = QLabel("No intervals configured")
+            ph.setStyleSheet(f"color: {TEXT_MUTED}; font-style: italic; font-size: 11px;")
+            self._intervals_layout.addWidget(ph)
 
         # Model selector badges
         active_model = dec["model"]
@@ -426,5 +450,42 @@ class SettingsView(QWidget):
                 row.addWidget(badge)
             row.addStretch()
             v.addLayout(row)
+
+        return card
+
+    def _make_interval_card(self, interval: dict) -> QWidget:
+        card = QFrame()
+        card.setStyleSheet(
+            f"QFrame {{ background: {CARD_WHITE}; border: 1px solid {BORDER_GRAY}; "
+            f"border-radius: 4px; }}"
+        )
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 10)
+        v.setSpacing(6)
+
+        name_lbl = QLabel(interval["name"])
+        f = name_lbl.font()
+        f.setWeight(QFont.Weight.DemiBold)
+        f.setPointSize(10)
+        name_lbl.setFont(f)
+        name_lbl.setStyleSheet(f"color: {TEXT_PRIMARY}; border: none;")
+        v.addWidget(name_lbl)
+
+        row = QHBoxLayout()
+        row.setSpacing(4)
+        for text in (interval["start"], "→", interval["stop"]):
+            badge = QLabel(text)
+            if text == "→":
+                badge.setStyleSheet(
+                    f"color: {TEXT_MUTED}; font-size: 11px; border: none;"
+                )
+            else:
+                badge.setStyleSheet(
+                    f"background: {BG_LIGHT}; color: {TEXT_PRIMARY}; font-size: 10px; "
+                    f"border: 1px solid {BORDER_GRAY}; border-radius: 2px; padding: 1px 6px;"
+                )
+            row.addWidget(badge)
+        row.addStretch()
+        v.addLayout(row)
 
         return card
