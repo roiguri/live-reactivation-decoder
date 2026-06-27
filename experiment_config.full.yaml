@@ -96,3 +96,12 @@ markers_mapping:
     # Partial retrieval (task split only)
     - id: 71
       name: partial_probe
+
+# Optional intervals: tile contiguous epoch-sized windows between a start and a
+# stop marker (names from markers_mapping above) and label them as a new class,
+# usable in any task's pos_labels/neg_labels. Example using the retrieval-window
+# markers (commented; uncomment and add a task referencing 'retrieval' to use):
+# intervals:
+#   - name: retrieval
+#     start: start_retrieval_window
+#     stop: answer_retrieval_window

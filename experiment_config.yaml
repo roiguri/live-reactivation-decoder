@@ -40,3 +40,13 @@ markers_mapping:
     #   name: bathroom
     # - id: 18
     #   name: kitchen
+
+# Optional. Each interval tiles contiguous epoch-sized windows between a start
+# and a stop marker (both names from markers_mapping above) and labels them as a
+# new class. That name is then usable in any task's pos_labels/neg_labels — e.g.
+# a 'rest' class to contrast against stimuli. Requires the start/stop markers to
+# be mapped above. Example (commented; map trial_start/trial_end to enable):
+# intervals:
+#   - name: rest
+#     start: trial_start
+#     stop: trial_end

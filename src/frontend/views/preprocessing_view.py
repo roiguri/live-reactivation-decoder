@@ -373,10 +373,12 @@ class PreprocessingView(QWidget):
             int(payload.get("n_excluded", self._excluded_count))
             if isinstance(payload, dict) else self._excluded_count
         )
+        epochs = self._session.offline.epochs if self._session else None
         self._epochs_count = n_epochs
         self._excluded_count = n_excluded
         self._epochs_value.setText(str(n_epochs))
         self._components_value.setText(str(n_excluded))
+        self._render_per_class(self._per_class_counts(epochs))
         self._pages.setCurrentIndex(1)
         self._running = False
         self._done = True
@@ -493,6 +495,15 @@ class PreprocessingView(QWidget):
         self._components_value = QLabel("—")
 
         self._append_stat_row(stats_layout, "Epochs retained", self._epochs_value)
+
+        # Per-class breakdown: indented sub-rows, populated at completion.
+        self._per_class_container = QWidget()
+        self._per_class_container.setStyleSheet("background: transparent; border: none;")
+        self._per_class_layout = QVBoxLayout(self._per_class_container)
+        self._per_class_layout.setContentsMargins(0, 0, 0, 0)
+        self._per_class_layout.setSpacing(0)
+        stats_layout.addWidget(self._per_class_container)
+
         self._append_separator(stats_layout)
         self._append_stat_row(
             stats_layout, "ICA components removed", self._components_value
@@ -531,6 +542,45 @@ class PreprocessingView(QWidget):
         sep.setFixedHeight(1)
         sep.setStyleSheet(f"background: {BORDER_GRAY}; border: none;")
         layout.addWidget(sep)
+
+    @staticmethod
+    def _per_class_counts(epochs) -> dict[str, int]:
+        """Count retained epochs per class label from the orchestrator's epochs.
+
+        Computed in the UI (no backend round-trip): ``epochs.event_id`` maps
+        label→code and ``epochs.events[:, 2]`` holds the per-epoch code.
+        """
+        if epochs is None:
+            return {}
+        codes = epochs.events[:, 2].tolist()
+        return {name: codes.count(code) for name, code in epochs.event_id.items()}
+
+    def _render_per_class(self, per_class: dict | None) -> None:
+        """Fill the per-class breakdown with one indented sub-row per class."""
+        layout = self._per_class_layout
+        while layout.count():
+            item = layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        for name, count in (per_class or {}).items():
+            row = QWidget()
+            row.setStyleSheet("background: transparent; border: none;")
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(16, 4, 0, 4)
+            row_layout.setSpacing(12)
+            cap = QLabel(str(name))
+            cap.setStyleSheet(
+                f"color: {TEXT_MUTED}; font-size: 12px; background: transparent; border: none;"
+            )
+            val = QLabel(str(count))
+            val.setStyleSheet(
+                f"color: {TEXT_PRIMARY}; font-size: 12px; "
+                f"background: transparent; border: none;"
+            )
+            val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            row_layout.addWidget(cap, 1)
+            row_layout.addWidget(val, 0)
+            layout.addWidget(row)
 
     # ── ready gating ─────────────────────────────────────────────────────────
 

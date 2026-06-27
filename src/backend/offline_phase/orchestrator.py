@@ -163,7 +163,8 @@ class OfflineOrchestrator:
 
         with log_duration(logger, "ICA fit", level=logging.DEBUG):
             ica, epochs, suggested = self._preprocessor.run_step1b_fit_ica(
-                self._settings.get_event_mapping()
+                self._settings.get_event_mapping(),
+                self._settings.get_intervals(),
             )
             self._epochs = epochs
             logger.info("ICA fitted. %d component(s) suggested.", len(suggested))
@@ -177,6 +178,13 @@ class OfflineOrchestrator:
         if self._preprocessor is None:
             return None
         return self._preprocessor.component_labels
+
+    @property
+    def epochs(self) -> Optional[mne.Epochs]:
+        """The cleaned epochs produced by preprocessing, or ``None`` before
+        ``run_step1b_fit_ica()`` has run. Read-only view for the UI (e.g. the
+        per-class epoch breakdown on the preprocessing-complete page)."""
+        return self._epochs
 
     def run_step2_apply_and_save(
         self, excluded_components: list[int]

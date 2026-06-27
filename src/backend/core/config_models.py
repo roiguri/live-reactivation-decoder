@@ -81,6 +81,22 @@ class MarkersMapping(BaseModel):
     events: list[EventEntry]
 
 
+class IntervalSpec(BaseModel):
+    """A class defined by the span between a start marker and a stop marker.
+
+    Inside every ``[start, stop]`` occurrence in the recording, contiguous
+    fixed-size windows (the same size as a normal epoch) are tiled and labelled
+    ``name``. The name is then usable wherever a stimulus label is — notably in a
+    decoder task's ``pos_labels`` / ``neg_labels``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str   # new class label
+    start: str  # event name from markers_mapping
+    stop: str   # event name from markers_mapping
+
+
 class ExperimentInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -94,6 +110,7 @@ class ExperimentConfig(BaseModel):
     random_state: int = DEFAULT_RANDOM_STATE
     decoders: DecoderSettings = Field(default_factory=DecoderSettings)
     markers_mapping: MarkersMapping
+    intervals: list[IntervalSpec] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -112,13 +129,49 @@ class ExperimentConfig(BaseModel):
         return data
 
     @model_validator(mode="after")
+    def _validate_intervals(self) -> ExperimentConfig:
+        event_names = {e.name for e in self.markers_mapping.events}
+        seen: set[str] = set()
+        seen_pairs: set[tuple[str, str]] = set()
+        for spec in self.intervals:
+            for role, marker in (("start", spec.start), ("stop", spec.stop)):
+                if marker not in event_names:
+                    raise ValueError(
+                        f"Interval '{spec.name}': {role} marker '{marker}' not found "
+                        f"in markers_mapping.events. Known names: {sorted(event_names)}"
+                    )
+            if spec.start == spec.stop:
+                raise ValueError(
+                    f"Interval '{spec.name}': start and stop markers are identical "
+                    f"('{spec.start}'); the span would always be empty."
+                )
+            if spec.name in event_names:
+                raise ValueError(
+                    f"Interval name '{spec.name}' collides with a stimulus event "
+                    f"name in markers_mapping.events; choose a distinct name."
+                )
+            if spec.name in seen:
+                raise ValueError(f"Duplicate interval name '{spec.name}'.")
+            if (spec.start, spec.stop) in seen_pairs:
+                raise ValueError(
+                    f"Interval '{spec.name}': duplicate (start, stop) pair "
+                    f"('{spec.start}' → '{spec.stop}') already used by another "
+                    f"interval; the tiled windows would collide."
+                )
+            seen.add(spec.name)
+            seen_pairs.add((spec.start, spec.stop))
+        return self
+
+    @model_validator(mode="after")
     def _task_labels_exist_in_event_mapping(self) -> ExperimentConfig:
         known_names = {e.name for e in self.markers_mapping.events}
+        known_names |= {iv.name for iv in self.intervals}
         for task in self.decoders.tasks:
             for label in task.pos_labels + task.neg_labels:
                 if label not in known_names:
                     raise ValueError(
                         f"Task '{task.name}': label '{label}' not found in "
-                        f"markers_mapping.events. Known names: {sorted(known_names)}"
+                        f"markers_mapping.events or intervals. "
+                        f"Known names: {sorted(known_names)}"
                     )
         return self

@@ -45,6 +45,14 @@ class SettingsManager:
         """Returns event name → trigger ID (e.g. {'red': 1}), ready for mne.Epochs event_id."""
         return {e.name: e.id for e in self._config.markers_mapping.events}
 
+    def get_intervals(self) -> list[dict[str, str]]:
+        """Returns the interval specs as plain dicts ({name, start, stop} each).
+
+        Each interval defines a class tiled from fixed-size windows between a
+        start and stop marker; consumed by the offline preprocessor's epoching.
+        """
+        return [s.model_dump() for s in self._config.intervals]
+
     def get_settings(self) -> dict[str, Any]:
         """Returns the full effective settings in one dict for the UI.
 
@@ -57,6 +65,7 @@ class SettingsManager:
             "preprocessing": self._hardcoded_recipe(),
             "decoders":      self.get_decoder_settings(),
             "event_mapping": self.get_event_mapping(),
+            "intervals":     self.get_intervals(),
         }
 
     @staticmethod

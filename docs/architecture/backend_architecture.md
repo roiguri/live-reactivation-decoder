@@ -106,7 +106,8 @@ Because EEG processing and live inference are computationally demanding, mixing 
 > `SettingsManager.get_preprocessing_params()`, and the preprocessors taking a
 > `preprocessing_settings` dict are **out of date**. The preprocessing recipe is now hardcoded
 > in `src/backend/core/preprocessing_constants.py`; the config holds only `experiment_info`,
-> `random_state`, `decoders`, `markers_mapping`. `OfflinePreprocessor(data_dir, random_state,
+> `random_state`, `decoders`, `markers_mapping`, and optional `intervals`.
+> `OfflinePreprocessor(data_dir, random_state,
 > raw=None)` and `OnlinePreprocessor(online_state, input_sfreq=1000.0)` no longer take a
 > settings dict. See CLAUDE.md § Config Schema and `docs/plans/minimize_settings_plan.md`.
 
