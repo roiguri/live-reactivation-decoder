@@ -1,0 +1,62 @@
+# Phase 1 — Offline training {#sec-phase1}
+
+Phase 1 is a linear, five-step workflow. You walk the trail in order; each
+step unlocks the next. The end product is a `decoder_pipeline.joblib` artifact
+in the output directory you choose in step 1.
+
+Launch the app (@sec-installation) and follow the steps below.
+
+## 1. Settings
+
+- Choose the experiment config file (`experiment_config.yaml`).
+- Choose an **output directory** — this is where the trained artifact and all
+  intermediate outputs are written.
+- Click **Continue**.
+
+The output directory becomes the root of the on-disk session layout (epochs,
+models, and — later — live logs). See @sec-configuration for the config
+schema.
+
+## 2. Load Data
+
+- Choose a **BrainVision** recording folder. A valid recording has three
+  files: `.vhdr` (header), `.vmrk` (markers), and `.eeg` (data).
+- Click **Load Data**.
+
+## 3. Preprocess
+
+Click **Start Preprocessing**. The reference pipeline runs, pausing for two
+manual review steps:
+
+1. **Bad-channel marking.** MNE's channel window pops up modally. Click any
+   channels that look bad to mark them, then close the window.
+2. **ICA review.** MNE's ICA window pops up modally with ICLabel suggestions
+   pre-applied. Verify or override which components to exclude, then close the
+   window.
+
+::: callout-tip
+Real preprocessing takes a few minutes. If you are iterating on the UI rather
+than processing real data, use the debug walkthrough in @sec-debug to skip the
+wait.
+:::
+
+## 4. Evaluation
+
+- Click **Run Evaluation**. The app scores candidate decoding timepoints and
+  plots an AUC curve.
+- Pick a timepoint on the chart.
+- Click **Approve & Continue**.
+
+The timepoint you approve is where the final decoder will be trained.
+
+## 5. Train
+
+- Click **▶** to train.
+- On success you see **"Trained at: N ms"** and the spatial-pattern topomaps
+  for the trained decoder.
+
+## Output
+
+The trained artifact is written as `decoder_pipeline.joblib` in the output
+directory you chose in step 1. This single file is everything Phase 2 needs —
+carry it to the decoding laptop and continue with @sec-phase2.

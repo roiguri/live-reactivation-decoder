@@ -1,0 +1,68 @@
+# Troubleshooting {#sec-troubleshooting}
+
+This chapter collects the issues most likely to interrupt a session, grouped
+by where they show up.
+
+## Install & launch
+
+**PowerShell blocks the venv activation script.**
+Allow signed local scripts for your user, then activate again:
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+**`ModuleNotFoundError` when launching the app.**
+`PYTHONPATH` must point at `src`. Use
+`$env:PYTHONPATH = "src"` (PowerShell) or `PYTHONPATH=src` (macOS/Linux/WSL)
+before `python -m frontend.main`.
+
+**Tests can't run / `pytest` not found.**
+You installed `requirements.txt` (runtime-only) instead of
+`requirements-dev.txt`. Reinstall with `pip install -r requirements-dev.txt`.
+
+## Phase 1 (offline)
+
+**Load Data fails.**
+A BrainVision recording needs all three files together — `.vhdr`, `.vmrk`,
+and `.eeg` — in the same folder. Point the picker at the folder containing
+them.
+
+**The bad-channel or ICA window didn't appear.**
+Both are **modal** MNE windows that open during preprocessing. They can open
+behind the main window — check the taskbar. Preprocessing waits until you
+close them.
+
+**No artifact after Train.**
+`decoder_pipeline.joblib` is written to the output directory chosen in
+**Settings** (step 1), not the working directory. Confirm Train reported
+"Trained at: N ms" and check that directory.
+
+## Phase 2 (live)
+
+**No stream appears during discovery.**
+- Confirm the stream is actually publishing (`NeuroneStream`, type `EEG`).
+- Click **Refresh** to scan again.
+- Remember the live path is **Windows-only** (`LSLProxy.exe`).
+
+**Inference stuck on "Connecting…".**
+The inlet could not be established. Re-check the stream is up (@sec-hardware),
+then **Halt** and **Start** again.
+
+**Probabilities look wrong or flat.**
+- Confirm the **sampling rate** matches what the decoder was trained for —
+  this is a known item to verify in the lab (1000 Hz vs 5000 Hz).
+- Confirm you loaded the correct `decoder_pipeline.joblib` and selected the
+  intended **target**.
+
+**Triggers not detected.**
+Triggers are embedded in the EEG stream's trigger channel (index 64), not a
+separate marker stream, and are decoded as `(raw >> 8) & 0xFF`. Verify the
+parallel-port codes match `markers_mapping` in your config (@sec-configuration).
+
+## Getting more detail
+
+The app and backend log according to the conventions in
+[`docs/architecture/logging.md`](../../architecture/logging.md). Raising the
+log level there gives more visibility into discovery, the inference loop, and
+session shutdown.

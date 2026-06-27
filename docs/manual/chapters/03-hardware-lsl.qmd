@@ -1,0 +1,91 @@
+# Hardware & the live stream {#sec-hardware}
+
+This chapter explains how live EEG data reaches the decoder for Phase 2. You
+only need it when running against real lab hardware.
+
+::: callout-important
+The live-stream path is **Windows-only** — it relies on
+`tools/lslproxy/LSLProxy.exe`. Phase 1 and the test suite do not need any of
+this.
+:::
+
+## The acquisition chain
+
+Live data flows through several stages before the decoder sees it:
+
+```
+NeurOne amplifier → DigiOut (UDP) → LSLProxy.exe → LSL stream → decoder
+```
+
+- There are **two machines**: the *acquisition PC* (runs the NeurOne software
+  and PsychoPy) and the *decoding laptop* (runs this application). They each
+  connect to a separate Ethernet port on the NeurOne Main Unit — not directly
+  to each other.
+- NeurOne does not speak LSL natively. Its proprietary **DigiOut** output
+  sends raw UDP packets.
+- Bittium's **`LSLProxy.exe`** receives those UDP packets and republishes them
+  as an LSL stream. The app launches and manages this proxy for you (see
+  below); you do not normally run it by hand.
+
+## Stream properties
+
+The decoder consumes a single LSL inlet with these confirmed properties:
+
+| Property | Value |
+|---|---|
+| Stream name | `NeuroneStream` |
+| Type | `EEG` |
+| Channels | 65 (64 EEG + 1 trigger) |
+| Channel metadata | none — no channel names in the stream |
+| Trigger channel | channel 65 (index 64) |
+
+::: callout-warning
+**Sampling rate must be confirmed in the lab.** It is configured in NeurOne as
+1000 Hz, but a session has been observed reporting 5000 Hz. The sampling rate
+materially affects preprocessing, so verify it before a real session.
+:::
+
+### Triggers are embedded in the EEG stream
+
+There is no separate marker stream. PsychoPy's parallel-port triggers arrive
+inside the EEG stream on the trigger channel. NeurOne packs several trigger
+sources into one integer; the PsychoPy code is recovered with:
+
+```
+trigger_code = (int(raw_value) >> 8) & 0xFF
+```
+
+## How the app drives the proxy
+
+`LSLReceiver` is a pure consumer — it resolves and pulls from a stream but
+never publishes one. Publishing onto the network is the job of a
+**`StreamSource`**:
+
+- `LslProxySource` wraps `tools/lslproxy/LSLProxy.exe` (Windows-only) for real
+  hardware.
+- A replay source publishes recorded data for development off-hardware.
+
+The app's session owns the active source: it is started when you discover
+streams and reused by the run that follows (the proxy is **not** relaunched
+between discovery and run), and stopped when the session ends.
+
+## Units
+
+::: callout-note
+The proxy applies NeurOne's Tesla AC scaling before publishing, so LSL values
+are already in **microvolts**. Whether the online preprocessing needs to
+rescale these to SI volts has **not yet been verified in the lab**. Replay via
+recorded BrainVision files delivers data already in SI volts, so no scaling is
+applied for replay-based validation.
+:::
+
+## Before a real session — checklist
+
+- [ ] Acquisition PC and decoding laptop are on the correct NeurOne Ethernet
+      ports.
+- [ ] NeurOne DigiOut is enabled and streaming.
+- [ ] The configured sampling rate has been confirmed.
+- [ ] `decoder_pipeline.joblib` from Phase 1 is available on the decoding
+      laptop.
+
+With the stream confirmed, proceed to @sec-phase2.

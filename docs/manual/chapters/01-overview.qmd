@@ -1,0 +1,54 @@
+# Overview {#sec-overview}
+
+The Live Reactivation Decoder turns an offline EEG recording into a trained
+decoder, then applies that decoder to a live stream so you can read out
+predicted class probabilities in real time during an experiment.
+
+## The two phases
+
+### Phase 1 — Offline training
+
+Phase 1 is a linear, operator-driven workflow with five steps. You walk
+through them in order; each step unlocks the next.
+
+1. **Settings** — choose the experiment config and an output directory.
+2. **Load Data** — load a BrainVision recording (`.vhdr` + `.vmrk` + `.eeg`).
+3. **Preprocess** — run the reference preprocessing pipeline, including manual
+   bad-channel marking and ICA review.
+4. **Evaluation** — score candidate decoding timepoints and approve one.
+5. **Train** — train the final decoder at the approved timepoint.
+
+The output of Phase 1 is a single artifact, `decoder_pipeline.joblib`, written
+to the output directory you chose in step 1. This artifact is everything
+Phase 2 needs.
+
+### Phase 2 — Live inference
+
+Phase 2 loads the `decoder_pipeline.joblib` artifact and runs it against a
+live LSL stream. As data arrives it is preprocessed with the *same* settings
+used in training, fed through the decoder, and the resulting class
+probabilities are plotted live and logged to disk.
+
+## What you need
+
+| Requirement | Phase 1 | Phase 2 |
+|---|---|---|
+| Python 3.10+ (3.11 recommended) | ✅ | ✅ |
+| A BrainVision recording | ✅ | — |
+| A live LSL stream (Windows + lab hardware) | — | ✅ |
+| `decoder_pipeline.joblib` from Phase 1 | — | ✅ |
+
+::: callout-important
+The live stream path (Phase 2 against real hardware) **requires Windows**,
+because it relies on `tools/lslproxy/LSLProxy.exe`. Phase 1 and the test suite
+run on Windows, macOS, Linux, and WSL.
+:::
+
+## Where the pieces live
+
+- **Backend:** `src/backend/offline_phase/` and `src/backend/online_phase/`
+- **Frontend (PyQt6):** `src/frontend/`
+- **Config:** `experiment_config.yaml`
+- **Hardware interface:** `tools/lslproxy/`
+
+The next chapters take you from a clean machine to a running live session.

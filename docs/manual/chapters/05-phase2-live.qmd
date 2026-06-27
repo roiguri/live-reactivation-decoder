@@ -1,0 +1,79 @@
+# Phase 2 — Live inference {#sec-phase2}
+
+Phase 2 runs your trained decoder against a live LSL stream and shows class
+probabilities in real time. Before you start, make sure:
+
+- The live stream is up and confirmed (@sec-hardware), and
+- The `decoder_pipeline.joblib` artifact from Phase 1 (@sec-phase1) is on this
+  machine.
+
+## Open the Phase 2 screen
+
+From the running app, navigate to the Phase 2 (live inference) screen. The
+screen has three regions:
+
+- a **header** with stream status and the **Start / Halt Inference** control,
+- a **settings panel** (decoders, target, and decision settings), and
+- a **live probability chart**.
+
+## 1. Discover the stream
+
+The app discovers LSL streams on the network. While it searches you will see
+**"Discovering streams…"** / **"Scanning…"**; the expected stream is
+`NeuroneStream` (@sec-hardware). Use **Refresh** to scan again if it does not
+appear.
+
+::: callout-note
+On real hardware the app starts the LSL proxy as part of discovery and reuses
+it for the run that follows — it is not relaunched between discovery and start.
+:::
+
+## 2. Configure decoders and target
+
+In the settings panel:
+
+- **Decoders** — select which trained decoder(s) to run.
+- **Target** — choose the class the readout should track. Use
+  **Choose target…** / **Select Target** to pick; **Select all** and
+  **Clear all** adjust the selection in bulk.
+- **Decision Settings** — configure how probabilities are turned into a
+  decision (e.g. the decision threshold/mode).
+
+## 3. Start inference
+
+Click **▶ Start Inference**. The control shows **"Connecting…"** while the
+inlet is established, then live inference begins and the header reflects the
+active state.
+
+## 4. Read the live chart
+
+The probability chart is a ring-buffered, scrolling plot (rendered with
+pyqtgraph). It shows the decoder's predicted class probabilities as new data
+arrives. The **● Latest** marker tracks the most recent sample.
+
+### Frozen events
+
+When the decoder fires on an event, it is captured in the **frozen event**
+view so you can inspect it without it scrolling away:
+
+- Step between captures with **Older event** / **Newer event**.
+- Use the event **filter** ("Filter which events are shown") to narrow which
+  events are listed.
+- Before any events arrive you will see **"No events yet"**; if a filter
+  excludes everything you will see **"No matching events"**.
+
+## 5. Halt inference
+
+Click **■ Halt Inference** to stop. The view shows **"INFERENCE HALTED"**. The
+session stops the worker, the receiver, and the stream source cleanly.
+
+## What gets logged
+
+Each live run writes a session log under the Phase 2 live-log directory,
+containing the predictions, the markers, a run manifest, and a compressed
+predictions archive. These are your record of the session for later analysis.
+
+::: callout-tip
+If a run ends unexpectedly, the session can export its accumulated predictions
+for recovery — check the live-log directory for the run's outputs.
+:::

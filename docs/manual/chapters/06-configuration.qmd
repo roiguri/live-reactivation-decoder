@@ -1,0 +1,77 @@
+# Configuration reference {#sec-configuration}
+
+The experiment is driven by `experiment_config.yaml`. The same file configures
+both offline training and online inference, so preprocessing is guaranteed to
+match between the two phases. The schema is defined in
+`src/backend/core/config_models.py` (Pydantic v2) — when the YAML changes,
+that file is the source of truth.
+
+A minimal two-decoder demo config ships as `experiment_config.yaml`; the full
+configuration that trained the bundled artifact is in
+`experiment_config.full.yaml`.
+
+## Top-level keys
+
+| Key | Purpose |
+|---|---|
+| `experiment_info.name` | A label for the study/session. |
+| `random_state` | Seed for reproducible splits and model fitting. |
+| `preprocessing` | The reference preprocessing pipeline (see below). |
+| `decoders` | Model type, hyperparameters, CV, and the decoding tasks. |
+| `markers_mapping` | Maps parallel-port trigger codes to event names. |
+
+## `preprocessing`
+
+The pipeline follows the reference order. Key fields:
+
+- **`resample_filter_stage`** — `early` (low-pass + decimate on raw before
+  ICA; faster ICA, paper-aligned) or `late` (after ICA, on epochs).
+- **`channel_hygiene`** — channel cleanup: `drop_emg`, HEOG renaming, the
+  `montage_name` (e.g. `easycap-M1`), and case fixes.
+- **`highpass`** — `l_freq` and `method` (`iir` keeps offline/online causal
+  parity).
+- **`notch`** — line-noise `freq` (e.g. `50.0`); `null` disables it.
+- **`ica`** — `method`, `extended`, `n_components` (`null` lets MNE decide),
+  the `fit_l_freq` high-pass copy used only for fitting, and **`iclabel`**
+  (`enabled` plus `drop_labels` — the component classes auto-excluded; classes
+  left off the list are left to the operator in the review window).
+- **`epochs`** — `tmin`, `tmax`, and `baseline` (`null` is paper-aligned).
+- **`lowpass`** — `h_freq` and `method`.
+- **`final_resample`** — `target_rate` (e.g. `100` Hz, the training rate).
+
+::: callout-note
+The legacy `bandpass` / `resample` / `reject_criteria` sections no longer
+exist. Both phases consume the same positional `online_state` produced from
+this block — no channel names are carried through.
+:::
+
+## `decoders`
+
+- **`model`** — `LDA`, `Logistic`, or `SVM`.
+- **`params`** — model-specific (valid keys per model live in
+  `config_models.py`); for LDA the demo uses `solver: lsqr`,
+  `shrinkage: auto`.
+- **`scale_method`** — `standard`, `median`, or `null`.
+- **`cv.k`** — number of cross-validation folds.
+- **`tasks`** — one entry per decoder. Each names the task and lists
+  `pos_labels` vs `neg_labels`, e.g. a "red decoder" with `pos_labels: [red]`
+  and `neg_labels: [green, yellow]`.
+
+## `markers_mapping`
+
+Maps trigger-channel codes to event names that become epoch labels:
+
+```yaml
+markers_mapping:
+  events:
+    - id: 11
+      name: red
+    - id: 12
+      name: green
+    - id: 13
+      name: yellow
+```
+
+Codes not listed here stay on `raw.annotations` for diagnostics but are not
+epoched. The label names here must line up with the `pos_labels`/`neg_labels`
+used in `decoders.tasks`.
