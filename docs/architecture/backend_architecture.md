@@ -127,7 +127,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 #   notch:    NotchSettings                   # freq (Optional → null disables)
 #   ica:      ICASettings                     # method=infomax, extended=True,
 #                                              # n_components: Optional[int]=None,
-#                                              # fit_l_freq, iclabel{enabled,drop_labels}
+#                                              # fit_l_freq, iclabel{enabled,reject_thresholds}
 #   epochs:   EpochSettings                   # tmin, tmax,
 #                                              # baseline: Optional[(lo,hi)]=None
 #   lowpass:  LowpassSettings                 # h_freq, method

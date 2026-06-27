@@ -273,16 +273,39 @@ class TestStage6ReferenceAndICA:
         assert isinstance(p.ica, mne.preprocessing.ICA)
         assert p.ica.exclude == []
 
-    def test_iclabel_suggestion_uses_drop_labels(
+    def test_iclabel_suggestion_uses_reject_thresholds(
         self, make_preprocessor, synthetic_raw_with_events, monkeypatch
     ):
         import backend.offline_phase.preprocessor as preproc
         monkeypatch.setattr(preproc, "ICLABEL_ENABLED", True)
-        monkeypatch.setattr(preproc, "ICLABEL_DROP_LABELS", ("eye", "muscle"))
+        monkeypatch.setattr(
+            preproc, "ICLABEL_REJECT_THRESHOLDS", {"eye": 0.85, "muscle": 0.85}
+        )
         p = self._epoch_and_ref(make_preprocessor, synthetic_raw_with_events)
         fake = {
             "labels": ["brain", "eye", "muscle", "brain"],
             "y_pred_proba": np.array([0.91, 0.99, 0.85, 0.77]),
+        }
+        with patch("mne_icalabel.label_components", return_value=fake):
+            suggested = p._fit_ica()
+        # eye (0.99 >= 0.85) and muscle (0.85 >= 0.85, inclusive) cross; brain is
+        # absent from the threshold map.
+        assert suggested == [1, 2]
+
+    def test_iclabel_skips_class_below_threshold(
+        self, make_preprocessor, synthetic_raw_with_events, monkeypatch
+    ):
+        import backend.offline_phase.preprocessor as preproc
+        monkeypatch.setattr(preproc, "ICLABEL_ENABLED", True)
+        monkeypatch.setattr(
+            preproc, "ICLABEL_REJECT_THRESHOLDS", {"eye": 0.85, "heart": 0.0}
+        )
+        p = self._epoch_and_ref(make_preprocessor, synthetic_raw_with_events)
+        fake = {
+            # eye[0] below its 0.85 threshold → skipped; heart[1] at 0.0 → always
+            # rejected even at low confidence; eye[2] crosses.
+            "labels": ["eye", "heart", "eye", "brain"],
+            "y_pred_proba": np.array([0.80, 0.05, 0.95, 0.99]),
         }
         with patch("mne_icalabel.label_components", return_value=fake):
             suggested = p._fit_ica()
@@ -293,7 +316,7 @@ class TestStage6ReferenceAndICA:
     ):
         import backend.offline_phase.preprocessor as preproc
         monkeypatch.setattr(preproc, "ICLABEL_ENABLED", True)
-        monkeypatch.setattr(preproc, "ICLABEL_DROP_LABELS", ("eye",))
+        monkeypatch.setattr(preproc, "ICLABEL_REJECT_THRESHOLDS", {"eye": 0.85})
         p = self._epoch_and_ref(make_preprocessor, synthetic_raw_with_events)
         fake = {
             "labels": ["brain", "eye", "muscle", "brain"],

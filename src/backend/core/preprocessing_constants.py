@@ -25,17 +25,25 @@ LOWPASS_METHOD: str = "iir"
 # ── ICA + ICLabel (offline only) ────────────────────────────────────────────────
 # ``ICA_N_COMPONENTS = None`` lets MNE/infomax decide (rank = n_electrodes - 1
 # after average reference). ``ICA_FIT_L_FREQ`` is the high-pass cutoff for the
-# ICA-fit copy of the epochs only. ICLabel pre-selects components whose class is
-# in ``ICLABEL_DROP_LABELS`` for exclusion; "other" (ICLabel's low-confidence
-# catch-all) is intentionally omitted so the operator decides on those manually.
+# ICA-fit copy of the epochs only. ICLabel pre-selects a component for exclusion
+# only when its predicted class is a key in ``ICLABEL_REJECT_THRESHOLDS`` *and*
+# the model's confidence in that class is >= the per-class threshold (a fraction
+# in [0, 1]). A threshold of ``0.0`` rejects the class at any confidence; classes
+# absent from the dict — notably "brain" and "other" (ICLabel's low-confidence
+# catch-all) — are never auto-suggested, so the operator decides on those
+# manually.
 ICA_METHOD: str = "infomax"
 ICA_EXTENDED: bool = True
 ICA_N_COMPONENTS: int | None = None
 ICA_FIT_L_FREQ: float = 1.0
 ICLABEL_ENABLED: bool = True
-ICLABEL_DROP_LABELS: tuple[str, ...] = (
-    "muscle artifact", "eye blink", "heart beat", "line noise", "channel noise",
-)
+ICLABEL_REJECT_THRESHOLDS: dict[str, float] = {
+    "muscle artifact": 0.85,
+    "eye blink": 0.85,
+    "heart beat": 0.0,
+    "line noise": 0.80,
+    "channel noise": 0.90,
+}
 
 # ── Channel hygiene (offline only) ──────────────────────────────────────────────
 # Dataset-specific channel fixups applied before filtering: drop the EMG channel,

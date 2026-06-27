@@ -23,8 +23,8 @@ from backend.core.preprocessing_constants import (
     ICA_FIT_L_FREQ,
     ICA_METHOD,
     ICA_N_COMPONENTS,
-    ICLABEL_DROP_LABELS,
     ICLABEL_ENABLED,
+    ICLABEL_REJECT_THRESHOLDS,
     LOWPASS_H_FREQ,
     LOWPASS_METHOD,
     NOTCH_FREQ,
@@ -565,14 +565,20 @@ class OfflinePreprocessor:
         return self._iclabel_suggest(fit_epochs)
 
     def _iclabel_suggest(self, fit_epochs: mne.Epochs) -> list[int]:
-        """Pre-select components whose ICLabel class is in ``ICLABEL_DROP_LABELS``."""
+        """Pre-select components whose ICLabel class meets its reject threshold.
+
+        A component is suggested only when its predicted class is a key in
+        ``ICLABEL_REJECT_THRESHOLDS`` *and* the model's confidence in that class
+        is >= the per-class threshold. Classes absent from the map (e.g. "brain",
+        "other") are never auto-suggested.
+        """
         if not ICLABEL_ENABLED:
             self._component_labels = None
             return []
 
         from mne_icalabel import label_components
 
-        drop = set(ICLABEL_DROP_LABELS)
+        thresholds = ICLABEL_REJECT_THRESHOLDS
         # TODO(decision): ICLabel was trained on EEG bandpassed [1, 100] Hz
         # and prints a calibration warning here because our pipeline runs at
         # [0.1, 40] Hz (paper-aligned: LOWPASS_H_FREQ = 40, FINAL_RESAMPLE_RATE
@@ -596,7 +602,11 @@ class OfflinePreprocessor:
         self._component_labels = [
             (lbl, float(p)) for lbl, p in zip(labels, proba)
         ]
-        suggested = [i for i, lbl in enumerate(labels) if lbl in drop]
+        suggested = [
+            i
+            for i, (lbl, p) in enumerate(zip(labels, proba))
+            if lbl in thresholds and float(p) >= thresholds[lbl]
+        ]
         return suggested
 
     @property
