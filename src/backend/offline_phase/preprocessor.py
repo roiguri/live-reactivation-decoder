@@ -203,13 +203,17 @@ class OfflinePreprocessor:
         logger.info("Operator marked bad channels: %s", self._bad_channels)
 
     def run_step1b_fit_ica(
-        self, event_mapping: dict[str, int]
+        self,
+        event_mapping: dict[str, int],
+        intervals: list[dict[str, str]] | None = None,
     ) -> tuple[mne.preprocessing.ICA, mne.Epochs, list[int]]:
         """
         Interpolate bads → epoch → average reference → fit ICA → ICLabel.
 
         Args:
             event_mapping: {event_name: trigger_id} — MNE convention.
+            intervals: Optional interval specs ({name, start, stop}); each tiles
+                extra epoch-sized windows labelled ``name`` between its markers.
 
         Returns:
             (ica, epochs_for_review, suggested_exclude) — ``ica`` and
@@ -223,7 +227,7 @@ class OfflinePreprocessor:
             raise RuntimeError("Call run_step1a_filter() before run_step1b_fit_ica().")
 
         self._interpolate_bads()
-        self.epochs = self._epoch(event_mapping)
+        self.epochs = self._epoch(event_mapping, intervals or [])
         logger.info("Epochs created: %d", len(self.epochs))
         self._reference()
         logger.info("Fitting ICA…")
@@ -477,7 +481,11 @@ class OfflinePreprocessor:
 
     # ── Private: epoching / reference / ICA ───────────────────────────────────
 
-    def _epoch(self, event_mapping: dict[str, int]) -> mne.Epochs:
+    def _epoch(
+        self,
+        event_mapping: dict[str, int],
+        intervals: list[dict[str, str]] | None = None,
+    ) -> mne.Epochs:
         events, found_event_id = mne.events_from_annotations(self.raw, verbose=False)
         valid_event_id = {
             name: code
@@ -489,6 +497,26 @@ class OfflinePreprocessor:
                 "None of the expected trigger codes found — falling back to all events"
             )
             valid_event_id = found_event_id
+
+        if intervals:
+            new_rows, name_to_code = build_interval_events(
+                events, self.raw.info["sfreq"], intervals, event_mapping
+            )
+            if new_rows.size:
+                events = np.vstack([events, new_rows])
+                events = events[np.argsort(events[:, 0], kind="stable")]
+                # Only register interval names that actually produced windows —
+                # mne.Epochs errors on an event_id entry with no matching events.
+                present = set(new_rows[:, 2])
+                valid_event_id = {
+                    **valid_event_id,
+                    **{n: c for n, c in name_to_code.items() if c in present},
+                }
+            else:
+                logger.warning(
+                    "Intervals configured but no windows were produced "
+                    "(markers absent or spans too short)."
+                )
 
         return mne.Epochs(
             self.raw,
