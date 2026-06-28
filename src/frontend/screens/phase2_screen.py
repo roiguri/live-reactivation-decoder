@@ -72,6 +72,10 @@ class Phase2Screen(QWidget):
         self.decoder_pipeline_path = Path(decoder_pipeline_path)
         self.setObjectName("phase2_screen")
 
+        # Start the proxy immediately so NeurOne is connected by the time
+        # the user clicks Refresh or Start.
+        self.session.start_stream_source()
+
         settings = session.settings
         task_names = [t["name"] for t in settings["decoders"]["tasks"]]
         target_sfreq = float(settings["preprocessing"]["final_resample"]["target_rate"])
@@ -232,21 +236,20 @@ class Phase2Screen(QWidget):
                     "Failed to stop live session during teardown", exc_info=True
                 )
             self._live = None
-        try:
-            # Stop the publishing source (proxy/replay). AppSession owns its
-            # lifetime; a subsequent Start relaunches it.
-            self.session.stop_stream_source()
-        except Exception:
-            logger.warning(
-                "Failed to stop stream source during teardown", exc_info=True
-            )
         self._start_halt_button.set_idle()
         self._header.set_status("INFERENCE HALTED", color=TEXT_PRIMARY)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        # Guard against app-close mid-stream leaving the LSL proxy + worker
-        # thread orphaned.
+        # Stop the live session and the publishing source (proxy/replay).
+        # The proxy is kept alive across Stop/Start cycles so NeurOne stays
+        # connected; it is only torn down when the screen closes.
         self._safely_stop()
+        try:
+            self.session.stop_stream_source()
+        except Exception:
+            logger.warning(
+                "Failed to stop stream source on close", exc_info=True
+            )
         super().closeEvent(event)
 
     # ── center panel ──────────────────────────────────────────────────────────
