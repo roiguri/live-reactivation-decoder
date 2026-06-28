@@ -1,0 +1,88 @@
+# Real-Time Task — animate-vs-rest and inanimate-vs-rest decoders.
+#
+# Built for the *real-time* paradigm (NOT the binding experiment) of
+# https://github.com/Dezachyo/memory-decoder-realtime-task
+# Decoders train on the Functional Localizer stage, where feature images are
+# shown and tagged on the parallel port (address 0x5EFC).
+#
+# Trigger derivation (src/enums/Enums.py + src/tools/functional_localizer.py):
+#   In _show_feature(), the pulse code is keyed by the image-file *stem* when
+#   that stem exists in ParallelPortEnums.FEATURE_SHOW_TO_PULSE_CODE, otherwise
+#   by the feature name. The animacy images are named animate_01..03 /
+#   inanimate_01..03 — those stems ARE in the map — so animacy stimuli emit the
+#   PER-IMAGE codes below (111-113, 116-118), never the feature-level
+#   SHOW_ANIMATE=21 / SHOW_INANIMATE=22.
+#   real_time_task.py runs the localizer with categories = ["animacy"], so only
+#   the animacy codes are emitted (no color/scene markers).
+
+experiment_info:
+  name: RealTime_Animacy_FL
+
+random_state: 42
+
+decoders:
+  model: Logistic     # LDA | Logistic | SVM  (logistic regression)
+  params:
+    # C=1 regularizes; the model default C=1000 saturated live predictions to
+    # 0/1 (see decoder-overconfidence note). class_weight: null => unweighted
+    # (overrides the model default of "balanced"). solver=liblinear,
+    # l1_ratio=1, max_iter=1000 come from the model defaults.
+    l1_ratio: 1
+    max_iter: 1000
+    solver: liblinear
+    C: 100
+    class_weight: null
+  scale_method: standard   # standard | median | null
+  cv:
+    k: 5
+  tasks:
+    # Each decoder separates its category from BOTH the opposite category and
+    # the resting baseline. Positive = the three exemplar images of the target
+    # class; negative = the opposite category's images plus both rest spans
+    # (with + without fixation).
+    - name: animate decoder
+      pos_labels: [animate_01, animate_02, animate_03]
+      neg_labels: [inanimate_01, inanimate_02, inanimate_03, rest_fixation, rest_no_fixation]
+    - name: inanimate decoder
+      pos_labels: [inanimate_01, inanimate_02, inanimate_03]
+      neg_labels: [animate_01, animate_02, animate_03, rest_fixation, rest_no_fixation]
+
+markers_mapping:
+  # Parallel-port codes. Each id needs a distinct name (event_mapping is keyed
+  # by name); the decoder tasks group the per-image names back into classes.
+  events:
+    - id: 111
+      name: animate_01
+    - id: 112
+      name: animate_02
+    - id: 113
+      name: animate_03
+    - id: 116
+      name: inanimate_01
+    - id: 117
+      name: inanimate_02
+    - id: 118
+      name: inanimate_03
+    # Resting-state delimiters (ParallelPortEnums REST_* codes). The rest block
+    # runs at the start of the localizer: ~3 min with a fixation cross, then
+    # ~3 min without (REST_DURATION = 180 s each). These mark the start/stop of
+    # each span; the intervals block below tiles epoch-sized windows inside them.
+    - id: 1
+      name: rest_fixation_start
+    - id: 2
+      name: rest_fixation_end
+    - id: 3
+      name: rest_no_fixation_start
+    - id: 4
+      name: rest_no_fixation_end
+
+# Each interval tiles contiguous epoch-sized windows between its start and stop
+# markers and labels them as a new class, usable as a task label above. Two rest
+# classes (with / without fixation); both feed the decoders' negative class.
+intervals:
+  - name: rest_fixation
+    start: rest_fixation_start
+    stop: rest_fixation_end
+  - name: rest_no_fixation
+    start: rest_no_fixation_start
+    stop: rest_no_fixation_end
