@@ -14,6 +14,18 @@
 #   SHOW_ANIMATE=21 / SHOW_INANIMATE=22.
 #   real_time_task.py runs the localizer with categories = ["animacy"], so only
 #   the animacy codes are emitted (no color/scene markers).
+#
+# Real-time task encoding + retrieval triggers (RealTimeTaskTriggers):
+#   Note: SHOW_VERB=81 and SHOW_CUE_VERB=84 are defined in the enum but never
+#   sent — per-verb triggers (201-206 / 221-226) are used instead.
+#   Encoding: CoupleLearning._show_verb() → LEARNING_VERB_TO_TRIGGER[verb]
+#             CoupleLearning._show_category_to_verb() → LEARNING_IMAGE_TO_TRIGGER
+#             or SHOW_FEATURE=82 fallback, then ANSWER_FEATURE=83
+#   Retrieval: RetrivalCouple._show_cue_verb() → RETRIEVAL_VERB_TO_TRIGGER[verb],
+#              RECALL_KEY_PRESS=9, ANSWER_CUE_VERB=85
+#              RetrivalCouple._ask_feature_question() → SHOW_FEATURE_QUESTION=88,
+#              ANSWER_FEATURE_QUESTION=89
+#   Verb ordering matches RealTimeTaskEnums.VERB_LIST indices 0-5.
 
 experiment_info:
   name: RealTime_Animacy_FL
@@ -75,6 +87,65 @@ markers_mapping:
       name: rest_no_fixation_start
     - id: 4
       name: rest_no_fixation_end
+    # --- Encoding (learning) phase ---
+    # Per-verb triggers: fired when the verb appears on screen during learning.
+    # Verb ordering matches RealTimeTaskEnums.VERB_LIST (index 0 → 201, etc.).
+    - id: 201
+      name: learning_verb_1
+    - id: 202
+      name: learning_verb_2
+    - id: 203
+      name: learning_verb_3
+    - id: 204
+      name: learning_verb_4
+    - id: 205
+      name: learning_verb_5
+    - id: 206
+      name: learning_verb_6
+    # Per-image triggers: fired when the animacy image appears during learning.
+    # Indices parallel the FL images (animate_01-03 = 211-213, inanimate = 214-216).
+    - id: 211
+      name: learning_animate_01
+    - id: 212
+      name: learning_animate_02
+    - id: 213
+      name: learning_animate_03
+    - id: 214
+      name: learning_inanimate_01
+    - id: 215
+      name: learning_inanimate_02
+    - id: 216
+      name: learning_inanimate_03
+    # ANSWER_FEATURE (83): subject pressed ↑ to confirm the pair was encoded.
+    - id: 83
+      name: encoding_response
+    # --- Retrieval phase ---
+    # Per-verb retrieval cue triggers: fired at cue onset (start of the 7 s
+    # mental-imagery / recall window). Same verb ordering as learning above.
+    - id: 221
+      name: retrieval_verb_1
+    - id: 222
+      name: retrieval_verb_2
+    - id: 223
+      name: retrieval_verb_3
+    - id: 224
+      name: retrieval_verb_4
+    - id: 225
+      name: retrieval_verb_5
+    - id: 226
+      name: retrieval_verb_6
+    # RECALL_KEY_PRESS (9): subject pressed ↑ indicating successful recall.
+    - id: 9
+      name: recall_key_press
+    # ANSWER_CUE_VERB (85): end of the 7 s retrieval window (verb disappears).
+    - id: 85
+      name: retrieval_end
+    # SHOW_FEATURE_QUESTION (88): animate/inanimate question appears after recall.
+    - id: 88
+      name: feature_question
+    # ANSWER_FEATURE_QUESTION (89): subject answered the feature question.
+    - id: 89
+      name: feature_answer
 
 # Each interval tiles contiguous epoch-sized windows between its start and stop
 # markers and labels them as a new class, usable as a task label above. Two rest
