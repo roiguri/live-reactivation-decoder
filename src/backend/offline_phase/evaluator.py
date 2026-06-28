@@ -124,6 +124,13 @@ class ModelEvaluator:
         Returns the mean TGM (n_times, n_times) averaged over folds.
         """
         k: int = self.settings["cv"]["k"]
+        min_class_count = int(np.min(np.bincount(y)))
+        if min_class_count < k:
+            raise ValueError(
+                f"Too few epochs for {k}-fold CV: the minority class has only "
+                f"{min_class_count} sample(s). Each class needs at least {k} epochs "
+                f"(one per fold). Either collect more data or reduce cv.k in the config."
+            )
         cv = StratifiedKFold(n_splits=k, shuffle=True, random_state=self.settings["random_state"])
         # Parallelize the TGM over train-timepoints (n_jobs=-1 uses all cores,
         # so this stays machine-agnostic). Timepoints (~121) far outnumber CV
