@@ -148,3 +148,9 @@ dmypy.json
 # OS files
 .DS_Store
 Thumbs.db
+
+# Stray notebook savefig outputs at repo root (report figures live under docs/)
+/*.png
+
+# Experiment profile configs + seed/figure scripts (untracked for now)
+experiments/
