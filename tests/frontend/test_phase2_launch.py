@@ -64,10 +64,15 @@ def test_missing_live_artifacts_ready_folder(tmp_path, sample_config_path):
     assert missing_live_artifacts(tmp_path) == []
 
 
-def test_build_phase2_from_output(qapp, tmp_path, sample_config_path):
+def test_build_phase2_from_output(qapp, tmp_path, sample_config_path, monkeypatch):
     _make_output_folder(tmp_path, sample_config_path, with_pipeline=True)
     paths = SessionPaths(tmp_path)
 
+    # Phase2Screen eagerly starts the publishing proxy in __init__; stub it so
+    # construction stays offline (no real LSLProxy.exe launch).
+    monkeypatch.setattr(
+        "backend.session.AppSession.start_stream_source", lambda self: None
+    )
     screen = build_phase2_from_output(tmp_path)
 
     assert screen.session.paths.root == tmp_path

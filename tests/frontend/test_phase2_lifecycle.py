@@ -91,6 +91,10 @@ class _StubAppSession:
         self.settings = settings or _make_session_settings()
         self.start_source_calls = 0
         self.stop_source_calls = 0
+        # Real AppSession.start_stream_source is idempotent (reuses a running
+        # proxy). Track running state, not just raw call counts — Phase2Screen
+        # eagerly starts the source in __init__ and again on Start.
+        self.source_running = False
         self.last_stream_name: str | None = None
         self.last_log_dir: Any = None
 
@@ -112,9 +116,11 @@ class _StubAppSession:
 
     def start_stream_source(self) -> None:
         self.start_source_calls += 1
+        self.source_running = True
 
     def stop_stream_source(self) -> None:
         self.stop_source_calls += 1
+        self.source_running = False
 
     def discover_streams(self, timeout_sec: float = 3.0) -> list[str]:
         return ["NeuroneStream", "OtherStream"]
@@ -421,12 +427,15 @@ def test_start_without_target_opens_picker_cancel_starts_nothing(qapp) -> None:
             decoder_pipeline_path=Path("/nonexistent.joblib"),
         )
         assert screen._target is None
+        # Baseline: the constructor already started the source eagerly. A
+        # cancelled Start must not build a run or issue a further start.
+        baseline_source_calls = app_session.start_source_calls
         screen._start_halt_button.start_clicked.emit()
 
         # Cancelled picker → still no target, nothing built/started, idle.
         assert screen._target is None
         assert fake.start_calls == 0
-        assert app_session.start_source_calls == 0
+        assert app_session.start_source_calls == baseline_source_calls
         assert screen._start_halt_button._state == "idle"
 
 
@@ -449,7 +458,7 @@ def test_start_without_target_picks_then_starts(qapp) -> None:
         # Picker accepted → target set and the session started.
         assert screen._target == {"source": "lsl", "stream_name": "PickedStream"}
         assert fake.start_calls == 1
-        assert app_session.start_source_calls == 1
+        assert app_session.source_running is True
         assert screen._start_halt_button._state == "live"
 
 
@@ -457,7 +466,7 @@ def test_start_uses_selected_stream_and_starts_source(screen_and_session) -> Non
     screen, fake, app_session, _ = screen_and_session
     screen._start_halt_button.start_clicked.emit()
 
-    assert app_session.start_source_calls == 1
+    assert app_session.source_running is True
     assert app_session.last_stream_name == "NeuroneStream"
     assert fake.start_calls == 1
     assert screen._start_halt_button._state == "live"
@@ -472,12 +481,24 @@ def test_start_passes_resolved_log_dir(screen_and_session) -> None:
     assert app_session.last_log_dir == Path("/fake/phase2_live/20260607_000000")
 
 
-def test_halt_stops_stream_source(screen_and_session) -> None:
+def test_halt_keeps_source_running_close_stops_it(screen_and_session) -> None:
+    """Halt tears down the live session but keeps the publishing proxy alive
+    (so NeurOne stays connected across Stop/Start cycles); the source is only
+    stopped when the screen closes."""
+    from PyQt6.QtGui import QCloseEvent
+
     screen, _, app_session, _ = screen_and_session
     screen._start_halt_button.start_clicked.emit()
     screen._start_halt_button.halt_clicked.emit()
 
+    # Halt does not stop the source.
+    assert app_session.stop_source_calls == 0
+    assert app_session.source_running is True
+
+    # Closing the screen stops it.
+    screen.closeEvent(QCloseEvent())
     assert app_session.stop_source_calls >= 1
+    assert app_session.source_running is False
 
 
 # ── discovery worker + dialog ───────────────────────────────────────────────────
