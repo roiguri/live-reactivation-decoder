@@ -52,9 +52,10 @@ def encode_trigger_value(event_code: int) -> int:
 def build_stream_matrix(vhdr_path: Path) -> tuple[np.ndarray, float]:
     """Return ``(samples, sfreq)`` where samples is ``(n_times, 65)``.
 
-    Columns 0..63 are EEG in SI volts (matching what MNE-loaded replay
-    delivered during validation); column 64 is the packed trigger channel
-    built from the ``.vmrk`` annotations.
+    Columns 0..63 are EEG in **microvolts** (``get_data(units="uV")``,
+    matching the NeurOne proxy's wire units so replay reproduces the live
+    pipeline); column 64 is the packed trigger channel built from the
+    ``.vmrk`` annotations.
     """
     raw = mne.io.read_raw_brainvision(str(vhdr_path), preload=True, verbose=False)
     events, _ = mne.events_from_annotations(raw, verbose=False)
@@ -65,7 +66,7 @@ def build_stream_matrix(vhdr_path: Path) -> tuple[np.ndarray, float]:
         keep.remove("EMG")
     raw.pick(keep)
 
-    eeg = raw.get_data()  # (n_eeg, n_times), SI volts
+    eeg = raw.get_data(units="uV")  # (n_eeg, n_times), µV (mimics proxy)
     n_eeg, n_times = eeg.shape
 
     trigger = np.zeros((1, n_times), dtype=float)

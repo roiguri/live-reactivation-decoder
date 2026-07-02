@@ -1154,3 +1154,72 @@ class TestPipelineOrdering:
         # ICA must see decimated data: 100 input samples -> 10 at 100 Hz.
         ica_input_shape = next(shape for name, shape in log if name == "ica")
         assert ica_input_shape[0] == 10
+
+
+class TestMicrovoltToSiScale:
+    """Guards the fixed µV -> SI-volt ingestion scale (the lab-saturation fix).
+
+    The live LSL path streams microvolts while the decoder is trained in SI
+    volts; without conversion features arrive ~1e6x too large and predict_proba
+    saturates to exactly 0/1. process_batch applies ``LSL_TO_SI_SCALE`` up front
+    unconditionally; these tests lock it in so a future edit can't silently drop
+    it again.
+    """
+
+    @staticmethod
+    def _ts(n: int) -> np.ndarray:
+        return np.arange(n, dtype=float) / INPUT_SFREQ
+
+    def test_constant_is_microvolts_to_volts(self):
+        from backend.online_phase import online_preprocessor as op
+        assert op.LSL_TO_SI_SCALE == 1e-6
+
+    def test_uv_input_matches_volt_input_without_scale(self, monkeypatch):
+        """µV data through the real ×1e-6 scale must equal the same signal in
+        volts processed with the scale disabled — i.e. the conversion is exact
+        and applied before any DSP."""
+        from backend.online_phase import online_preprocessor as op
+        rng = np.random.default_rng(0)
+        n = 300
+        volt = rng.standard_normal((n, N_CHANNELS)) * 1e-5  # volt-scale EEG
+        microvolt = volt * 1e6                              # identical signal in µV
+        ts = self._ts(n)
+
+        out_uv, _ = OnlinePreprocessor(
+            _make_online_state(), INPUT_SFREQ
+        ).process_batch(microvolt, ts)
+
+        monkeypatch.setattr(op, "LSL_TO_SI_SCALE", 1.0)  # disable to feed volts
+        out_volt, _ = OnlinePreprocessor(
+            _make_online_state(), INPUT_SFREQ
+        ).process_batch(volt, ts)
+
+        np.testing.assert_allclose(out_uv, out_volt, rtol=1e-9, atol=1e-12)
+
+    def test_scale_shrinks_output_by_1e6(self, monkeypatch):
+        """The applied scale reduces output magnitude ~1e6x — the gap that
+        saturates the downstream classifier when it is missing."""
+        from backend.online_phase import online_preprocessor as op
+        rng = np.random.default_rng(1)
+        n = 300
+        microvolt = rng.standard_normal((n, N_CHANNELS)) * 10.0  # ~10 µV EEG
+        ts = self._ts(n)
+
+        scaled, _ = OnlinePreprocessor(
+            _make_online_state(), INPUT_SFREQ
+        ).process_batch(microvolt.copy(), ts)
+
+        monkeypatch.setattr(op, "LSL_TO_SI_SCALE", 1.0)
+        unscaled, _ = OnlinePreprocessor(
+            _make_online_state(), INPUT_SFREQ
+        ).process_batch(microvolt.copy(), ts)
+
+        ratio = np.median(np.abs(unscaled)) / np.median(np.abs(scaled))
+        assert ratio == pytest.approx(1e6, rel=1e-6)
+
+    def test_does_not_mutate_caller_array(self):
+        p = OnlinePreprocessor(_make_online_state(), INPUT_SFREQ)
+        data = np.random.default_rng(2).standard_normal((50, N_CHANNELS))
+        original = data.copy()
+        p.process_batch(data, self._ts(50))
+        np.testing.assert_array_equal(data, original)
