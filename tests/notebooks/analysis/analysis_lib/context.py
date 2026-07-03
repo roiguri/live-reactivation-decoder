@@ -1,7 +1,13 @@
-"""Profile loading + the analysis context shared by every analysis notebook.
+"""Analysis context shared by every analysis notebook.
 
 Collapses the per-notebook boilerplate (repo-root walk, ``sys.path`` setup,
-profile → settings/artifact/preproc/engine) into :func:`load_context`.
+output root -> settings/artifact/preproc/engine) into :func:`load_context`.
+
+An analysis root is any directory laid out per
+``backend.core.session_paths.SessionPaths`` (``experiment_config.yaml``,
+``models/decoder_pipeline.joblib``, ``epochs/``, optionally ``phase2_live/``) —
+a real subject's output directory (e.g. ``data/sub_001``) qualifies directly,
+with no separate profile/manifest layer.
 """
 from __future__ import annotations
 
@@ -9,6 +15,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+
+_KNOWN_SUBDIRS = {"epochs", "evaluation", "models", "phase2_live"}
 
 
 def bootstrap() -> Path:
@@ -33,16 +41,67 @@ def bootstrap() -> Path:
     return repo_root
 
 
+def find_raw_dirs(root: Path) -> dict[str, Path]:
+    """``{subdir_name: path}`` for every child of ``root`` holding a ``.vhdr``.
+
+    Raw recording directories (the functional localizer, a held-out task
+    recording, ...) aren't part of ``SessionPaths`` — they land wherever the
+    session happened to write them — so this discovers them by convention
+    instead of assuming a fixed name.
+    """
+    root = Path(root)
+    if not root.is_dir():
+        return {}
+    return {
+        child.name: child
+        for child in sorted(root.iterdir())
+        if child.is_dir() and child.name not in _KNOWN_SUBDIRS and list(child.glob("*.vhdr"))
+    }
+
+
+def latest_live_run(phase2_live_dir: Path) -> Optional[Path]:
+    """The most recent ``phase2_live/<run>/`` directory (timestamp-sorted), or ``None``."""
+    if not phase2_live_dir.is_dir():
+        return None
+    runs = sorted(d for d in phase2_live_dir.iterdir() if d.is_dir())
+    return runs[-1] if runs else None
+
+
+def _manifest_raw_dirs(root: Path) -> dict[str, Path]:
+    """Raw dirs *referenced* (not physically nested) by a debug-profile manifest.
+
+    A seeded ``debug_snapshots/<name>/`` profile doesn't copy its recordings
+    in — it references them via ``manifest.yaml``'s ``raw_data_dir`` (the FL
+    localizer) and, optionally, ``task_data_dir`` (a second, held-out-task
+    recording — see ``frontend.debug.profiles``). Both are keyed by their own
+    directory basename, matching :func:`find_raw_dirs`' physical-scan
+    convention (e.g. ``raw_data_dir=.../functinal_localizer`` -> key
+    ``"functinal_localizer"``), so a manifest-based root and a physically-
+    nested one resolve the same way downstream. A plain output directory like
+    ``data/sub_001`` has no ``manifest.yaml`` and returns ``{}`` here — it's
+    expected to have its raw dirs physically nested instead.
+    """
+    if not (root / "manifest.yaml").is_file():
+        return {}
+    from frontend.debug.profiles import load_profile
+
+    profile = load_profile(root.name, root=root.parent)
+    dirs = {profile.raw_data_dir.name: profile.raw_data_dir}
+    if profile.task_data_dir is not None:
+        dirs[profile.task_data_dir.name] = profile.task_data_dir
+    return dirs
+
+
 @dataclass
 class AnalysisContext:
-    """Everything a notebook needs from one seeded profile.
+    """Everything a notebook needs from one analysis root.
 
-    ``artifact.models`` are the *shipped* decoders (Mode A). Build a fresh
-    inference engine per model set with :meth:`engine`.
+    ``artifact.models`` are the FL-trained decoders. Build a fresh inference
+    engine per model set with :meth:`engine`.
     """
 
     repo_root: Path
-    profile: Any                      # frontend.debug.profiles.DebugProfile
+    paths: Any                        # backend.core.session_paths.SessionPaths
     settings: Any                     # SettingsManager
     epoch_tmin: float                 # from backend.core.preprocessing_constants
     epoch_tmax: float
@@ -50,7 +109,8 @@ class AnalysisContext:
     name_by_code: dict[int, str]
     artifact: Any                     # DecoderPipelineArtifact
     preproc: Any                      # OnlinePreprocessor
-    recording_dir: Path
+    raw_dirs: dict[str, Path]         # e.g. {"functinal_localizer": ..., "task": ...}
+    live_run_dir: Optional[Path]      # latest (or chosen) phase2_live/<run>/
     _tp_by_task: dict[str, float] = field(default_factory=dict)
     _default_tp: Optional[float] = None
 
@@ -86,7 +146,7 @@ def save_run_summary(ctx, dc, epoched, t_grid, preds, eval_results, *, source, m
 
     pos_groups = {t: [g for g in dc.display_markers if dc.is_target(t, g)] for t in preds}
     summary = {
-        "profile": ctx.profile.name, "source": source, "max_seconds": max_seconds,
+        "root": str(ctx.paths.root), "source": source, "max_seconds": max_seconds,
         "marker_groups": dc.marker_groups, "markers": list(dc.display_markers),
         "tasks": list(preds),
         "task_pos_marker": {t: (pos_groups[t][0] if pos_groups[t] else None) for t in preds},
@@ -106,39 +166,48 @@ def save_run_summary(ctx, dc, epoched, t_grid, preds, eval_results, *, source, m
         "suggested_timepoint": float(eval_results["suggested_timepoint"]),
     }
     fname = "live_summary.joblib" if source == "fl" else f"held_out_{source}_summary.joblib"
-    out_path = ctx.profile.root_dir / fname
+    out_path = ctx.paths.root / fname
     joblib.dump(summary, out_path)
     return out_path
 
 
-def load_context(profile_name: str, root: Optional[Path] = None) -> AnalysisContext:
-    """Resolve a debug profile into a fully-built :class:`AnalysisContext`."""
+def load_context(root: str | Path, *, live_run: str | Path | None = None) -> AnalysisContext:
+    """Resolve an analysis root (a ``SessionPaths``-shaped output dir) into an :class:`AnalysisContext`."""
     repo_root = bootstrap()
 
     from backend.core import preprocessing_constants as pc
+    from backend.core.session_paths import SessionPaths
     from backend.core.settings_manager import SettingsManager
     from backend.online_phase.artifact_loader import load_decoder_pipeline_artifact
     from backend.online_phase.online_preprocessor import OnlinePreprocessor
-    from frontend.debug.profiles import load_profile
 
-    root = root or (repo_root / "debug_snapshots")
-    profile = load_profile(profile_name, root=root)
+    root = Path(root)
+    if not root.is_absolute():
+        root = (repo_root / root).resolve()
+    paths = SessionPaths(root)
 
-    settings = SettingsManager(profile.config_path)
+    settings = SettingsManager(paths.experiment_config_path)
     # The preprocessing recipe (incl. the epoch window) is hardcoded in
     # ``backend.core.preprocessing_constants`` — read it straight from there.
     event_mapping = settings.get_event_mapping()
 
-    artifact = load_decoder_pipeline_artifact(profile.pipeline_path)
+    artifact = load_decoder_pipeline_artifact(paths.decoder_pipeline_path)
     preproc = OnlinePreprocessor(artifact.online_state)
 
-    recording_dir = profile.raw_data_dir
-    if not recording_dir.is_absolute():
-        recording_dir = (repo_root / recording_dir).resolve()
+    if live_run is not None:
+        live_run_dir = Path(live_run)
+        if not live_run_dir.is_absolute():
+            live_run_dir = paths.phase2_live_dir / live_run_dir
+    else:
+        live_run_dir = latest_live_run(paths.phase2_live_dir)
+
+    # Physically-nested raw dirs win; a manifest-referenced one only fills gaps
+    # (e.g. a debug snapshot's task_data_dir, never copied into the snapshot).
+    raw_dirs = _manifest_raw_dirs(root) | find_raw_dirs(root)
 
     return AnalysisContext(
         repo_root=repo_root,
-        profile=profile,
+        paths=paths,
         settings=settings,
         epoch_tmin=pc.EPOCH_TMIN,
         epoch_tmax=pc.EPOCH_TMAX,
@@ -146,7 +215,8 @@ def load_context(profile_name: str, root: Optional[Path] = None) -> AnalysisCont
         name_by_code={v: k for k, v in event_mapping.items()},
         artifact=artifact,
         preproc=preproc,
-        recording_dir=recording_dir,
+        raw_dirs=raw_dirs,
+        live_run_dir=live_run_dir,
         _tp_by_task=artifact.metadata.get("decoding_timepoints") or {},
         _default_tp=artifact.metadata.get("decoding_timepoint"),
     )

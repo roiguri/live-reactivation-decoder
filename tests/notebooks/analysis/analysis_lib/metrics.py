@@ -77,7 +77,8 @@ def winner_confusion(
 
 
 def modality_groups(
-    decoder_tasks: list[dict], *, rest_label: str = "rest"
+    decoder_tasks: list[dict], *, rest_label: str = "rest",
+    marker_of_task: dict[str, str] | None = None,
 ) -> list[tuple[list[str], list[str]]]:
     """Group decoders that share a training label-set into competition blocks.
 
@@ -88,6 +89,12 @@ def modality_groups(
     positive stimuli (in task order) and ``tasks`` the decoders competing within
     it. Within-modality configs yield one group per modality; a cross-modal
     config (every decoder vs all others) yields a single group.
+
+    ``marker_of_task`` maps each task to the epoched-data key that represents
+    its positive class — pass ``{task: dc.target_group(task)}`` when the
+    display groups are pooled (e.g. per-image markers pooled into a category),
+    otherwise a raw marker and its display group are the same name and the
+    default (each task's first ``pos_labels`` entry) is correct.
     """
     label_set: dict[str, frozenset[str]] = {}
     for t in decoder_tasks:
@@ -99,7 +106,10 @@ def modality_groups(
         groups.setdefault(label_set[t["name"]], []).append(t["name"])
     out = []
     for names in groups.values():
-        markers = [t["pos_labels"][0] for t in decoder_tasks if t["name"] in names]
+        if marker_of_task is not None:
+            markers = [marker_of_task[t["name"]] for t in decoder_tasks if t["name"] in names]
+        else:
+            markers = [t["pos_labels"][0] for t in decoder_tasks if t["name"] in names]
         out.append((markers, names))
     return out
 

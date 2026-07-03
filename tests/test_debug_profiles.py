@@ -72,6 +72,18 @@ def test_load_profile_resolves_conventions(tmp_path: Path) -> None:
     assert prof.snapshot_paths["eval"].name == "eval_done.joblib"
 
 
+def test_load_profile_task_data_dir_absent_is_none(tmp_path: Path) -> None:
+    _seed_profile(tmp_path, "alpha")  # no task_data_dir key
+    assert load_profile("alpha", tmp_path).task_data_dir is None
+
+
+def test_load_profile_task_data_dir_present(tmp_path: Path) -> None:
+    pdir = _seed_profile(tmp_path, "alpha")
+    manifest = pdir / MANIFEST_NAME
+    manifest.write_text(manifest.read_text() + "task_data_dir: /data/alpha/task\n")
+    assert load_profile("alpha", tmp_path).task_data_dir == Path("/data/alpha/task")
+
+
 def test_load_profile_missing_raises(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         load_profile("ghost", tmp_path)
@@ -166,3 +178,27 @@ def test_prepare_reseed_data_override(tmp_path: Path) -> None:
     new_data.mkdir()
     prof = prepare_profile("p", root=tmp_path, data=new_data)
     assert prof.raw_data_dir == new_data.resolve()
+
+
+def test_prepare_without_task_data_leaves_it_unset(tmp_path: Path) -> None:
+    src_cfg = _write_config(tmp_path / "src_config.yaml")
+    data = tmp_path / "rec"
+    data.mkdir()
+    prof = prepare_profile("p", root=tmp_path, config=src_cfg, data=data)
+    assert prof.task_data_dir is None
+    assert "task_data_dir" not in (tmp_path / "p" / MANIFEST_NAME).read_text()
+
+
+def test_prepare_bootstrap_with_task_data(tmp_path: Path) -> None:
+    src_cfg = _write_config(tmp_path / "src_config.yaml")
+    data = tmp_path / "rec"
+    data.mkdir()
+    task_data = tmp_path / "task_rec"
+    task_data.mkdir()
+
+    prof = prepare_profile("p", root=tmp_path, config=src_cfg, data=data, task_data=task_data)
+    assert prof.task_data_dir == task_data.resolve()
+
+    # Re-seed with no task_data override: keeps the recorded value.
+    reseeded = prepare_profile("p", root=tmp_path)
+    assert reseeded.task_data_dir == task_data.resolve()
