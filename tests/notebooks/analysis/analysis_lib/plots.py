@@ -293,8 +293,16 @@ def confusion_and_perm(ctx, dc, epoched, t_grid, preds, decoder_tasks,
     plt.tight_layout(); plt.show()
 
 
-def parity(ctx, dc, epoched, t_grid, preds):
-    """Offline (saved epochs swept through the model) vs online P(t), per decoder. FL only."""
+def parity(ctx, dc, epoched, t_grid, preds, *, models=None):
+    """Offline (saved epochs swept through the model) vs online P(t), per decoder. FL only.
+
+    ``models`` defaults to ``ctx.artifact.models`` (the snapshot's shipped
+    decoders). Pass the currently-active engine's models (``engine.models``)
+    if you've trained an alternate-timepoint decoder and swapped ``engine`` —
+    otherwise this silently compares "online" (``preds``, from whichever
+    engine actually produced them) against the *original* shipped decoder on
+    the offline side, which isn't a valid consistency check once they differ.
+    """
     import glob
 
     import mne
@@ -304,12 +312,14 @@ def parity(ctx, dc, epoched, t_grid, preds):
     off = mne.read_epochs(epo_fif[0], verbose=False)
     assert len(off.times) == len(t_grid), "offline/online time grids differ — check final_resample"
 
+    task_models = models if models is not None else ctx.artifact.models
+
     def offline_proba(task, raw_marker):
         if raw_marker not in off.event_id:
             return None
         X = off[raw_marker].get_data()
         n_ep, n_ch, n_t = X.shape
-        p = ctx.artifact.models[task].predict_proba(X.transpose(0, 2, 1).reshape(-1, n_ch))[:, 1]
+        p = task_models[task].predict_proba(X.transpose(0, 2, 1).reshape(-1, n_ch))[:, 1]
         return p.reshape(n_ep, n_t)
 
     tasks = list(preds)
@@ -342,7 +352,14 @@ def parity(ctx, dc, epoched, t_grid, preds):
 
 
 def fl_marker_diagnostic(ctx, raw, dc, *, n_perm=2000):
-    """FL stimulus-order diagnostic: marker timeline + a transition-bias shuffle test."""
+    """FL stimulus-order diagnostic: marker timeline + a transition-bias shuffle test.
+
+    Trial identity here comes straight from the raw trigger codes (``dc.raw_markers``
+    are the FL per-image markers — the trigger *is* the stimulus). For a source
+    where identity isn't in the trigger itself (encoding/retrieval), use
+    :func:`marker_order_diagnostic` directly with that source's already-labeled
+    ``trials`` instead.
+    """
     import re
 
     desc_to_code = {}
@@ -354,17 +371,35 @@ def fl_marker_diagnostic(ctx, raw, dc, *, n_perm=2000):
     events, _ = mne.events_from_annotations(raw, event_id=desc_to_code, verbose=False)
     sfreq = float(raw.info["sfreq"])
 
-    times_by_name = {n: np.array([s / sfreq for s, _, c in events if c == ctx.event_mapping[n]])
-                     for n in dc.raw_markers}
+    codes = {ctx.event_mapping[n] for n in dc.raw_markers}
+    pairs = [(s / sfreq, ctx.name_by_code[c]) for s, _, c in events if c in codes]
+    marker_order_diagnostic([t for t, _ in pairs], [lab for _, lab in pairs], n_perm=n_perm)
+
+
+def marker_order_diagnostic(times, labels, *, n_perm=2000, title_prefix="Marker"):
+    """Timeline + transition-bias shuffle test for an arbitrary ``(time, label)`` sequence.
+
+    Generalizes :func:`fl_marker_diagnostic`'s core check to any source: checks
+    whether ``labels``' order shows a statistically significant transition bias
+    (e.g. one category systematically following another), which could let a
+    decoder "cheat" via temporal autocorrelation instead of truly reading the
+    category from the signal. ``times`` are in seconds (any common origin);
+    ``labels`` is whatever "type" each event belongs to — an FL marker name, or
+    an encoding/retrieval trial's ``true_label``.
+    """
+    pairs = sorted(zip(times, labels))
+    order = [lab for _, lab in pairs]
+
+    times_by_label: dict[str, list[float]] = {}
+    for t, lab in pairs:
+        times_by_label.setdefault(lab, []).append(t)
     fig, ax = plt.subplots(figsize=(12, 3))
-    for name, ts in times_by_name.items():
+    for name, ts in times_by_label.items():
         ax.scatter(ts, [name] * len(ts), s=12)
-    ax.set(xlabel="time in recording (s)", title="Marker timeline — blocked or interleaved?")
+    ax.set(xlabel="time in recording (s)", title=f"{title_prefix} timeline — blocked or interleaved?")
     ax.grid(axis="x", alpha=0.3)
     plt.tight_layout(); plt.show()
 
-    codes = {ctx.event_mapping[n] for n in dc.raw_markers}
-    order = [ctx.name_by_code[c] for _, _, c in events if c in codes]
     TYPES = sorted(set(order))
     idx = {t: k for k, t in enumerate(TYPES)}
     K = len(TYPES)
