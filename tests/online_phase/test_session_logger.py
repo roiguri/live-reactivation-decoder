@@ -189,3 +189,143 @@ def test_export_session_npz_rebuilds_from_csvs(tmp_path):
         np.testing.assert_allclose(data["predictions"][:, 0], [0.1, 0.2])
         np.testing.assert_allclose(data["lsl_timestamp"], [7.0, 7.01])
         assert data["markers"]["name"][0] == "red"
+
+
+# ── decisions sink ───────────────────────────────────────────────────────────
+
+
+from types import SimpleNamespace  # noqa: E402
+
+from backend.online_phase.session_logger import episodes_from_decisions  # noqa: E402
+
+_INITIAL_CONFIG = {
+    "thresholds": {"animate decoder": 0.85, "inanimate decoder": 0.85},
+    "sustain_seconds": 0.1,
+    "release_seconds": 0.0,
+}
+
+
+def _decision_logger(tmp_path):
+    return LiveSessionLogger(
+        tmp_path,
+        ["animate decoder", "inanimate decoder"],
+        decision_config=_INITIAL_CONFIG,
+    )
+
+
+def _result(timestamps, active, version, change=None):
+    return SimpleNamespace(
+        timestamps=np.asarray(timestamps, dtype=float),
+        active={k: np.asarray(v, dtype=bool) for k, v in active.items()},
+        config_version=version,
+        config_change=change,
+    )
+
+
+def _read_jsonl(path):
+    with path.open() as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+def test_decision_logging_off_by_default(tmp_path):
+    logger = LiveSessionLogger(tmp_path, ["a"])  # no decision_config
+    logger.on_decisions(_result([1.0], {"a": [True]}, 0))  # no-op
+    logger.close()
+    assert not (tmp_path / "decisions.csv").exists()
+    assert not (tmp_path / "decision_config.jsonl").exists()
+    assert "n_decision_samples" not in json.loads((tmp_path / "manifest.json").read_text())
+
+
+def test_decisions_csv_dense_rows_with_config_version(tmp_path):
+    logger = _decision_logger(tmp_path)
+    logger.on_decisions(
+        _result(
+            [10.0, 10.01],
+            {"animate decoder": [True, True], "inanimate decoder": [False, True]},
+            version=0,
+        )
+    )
+    logger.close()
+
+    rows = _read_rows(tmp_path / "decisions.csv")
+    assert rows[0] == [
+        "lsl_timestamp", "t_sec", "animate decoder", "inanimate decoder", "config_version"
+    ]
+    assert rows[1] == ["10.0", "0.0", "True", "False", "0"]
+    assert rows[2] == ["10.01", "0.01", "True", "True", "0"]
+
+
+def test_version0_snapshot_written_at_construction(tmp_path):
+    logger = _decision_logger(tmp_path)
+    # Crash-safe: the timeline exists before any decisions / close().
+    lines = _read_jsonl(tmp_path / "decision_config.jsonl")
+    assert lines == [
+        {"config_version": 0, "lsl_timestamp": None, "config": _INITIAL_CONFIG}
+    ]
+    logger.close()
+
+
+def test_config_change_appends_version_and_rows_carry_it(tmp_path):
+    logger = _decision_logger(tmp_path)
+    logger.on_decisions(_result([1.0], {"animate decoder": [False], "inanimate decoder": [False]}, 0))
+
+    new_config = {
+        "thresholds": {"animate decoder": 0.70, "inanimate decoder": 0.85},
+        "sustain_seconds": 0.1,
+        "release_seconds": 0.0,
+    }
+    change = SimpleNamespace(version=1, lsl_timestamp=2.0, config=new_config)
+    logger.on_decisions(
+        _result(
+            [2.0], {"animate decoder": [True], "inanimate decoder": [False]}, 1, change
+        )
+    )
+    logger.close()
+
+    timeline = _read_jsonl(tmp_path / "decision_config.jsonl")
+    assert [ln["config_version"] for ln in timeline] == [0, 1]
+    assert timeline[1] == {"config_version": 1, "lsl_timestamp": 2.0, "config": new_config}
+
+    rows = _read_rows(tmp_path / "decisions.csv")
+    assert [r[-1] for r in rows[1:]] == ["0", "1"]  # version boundary at ts 2.0
+
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert manifest["decision_schema_version"] == 1
+    assert manifest["decision_initial_config"] == _INITIAL_CONFIG
+    assert manifest["n_decision_samples"] == 2
+
+
+def test_episodes_from_decisions_pairs_edges_and_trailing_open(tmp_path):
+    logger = _decision_logger(tmp_path)
+    # animate: on at 1.0, off at 3.0 (closed); on again at 4.0 and never closes.
+    # inanimate: never on.
+    logger.on_decisions(
+        _result(
+            [1.0, 2.0, 3.0, 4.0],
+            {
+                "animate decoder": [True, True, False, True],
+                "inanimate decoder": [False, False, False, False],
+            },
+            version=0,
+        )
+    )
+    logger.close()
+
+    episodes = episodes_from_decisions(tmp_path)
+    animate = [e for e in episodes if e.decoder == "animate decoder"]
+    assert (animate[0].onset_ts, animate[0].offset_ts) == (1.0, 3.0)
+    assert (animate[1].onset_ts, animate[1].offset_ts) == (4.0, None)  # open
+    assert animate[0].config_version_at_onset == 0
+    assert not [e for e in episodes if e.decoder == "inanimate decoder"]
+
+
+def test_decision_files_flushed_before_close(tmp_path):
+    """Crash-safe: rows are on disk before close() (line-buffered append)."""
+    logger = _decision_logger(tmp_path)
+    logger.on_decisions(
+        _result([1.0], {"animate decoder": [True], "inanimate decoder": [False]}, 0)
+    )
+    # Read without closing the logger.
+    rows = _read_rows(tmp_path / "decisions.csv")
+    assert len(rows) == 2  # header + one decision row
+    logger.close()
