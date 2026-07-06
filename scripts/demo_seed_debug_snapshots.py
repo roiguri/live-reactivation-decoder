@@ -19,9 +19,13 @@ Re-seed (after a schema/pipeline change) — reuses the recorded config + data::
 
     python -m scripts.demo_seed_debug_snapshots --profile default
 
+Add ``--task-data <dir>`` (either mode) to also reference a second, held-out-
+task recording (referenced only, never copied — same convention as ``--data``)
+for analyses that need to replay a task phase beyond the FL localizer.
+
 Writes, inside ``debug_snapshots/<name>/``::
 
-    manifest.yaml        name + config (copied in) + raw_data_dir
+    manifest.yaml        name + config (copied in) + raw_data_dir [+ task_data_dir]
     experiment_config.yaml
     preproc_done.joblib  state right after orchestrator.run_step2_apply_and_save()
     eval_done.joblib     state right after orchestrator.run_evaluation()
@@ -74,6 +78,13 @@ def main() -> None:
         help="Directory containing the subject's .vhdr file (required when "
              "bootstrapping; reuses the manifest's raw_data_dir when re-seeding).",
     )
+    parser.add_argument(
+        "--task-data", type=Path, default=None,
+        help="Optional directory containing a second, held-out-task recording "
+             "(referenced, not copied — same convention as --data). Only needed "
+             "by analyses that replay a task phase beyond the FL localizer; "
+             "omitted profiles simply have no task_data_dir.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -84,13 +95,16 @@ def main() -> None:
 
     try:
         profile = prepare_profile(
-            args.profile, root=args.root, config=args.config, data=args.data
+            args.profile, root=args.root, config=args.config, data=args.data,
+            task_data=args.task_data,
         )
     except (ValueError, FileNotFoundError) as exc:
         parser.error(str(exc))
 
     if not profile.raw_data_dir.exists():
         parser.error(f"raw_data_dir not found: {profile.raw_data_dir}")
+    if profile.task_data_dir is not None and not profile.task_data_dir.exists():
+        parser.error(f"task_data_dir not found: {profile.task_data_dir}")
 
     logger.info("Profile '%s' -> %s", profile.name, profile.root_dir)
 

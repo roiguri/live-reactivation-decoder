@@ -1,93 +1,155 @@
-"""``SOURCE`` → labeled epoch samples for the epoched-decoding notebook.
+"""``SOURCE`` -> labeled epochs for the epoched-decoding notebook.
 
-Bridges the two label regimes behind one call so the notebook stays uniform:
+Bridges the three label regimes behind one call so the notebook stays uniform:
 
 - ``"fl"`` — the FL trigger codes *are* the stimulus identity (pulled via
-  :func:`analysis_lib.streaming.extract_markers`).
-- task sources (``"stage2_learning"`` / ``"stage2_test"`` / ``"stage3"``) — the
-  codes are phase events and identity comes from the behavioral metadata (via
-  :mod:`analysis_lib.task_labels`), with order-alignment validated by
-  ``gap_residuals``.
+  :func:`analysis_lib.streaming.extract_markers`); paired with a fresh raw-EEG
+  replay through the online preprocessor.
+- ``"encoding"`` — the real-time task's couple-learning phase. Trial identity
+  is directly in the trigger code too (``learning_<category>_NN``), so it's a
+  same-modality (perception) held-out sanity check.
+- ``"retrieval"`` — the real-time task's retrieval phase. Trial identity isn't
+  in the trigger code (``retrieval_verb_N`` only names the cue verb); it's
+  recovered from the encoding markers earlier in the same recording via
+  :mod:`analysis_lib.task_labels`. This is the real reactivation-from-memory
+  question.
 
-All return the same ``samples_by_group`` shape (``{display_group: [sample,...]}``).
+All three sources replay raw EEG fresh through ``OnlinePreprocessor`` + a
+caller-chosen ``LiveInferenceEngine`` (see ``analysis_lib.context``) — so any
+model/hyperparameters/pos-neg classes can be tried for any source, not just
+FL. ``"encoding"``/``"retrieval"`` pull their markers directly from the raw
+recording's own annotations (like FL does), not from a live run's saved
+``predictions.csv`` — that file reflects only whichever specific decoder
+produced it, once, in the past.
 """
 from __future__ import annotations
 
-import csv
-import datetime as dt
-import json
 from collections import Counter
-from pathlib import Path
 
 from analysis_lib import streaming, task_labels
 
-_FMT = "%Y-%m-%d_%H-%M-%S.%f"
+
+def _check_encoding_markers(event_mapping: dict[str, int]) -> None:
+    """Fail loudly if the loaded config doesn't define the markers this source needs."""
+    if not any(not task_labels.VERB_RE.match(n) and n.startswith("learning_")
+               and task_labels.category_of(n[len("learning_"):]) is not None
+               for n in event_mapping):
+        raise ValueError(
+            "encoding source needs at least one 'learning_<category>_NN' marker "
+            f"in the config's markers_mapping; loaded config only has: {sorted(event_mapping)}"
+        )
 
 
-def _ts(s: str) -> float:
-    return dt.datetime.strptime(s, _FMT).timestamp()
+def _check_retrieval_markers(event_mapping: dict[str, int]) -> None:
+    """Fail loudly if the loaded config doesn't define the markers this source needs.
 
-
-def build_source_samples(
-    ctx, raw, sfreq, source, dc, *, n_times, metadata_dir, recording_dir,
-    anchor_code=None, label_key="true_label",
-):
-    """Return ``(samples_by_group, trials, info)`` for ``source``.
-
-    ``trials`` is the per-trial records for task sources (``None`` for FL);
-    ``info`` is a one-line human summary (marker counts for FL; the alignment
-    residual + a stage-specific note for task sources).
+    ``task_labels``' verb/end/recall marker names are Python defaults, not
+    config content — if a config renames or drops them, matching should raise
+    here instead of silently epoching zero trials.
     """
-    if source == "fl":
-        markers = streaming.extract_markers(raw, ctx.event_mapping, dc.raw_markers, n_times=n_times)
-        sbg: dict[str, list[int]] = {}
-        for s, c in markers:
-            g = dc.code_to_group.get(c)
-            if g is not None:
-                sbg.setdefault(g, []).append(s)
-        counts = {ctx.name_by_code[c]: n for c, n in Counter(c for _, c in markers).items()}
-        return sbg, None, f"FL markers: {counts}"
+    required = (task_labels.RETRIEVAL_END, task_labels.RECALL_KEY_PRESS)
+    missing = [m for m in required if m not in event_mapping]
+    if missing:
+        raise ValueError(
+            f"retrieval source needs {missing} in the config's markers_mapping; "
+            f"loaded config only has: {sorted(event_mapping)}"
+        )
+    for label, pattern in (("learning_verb_*", task_labels.VERB_RE),
+                           ("retrieval_verb_*", task_labels.RETRIEVAL_VERB_RE)):
+        if not any(pattern.match(n) for n in event_mapping):
+            raise ValueError(
+                f"retrieval source needs at least one '{label}' marker in the "
+                f"config's markers_mapping; loaded config only has: {sorted(event_mapping)}"
+            )
 
-    md = Path(metadata_dir)
-    combined = {r["object"]: r
-                for r in csv.DictReader(open(next((md / "combined_data").glob("*.csv"))))}
-    markers_all = task_labels.parse_vmrk(streaming.find_vhdr(recording_dir).with_suffix(".vmrk"))
 
-    if source == "stage3":
-        partial = json.loads(next((md / "partial_retrival").glob("*.json")).read_text())
-        true_label_of = {}
-        for v in partial.values():
-            obj = task_labels.object_of(v)
-            true_label_of[obj] = combined[obj][v[obj]["probe"]]
-        trials = task_labels.stage3_trials(markers_all, partial,
-                                           anchor_code=anchor_code, true_label_of=true_label_of)
-        sbg = task_labels.group_samples_by_label(trials, key=label_key)
-        anchors = task_labels.samples_of(task_labels.stage3_markers(markers_all), anchor_code)
-        ev = [_ts(v["trial_times"]["start_retrival_time"]) for v in partial.values()]
-        extra = f"by probe {dict(Counter(t['probe'] for t in trials))}"
+def build_fl_samples(ctx, raw, dc, *, n_times=None):
+    """Return ``(samples_by_group, info)`` for the functional-localizer trigger stream."""
+    markers = streaming.extract_markers(raw, ctx.event_mapping, dc.raw_markers, n_times=n_times)
+    sbg: dict[str, list[int]] = {}
+    for s, c in markers:
+        g = dc.code_to_group.get(c)
+        if g is not None:
+            sbg.setdefault(g, []).append(s)
+    counts = {ctx.name_by_code[c]: n for c, n in Counter(c for _, c in markers).items()}
+    return sbg, f"FL markers: {counts}"
 
-    elif source == "stage2_learning":
-        ta = json.loads(next((md / "true_answers").glob("*true_answers.json")).read_text())
-        trials = task_labels.stage2_learning_trials(markers_all, ta, anchor_code=anchor_code)
-        sbg = {**task_labels.group_samples_by_label(trials, key="colour_label"),
-               **task_labels.group_samples_by_label(trials, key="scene_label")}
-        anchors = task_labels.samples_of(task_labels.stage2_region(markers_all), anchor_code)
-        ev = [_ts(ta[k]["trial_times"]["object_appear"]) for k in sorted(ta, key=int)]
-        extra = "perception — colour + scene shown together"
 
-    elif source == "stage2_test":
-        subj = json.loads(next((md / "subject_answer").glob("*.json")).read_text())
-        trials = task_labels.stage2_test_trials(markers_all, subj, combined, anchor_code=anchor_code)
-        sbg = {**task_labels.group_samples_by_label(trials, key="colour_label"),
-               **task_labels.group_samples_by_label(trials, key="scene_label")}
-        anchors = task_labels.samples_of(task_labels.stage2_region(markers_all), anchor_code)
-        order = sorted(subj, key=lambda s: int(s.split("_")[1]))
-        ev = [_ts(subj[k]["trial_times"]["retrival_question_appear"]) for k in order]
-        extra = f"recall — both_correct {sum(t['both_correct'] for t in trials)}/{len(trials)}"
+def _extract_task_markers(ctx, raw, *, n_times=None) -> list[task_labels.Marker]:
+    """Every configured marker name, pulled from ``raw``'s own annotations, sample-indexed.
 
-    else:
-        raise ValueError(f"unknown source {source!r}")
+    Passes every name in ``ctx.event_mapping`` (not a curated subset) — names
+    absent from this particular recording (e.g. FL-only image/rest markers on
+    a task recording) simply produce no matches; ``task_labels``' pattern
+    matching already tolerates unrelated interleaved markers.
+    """
+    pairs = streaming.extract_markers(raw, ctx.event_mapping, list(ctx.event_mapping), n_times=n_times)
+    return [task_labels.Marker(t=s, code=c, name=ctx.name_by_code[c]) for s, c in pairs]
 
-    res = task_labels.gap_residuals(anchors, ev, sfreq)
-    info = f"[{source}] alignment gap residual max={max(res):.3f}s (approx 0 = aligned) | {extra}"
-    return sbg, trials, info
+
+def _epoch_by_group(out_samples, sfreq, fs_out, dc, trials, preds, *, tmin, tmax):
+    """Shared plumbing: epoch a freshly-replayed prediction stream around labeled ``trials``.
+
+    ``trials`` are ``{"t": <raw sample index>, "true_label": ...}`` records
+    (already resolved by the caller — encoding or retrieval). Returns
+    ``(t_grid, epoched)`` where ``epoched`` is ``{task: {group: (n_epochs, n_grid)}}``,
+    keyed by ``dc``'s display groups.
+    """
+    t_grid, epoch_stream = streaming.make_epocher(out_samples, sfreq, fs_out, tmin, tmax)
+    epoched = {
+        task: {group: epoch_stream(prob, sorted(t["t"] for t in trials if t["true_label"] == group))
+               for group in dc.display_markers}
+        for task, prob in preds.items()
+    }
+    return t_grid, epoched
+
+
+def build_encoding_epochs(ctx, raw, dc, out_samples, sfreq, fs_out, preds, *, tmin, tmax, n_times=None):
+    """Return ``(t_grid, epoched, trials, info)`` for the recording's encoding phase.
+
+    ``raw``, ``out_samples``, ``sfreq``, ``fs_out``, ``preds`` are the outputs
+    of a fresh replay of ``raw`` through ``OnlinePreprocessor`` + a chosen
+    ``LiveInferenceEngine`` (``streaming.load_recording`` ->
+    ``streaming.run_online_stream`` -> ``engine.predict``) — exactly what
+    ``"fl"`` already computes; this function only labels + epochs it.
+
+    ``epoched`` is ``{task: {category: (n_epochs, n_grid)}}``, keyed by each
+    encoding trial's true (shown) category — a same-modality (perception)
+    held-out sanity check, since an image really was on screen (unlike
+    retrieval). ``dc`` must pool the per-image markers into category-level
+    display groups, e.g.
+    ``plots.display_config(ctx, marker_groups=task_labels.marker_groups_by_category(ctx.event_mapping))``.
+    """
+    _check_encoding_markers(ctx.event_mapping)
+    markers = _extract_task_markers(ctx, raw, n_times=n_times)
+    trials = task_labels.encoding_trials(markers)
+
+    t_grid, epoched = _epoch_by_group(out_samples, sfreq, fs_out, dc, trials, preds, tmin=tmin, tmax=tmax)
+
+    info = (f"[encoding] {len(trials)} image onsets | "
+            f"by true category {dict(Counter(t['true_label'] for t in trials))}")
+    return t_grid, epoched, trials, info
+
+
+def build_retrieval_epochs(ctx, raw, dc, out_samples, sfreq, fs_out, preds, *, tmin, tmax, n_times=None):
+    """Return ``(t_grid, epoched, trials, info)`` for the recording's retrieval phase.
+
+    Same replay contract as :func:`build_encoding_epochs`. ``epoched`` is
+    ``{task: {category: (n_epochs, n_grid)}}``, keyed by each retrieval
+    trial's *true* (encoded) category — an honest held-out test of whether
+    the decoder reactivates the right category during recall. ``dc`` must
+    pool the per-image markers into category-level display groups, e.g.
+    ``plots.display_config(ctx, marker_groups=task_labels.marker_groups_by_category(ctx.event_mapping))``.
+    """
+    _check_retrieval_markers(ctx.event_mapping)
+    markers = _extract_task_markers(ctx, raw, n_times=n_times)
+    couples = task_labels.group_couple_trials(markers)
+    verb_category = task_labels.verb_categories(couples)
+    trials = task_labels.retrieval_trials(markers, verb_category)
+
+    t_grid, epoched = _epoch_by_group(out_samples, sfreq, fs_out, dc, trials, preds, tmin=tmin, tmax=tmax)
+
+    n_recalled = sum(t["recalled"] for t in trials)
+    info = (f"[retrieval] {len(trials)} cued trials, {n_recalled} with a recall key-press | "
+            f"by true category {dict(Counter(t['true_label'] for t in trials))}")
+    return t_grid, epoched, trials, info

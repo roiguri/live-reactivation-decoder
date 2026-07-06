@@ -6,9 +6,12 @@ A **profile** is a directory ``debug_snapshots/<name>/`` bundling everything
 needed to reproduce and run one debug scenario:
 
 * ``manifest.yaml`` — the source of truth: ``name``, ``config`` (a path
-  relative to the profile dir — the copied-in config), and ``raw_data_dir``
+  relative to the profile dir — the copied-in config), ``raw_data_dir``
   (a path *only*, recording which raw recording the snapshots were built
-  from, for re-seeding and for replay via ``scripts/replay_vhdr_to_lsl.py``).
+  from, for re-seeding and for replay via ``scripts/replay_vhdr_to_lsl.py``),
+  and optionally ``task_data_dir`` (a path *only*, same convention as
+  ``raw_data_dir`` — a second, held-out-task recording some analyses need
+  beyond the FL localizer; absent for profiles that don't have one).
 * ``experiment_config.yaml`` — the config, copied in so the profile is
   self-contained.
 * ``preproc_done.joblib`` / ``eval_done.joblib`` / ``train_done.joblib`` —
@@ -49,6 +52,11 @@ class DebugProfile:
     ``config_path`` and ``raw_data_dir`` may be overridden (for one-off
     diagnostics) relative to what the manifest records; the snapshot and
     pipeline paths always follow the on-disk conventions under ``root_dir``.
+
+    ``task_data_dir`` is optional (``None`` when the manifest doesn't define
+    one) — a second, held-out-task recording some analyses need beyond the FL
+    localizer, referenced the same way ``raw_data_dir`` is (a path only, never
+    copied into the profile).
     """
 
     name: str
@@ -57,6 +65,7 @@ class DebugProfile:
     raw_data_dir: Path
     pipeline_path: Path
     snapshot_paths: dict[str, Path]
+    task_data_dir: Path | None = None
 
 
 # ── discovery + load ─────────────────────────────────────────────────────────
@@ -94,6 +103,8 @@ def load_profile(name: str, root: Path = DEFAULT_ROOT) -> DebugProfile:
             f"{manifest_path} must define both 'config' and 'raw_data_dir'."
         )
 
+    task_data_dir = raw.get("task_data_dir")
+
     return DebugProfile(
         name=raw.get("name", name),
         root_dir=profile_dir,
@@ -104,6 +115,7 @@ def load_profile(name: str, root: Path = DEFAULT_ROOT) -> DebugProfile:
             key: (profile_dir / fn).resolve()
             for key, fn in SNAPSHOT_FILENAMES.items()
         },
+        task_data_dir=Path(task_data_dir) if task_data_dir else None,
     )
 
 
@@ -156,6 +168,7 @@ def prepare_profile(
     root: Path = DEFAULT_ROOT,
     config: Path | None = None,
     data: Path | None = None,
+    task_data: Path | None = None,
 ) -> DebugProfile:
     """Create or refresh ``root/<name>/`` and return its ``DebugProfile``.
 
@@ -167,6 +180,11 @@ def prepare_profile(
     * **Re-seed** (manifest exists) — ``config`` / ``data`` default to the
       recorded values; either may be overridden. A passed ``config`` is
       re-copied into the profile.
+
+    ``task_data`` is optional in both modes — a second, held-out-task
+    recording referenced (never copied) the same way ``data``/``raw_data_dir``
+    is. Defaults to whatever the manifest already records (``None`` if it
+    never had one); pass it explicitly to set or change it.
 
     The pipeline/snapshot/epochs paths follow the directory conventions and
     are populated by the seeder run itself, not here.
@@ -185,6 +203,9 @@ def prepare_profile(
     data_dir = Path(data) if data is not None else None
     if data_dir is None and existing.get("raw_data_dir"):
         data_dir = Path(existing["raw_data_dir"])
+    task_data_dir = Path(task_data) if task_data is not None else None
+    if task_data_dir is None and existing.get("task_data_dir"):
+        task_data_dir = Path(existing["task_data_dir"])
 
     if config_src is None or data_dir is None:
         raise ValueError(
@@ -200,14 +221,12 @@ def prepare_profile(
     if config_src.resolve() != dest_config.resolve():
         shutil.copyfile(config_src, dest_config)
 
-    manifest_path.write_text(
-        yaml.safe_dump(
-            {
-                "name": name,
-                "config": CONFIG_NAME,
-                "raw_data_dir": str(data_dir.resolve()),
-            },
-            sort_keys=False,
-        )
-    )
+    manifest: dict[str, str] = {
+        "name": name,
+        "config": CONFIG_NAME,
+        "raw_data_dir": str(data_dir.resolve()),
+    }
+    if task_data_dir is not None:
+        manifest["task_data_dir"] = str(task_data_dir.resolve())
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False))
     return load_profile(name, root)

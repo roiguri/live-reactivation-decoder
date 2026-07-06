@@ -109,97 +109,85 @@ def test_baseline_correct_subtracts_prestim_mean():
     np.testing.assert_allclose(ep["d"]["m"][0], [0.3, 0.4, 0.6, 0.8])
 
 
-def test_parse_vmrk_and_stage3_split():
-    # Stage 2 reuses 51/53; Stage 3 begins at the first probe (71).
-    text = "\n".join([
-        "Mk1=Stimulus,S 51,1000,1,0",   # Stage 2 test: show object
-        "Mk2=Stimulus,S 53,1100,1,0",   # Stage 2 test: start retrieval
-        "Mk3=Stimulus,S 55,1200,1,0",   # Stage 2 only: remember question
-        "Mk4=Stimulus,S 71,2000,1,0",   # --- Stage 3 begins ---
-        "Mk5=Stimulus,S 53,2200,1,0",   # Stage 3 retrieval start
-        "Mk6=Stimulus,S 71,3000,1,0",
-        "Mk7=Stimulus,S 53,3200,1,0",
+def test_category_of():
+    assert task_labels.category_of("animate_02") == "animate"
+    assert task_labels.category_of("inanimate_11") == "inanimate"
+    assert task_labels.category_of("recall_key_press") is None
+
+
+def _mk(rows):
+    return [task_labels.Marker(t, c, n) for t, c, n in rows]
+
+
+def test_group_couple_trials_pairs_verb_with_following_image():
+    markers = _mk([
+        (0.0, 205, "learning_verb_5"),
+        (2.0, 215, "learning_inanimate_02"),
+        (7.0, 83, "encoding_response"),
+        (8.0, 201, "learning_verb_1"),
+        (11.0, 211, "learning_animate_01"),
+        (16.0, 83, "encoding_response"),
     ])
-    markers = task_labels.parse_vmrk_text(text)
-    assert markers[0] == (51, 1000)
-    s3 = task_labels.stage3_markers(markers)
-    assert s3[0] == (71, 2000)                       # split at first probe
-    assert task_labels.samples_of(s3, 53) == [2200, 3200]  # only Stage 3 retrievals
+    couples = task_labels.group_couple_trials(markers)
+    assert [(c["verb"], c["image"], c["category"]) for c in couples] == [
+        (5, "inanimate_02", "inanimate"),
+        (1, "animate_01", "animate"),
+    ]
 
 
-def test_stage3_trials_joins_labels_and_rejects_count_mismatch():
+def test_verb_categories_majority_vote_and_conflict():
+    couples = [
+        {"verb": 1, "category": "animate"},
+        {"verb": 1, "category": "animate"},
+        {"verb": 2, "category": "inanimate"},
+    ]
+    assert task_labels.verb_categories(couples) == {1: "animate", 2: "inanimate"}
+
     import pytest
-    markers = task_labels.parse_vmrk_text("\n".join([
-        "Mk1=Stimulus,S 71,2000,1,0",
-        "Mk2=Stimulus,S 53,2200,1,0",
-        "Mk3=Stimulus,S 71,3000,1,0",
-        "Mk4=Stimulus,S 53,3200,1,0",
-    ]))
-    pr = {
-        "trial_1": {"shoe": {"probe": "colors", "is_remember": True, "subject_answer": "red"},
-                    "retrival_success": True, "trial_times": {}},
-        "trial_2": {"sock": {"probe": "scenes", "is_remember": True, "subject_answer": "kitchen"},
-                    "retrival_success": False, "trial_times": {}},
-    }
-    rows = task_labels.stage3_trials(markers, pr, true_label_of={"shoe": "red", "sock": "living_room"})
-    assert [r["sample"] for r in rows] == [2200, 3200]
-    assert rows[0]["reported_label"] == "red" and rows[0]["true_label"] == "red"
-    assert rows[1]["true_label"] == "living_room"   # ground truth, not the reported "kitchen"
-    grouped = task_labels.group_samples_by_label(rows, key="true_label")
-    assert grouped == {"red": [2200], "living_room": [3200]}
-    # one extra anchor, two trials -> alignment unsafe -> raise
-    bad = markers + [(53, 4200)]
-    with pytest.raises(ValueError, match="alignment unsafe"):
-        task_labels.stage3_trials(bad, pr)
+    with pytest.raises(ValueError, match="inconsistent categories"):
+        task_labels.verb_categories([
+            {"verb": 1, "category": "animate"},
+            {"verb": 1, "category": "inanimate"},
+        ])
 
 
-def test_stage2_learning_trials_dual_label():
-    # Stage 2 region = markers before the first probe (71). Learning anchored on 41.
-    markers = task_labels.parse_vmrk_text("\n".join([
-        "Mk1=Stimulus,S 41,1000,1,0",
-        "Mk2=Stimulus,S 41,2000,1,0",
-        "Mk3=Stimulus,S 71,9000,1,0",   # Stage 3 begins — must be excluded
-        "Mk4=Stimulus,S 41,9500,1,0",
-    ]))
-    ta = {
-        "1": {"shoe": {"colors": "red", "scenes": "kitchen"}, "trial_times": {}},
-        "2": {"sock": {"colors": "green", "scenes": "bathroom"}, "trial_times": {}},
-    }
-    rows = task_labels.stage2_learning_trials(markers, ta)
-    assert [r["sample"] for r in rows] == [1000, 2000]      # the post-71 41 is excluded
-    assert rows[0]["colour_label"] == "red" and rows[0]["scene_label"] == "kitchen"
-    # a trial contributes to BOTH a colour and a scene group
-    merged = {**task_labels.group_samples_by_label(rows, key="colour_label"),
-              **task_labels.group_samples_by_label(rows, key="scene_label")}
-    assert merged == {"red": [1000], "green": [2000], "kitchen": [1000], "bathroom": [2000]}
+def test_encoding_trials_labels_image_onsets_and_skips_verb_cues():
+    markers = _mk([
+        (0.0, 205, "learning_verb_5"),
+        (2.0, 215, "learning_inanimate_02"),
+        (7.0, 83, "encoding_response"),
+        (8.0, 201, "learning_verb_1"),
+        (11.0, 211, "learning_animate_01"),
+        (16.0, 83, "encoding_response"),
+    ])
+    trials = task_labels.encoding_trials(markers)
+    assert [(t["t"], t["image"], t["true_label"]) for t in trials] == [
+        (2.0, "inanimate_02", "inanimate"),
+        (11.0, "animate_01", "animate"),
+    ]
+    grouped = task_labels.group_samples_by_label(trials)
+    assert grouped == {"inanimate": [2.0], "animate": [11.0]}
 
 
-def test_stage2_test_trials_orders_by_test_index_and_carries_correctness():
-    markers = task_labels.parse_vmrk_text("\n".join([
-        "Mk1=Stimulus,S 55,1000,1,0",
-        "Mk2=Stimulus,S 55,2000,1,0",
-    ]))
-    # subject_answer keyed in test order; object key is first, with report flags beside it
-    subj = {
-        "trial_1": {"closet": {"colors": "yellow", "scenes": "kitchen"},
-                    "retrival_report_color": True, "retrival_report_scene": True, "trial_times": {}},
-        "trial_2": {"shoe": {"colors": "red", "scenes": "living_room"},
-                    "retrival_success": True, "trial_times": {}},
-    }
-    combined = {
-        "closet": {"colors": "yellow", "scenes": "kitchen",
-                   "color_correct": "TRUE", "scene_correct": "TRUE", "both_correct": "TRUE", "difficulty": "2"},
-        "shoe": {"colors": "red", "scenes": "living_room",
-                 "color_correct": "TRUE", "scene_correct": "FALSE", "both_correct": "FALSE", "difficulty": "3"},
-    }
-    rows = task_labels.stage2_test_trials(markers, subj, combined)
-    assert rows[0]["object"] == "closet" and rows[0]["both_correct"] is True
-    assert rows[1]["scene_correct"] is False and rows[1]["colour_label"] == "red"
-
-
-def test_gap_residuals_zero_when_aligned():
-    res = task_labels.gap_residuals([1000, 1500, 2300], [1.0, 1.5, 2.3], sfreq=1000.0)
-    assert max(res) < 1e-9
+def test_retrieval_trials_labels_and_recall_flag():
+    markers = _mk([
+        (0.0, 222, "retrieval_verb_2"),
+        (5.0, 9, "recall_key_press"),
+        (6.0, 85, "retrieval_end"),
+        (6.1, 88, "feature_question"),
+        (7.0, 89, "feature_answer"),
+        (8.0, 224, "retrieval_verb_4"),
+        (13.0, 85, "retrieval_end"),   # no recall_key_press this trial
+        (13.1, 88, "feature_question"),
+        (14.0, 89, "feature_answer"),
+    ])
+    trials = task_labels.retrieval_trials(markers, {2: "animate", 4: "inanimate"})
+    assert [(t["verb"], t["true_label"], t["recalled"]) for t in trials] == [
+        (2, "animate", True),
+        (4, "inanimate", False),
+    ]
+    grouped = task_labels.group_samples_by_label(trials)
+    assert grouped == {"animate": [0.0], "inanimate": [8.0]}
 
 
 def test_display_config_identity_and_targets():

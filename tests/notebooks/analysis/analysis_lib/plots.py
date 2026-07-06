@@ -3,8 +3,12 @@
 Moves the bulky matplotlib out of notebook cells so each cell is a thin call.
 Functions take the :class:`~analysis_lib.context.AnalysisContext` (``ctx``), a
 :class:`DisplayConfig` (``dc``), and the epoched probability stream, then render
-and show. Layout choices (3-wide grids, the known per-feature colours, the
+and show. Layout choices (3-wide grids, the tab10 per-marker colour cycle, the
 bold-★ target styling) live here once instead of being copy-pasted per cell.
+Colours are assigned purely by each marker's position in ``dc.display_markers``
+(itself built from the config's ``markers_mapping``/decoder ``pos_labels``) —
+never by a hardcoded marker-name lookup, so the palette follows whatever
+experiment's config is loaded instead of a fixed, experiment-specific list.
 """
 from __future__ import annotations
 
@@ -14,13 +18,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from analysis_lib import metrics
-
-# Stable per-feature colours; anything else falls back to the tab10 cycle.
-_KNOWN_COLORS = {
-    "red": "crimson", "green": "green", "yellow": "goldenrod",
-    "living_room": "purple", "bathroom": "teal", "kitchen": "saddlebrown",
-    "color": "darkorange", "scene": "slateblue",
-}
 
 
 @dataclass
@@ -61,7 +58,7 @@ def display_config(ctx, *, marker_groups=None, markers_of_interest=None) -> Disp
     display = list(mg)
     return DisplayConfig(
         display_markers=display,
-        colors={m: _KNOWN_COLORS.get(m, plt.cm.tab10(i % 10)) for i, m in enumerate(display)},
+        colors={m: plt.cm.tab10(i % 10) for i, m in enumerate(display)},
         task_pos_markers={t["name"]: list(t["pos_labels"]) for t in tasks},
         marker_groups=mg,
         code_to_group={ctx.event_mapping[m]: g for g, ms in mg.items() for m in ms},
@@ -81,29 +78,77 @@ def _blank(axes, n, nrows, ncols):
 
 
 def cv_auc(ctx):
-    """Cross-validated diagonal AUC per decoder (the honest metric). Returns eval_results."""
-    import joblib
+    """Cross-validated diagonal AUC per decoder, computed fresh from the saved FL epochs.
 
-    ev = joblib.load(ctx.profile.snapshot_paths["eval"])["_eval_results"]
+    Runs the same Temporal-Generalization CV as the offline evaluator
+    (:class:`backend.offline_phase.evaluator.ModelEvaluator`) directly over
+    ``ctx.paths.epochs_dir`` — there's no debug-snapshot ``eval_done.joblib``
+    for a real subject's output directory. Returns ``eval_results`` (feed it
+    back into :func:`plot_cv_auc` to re-visualize without re-running the CV,
+    e.g. after training an alternate-timepoint decoder).
+    """
+    import glob
+
+    import mne
+
+    from backend.offline_phase.evaluator import ModelEvaluator
+
+    epo_fif = sorted(glob.glob(str(ctx.paths.epochs_dir / "*epo.fif")))
+    assert epo_fif, f"no epochs .fif under {ctx.paths.epochs_dir}"
+    epochs = mne.read_epochs(epo_fif[0], verbose=False)
+
+    n_tasks = len(ctx.settings.get_decoder_settings()["tasks"])
+    print(f"running {n_tasks}-decoder temporal-generalization CV "
+          f"({epochs.get_data().shape[0]} epochs, {len(epochs.times)} timepoints)...")
+
+    def _on_progress(completed, total, task_name):
+        print(f"  [{completed}/{total}] {task_name} done")
+
+    ev = ModelEvaluator(epochs, ctx.settings.get_decoder_settings()).run_evaluation(
+        on_progress=_on_progress)
+    plot_cv_auc(ctx, ev)
+    return ev
+
+
+def plot_cv_auc(ctx, eval_results, *, custom_tp=None):
+    """Render `cv_auc`'s figure from already-computed ``eval_results`` — no CV re-run.
+
+    Marks each decoder's CV peak (black dashed), its currently-trained live
+    timepoint (``ctx.task_tp``, colored dotted), and — if ``custom_tp`` is
+    given (e.g. ``{task: chosen_seconds}`` after training an alternate
+    decoder) and it differs from both — that chosen point too (colored solid).
+    Call this directly to re-visualize after picking a new timepoint; the
+    curve itself never changes, only which point is marked.
+    """
+    ev = eval_results
     items = list(ev["tasks"].items())
     fig, axes, nrows, ncols = _grid(len(items))
     for idx, (task, td) in enumerate(items):
         ax = axes[idx // ncols][idx % ncols]
         c = plt.cm.tab10(idx % 10)
         ax.plot(ev["times"], td["diagonal_auc"], color=c, lw=1.8)
+        peak_tp = td["peak_timepoint"]
+        ax.axvline(peak_tp, color="black", ls="--", lw=1, alpha=0.6,
+                   label=f"CV peak ({peak_tp:.2f}s)")
         tp = ctx.task_tp(task)
         if tp is not None:
-            ax.axvline(tp, color=c, ls=":", lw=1)
+            same = abs(tp - peak_tp) < 1e-6
+            ax.axvline(tp, color=c, ls=":", lw=1.8,
+                       label=None if same else f"trained tp ({tp:.2f}s)")
+        chosen = (custom_tp or {}).get(task)
+        if chosen is not None and abs(chosen - (tp if tp is not None else peak_tp)) > 1e-6:
+            ax.axvline(chosen, color=c, ls="-", lw=2.2,
+                       label=f"chosen tp ({chosen:.2f}s)")
         ax.axhline(0.5, color="gray", ls="--", lw=0.8)
         ax.axvline(0.0, color="k", ls=":", lw=0.8)
         ax.set(title=f"{task}  (peak {td['peak_auc']:.3f})", ylim=(0.4, 1.0),
                xlabel="time (s)", ylabel="CV AUC")
+        ax.legend(fontsize=7, loc="lower right")
     _blank(axes, len(items), nrows, ncols)
-    fig.suptitle(f"Cross-validated diagonal AUC per decoder — '{ctx.profile.name}'", y=1.02)
+    fig.suptitle(f"Cross-validated diagonal AUC per decoder — '{ctx.paths.root.name}'", y=1.02)
     plt.tight_layout(); plt.show()
     print(f"average peak AUC: {ev['average_peak_auc']:.3f} | "
           f"suggested timepoint: {ev['suggested_timepoint']:.3f}s")
-    return ev
 
 
 def per_decoder(ctx, dc, epoched, t_grid, preds):
@@ -202,9 +247,12 @@ def confusion_and_perm(ctx, dc, epoched, t_grid, preds, decoder_tasks,
                        *, mode="weighted_prob", sigma=0.01, n_perm=1000):
     """Within-modality winner confusion (raw + baseline ΔP) + label-permutation bands."""
     tasks = list(preds)
-    marker_of_task = {t: dc.task_pos_markers[t][0] for t in tasks}
+    # Each task's *display* group (not its raw pos_labels[0]) — matters when
+    # marker_groups pools raw markers (e.g. per-image -> category), since
+    # ``epoched`` is keyed by display group, not the underlying raw marker.
+    marker_of_task = {t: dc.target_group(t) for t in tasks}
     task_tps = {t: ctx.task_tp(t) for t in tasks}
-    groups = metrics.modality_groups(decoder_tasks)
+    groups = metrics.modality_groups(decoder_tasks, marker_of_task=marker_of_task)
     group_markers_of_task = {tn: gm for gm, gt in groups for tn in gt}
 
     def _confusion_row(ep_dict, tag):
@@ -245,23 +293,33 @@ def confusion_and_perm(ctx, dc, epoched, t_grid, preds, decoder_tasks,
     plt.tight_layout(); plt.show()
 
 
-def parity(ctx, dc, epoched, t_grid, preds):
-    """Offline (saved epochs swept through the model) vs online P(t), per decoder. FL only."""
+def parity(ctx, dc, epoched, t_grid, preds, *, models=None):
+    """Offline (saved epochs swept through the model) vs online P(t), per decoder. FL only.
+
+    ``models`` defaults to ``ctx.artifact.models`` (the snapshot's shipped
+    decoders). Pass the currently-active engine's models (``engine.models``)
+    if you've trained an alternate-timepoint decoder and swapped ``engine`` —
+    otherwise this silently compares "online" (``preds``, from whichever
+    engine actually produced them) against the *original* shipped decoder on
+    the offline side, which isn't a valid consistency check once they differ.
+    """
     import glob
 
     import mne
 
-    epo_fif = sorted(glob.glob(str(ctx.profile.root_dir / "epochs" / "*epo.fif")))
-    assert epo_fif, f"no offline epochs fif under {ctx.profile.root_dir / 'epochs'}"
+    epo_fif = sorted(glob.glob(str(ctx.paths.epochs_dir / "*epo.fif")))
+    assert epo_fif, f"no offline epochs fif under {ctx.paths.epochs_dir}"
     off = mne.read_epochs(epo_fif[0], verbose=False)
     assert len(off.times) == len(t_grid), "offline/online time grids differ — check final_resample"
+
+    task_models = models if models is not None else ctx.artifact.models
 
     def offline_proba(task, raw_marker):
         if raw_marker not in off.event_id:
             return None
         X = off[raw_marker].get_data()
         n_ep, n_ch, n_t = X.shape
-        p = ctx.artifact.models[task].predict_proba(X.transpose(0, 2, 1).reshape(-1, n_ch))[:, 1]
+        p = task_models[task].predict_proba(X.transpose(0, 2, 1).reshape(-1, n_ch))[:, 1]
         return p.reshape(n_ep, n_t)
 
     tasks = list(preds)
@@ -294,7 +352,14 @@ def parity(ctx, dc, epoched, t_grid, preds):
 
 
 def fl_marker_diagnostic(ctx, raw, dc, *, n_perm=2000):
-    """FL stimulus-order diagnostic: marker timeline + a transition-bias shuffle test."""
+    """FL stimulus-order diagnostic: marker timeline + a transition-bias shuffle test.
+
+    Trial identity here comes straight from the raw trigger codes (``dc.raw_markers``
+    are the FL per-image markers — the trigger *is* the stimulus). For a source
+    where identity isn't in the trigger itself (encoding/retrieval), use
+    :func:`marker_order_diagnostic` directly with that source's already-labeled
+    ``trials`` instead.
+    """
     import re
 
     desc_to_code = {}
@@ -306,17 +371,35 @@ def fl_marker_diagnostic(ctx, raw, dc, *, n_perm=2000):
     events, _ = mne.events_from_annotations(raw, event_id=desc_to_code, verbose=False)
     sfreq = float(raw.info["sfreq"])
 
-    times_by_name = {n: np.array([s / sfreq for s, _, c in events if c == ctx.event_mapping[n]])
-                     for n in dc.raw_markers}
+    codes = {ctx.event_mapping[n] for n in dc.raw_markers}
+    pairs = [(s / sfreq, ctx.name_by_code[c]) for s, _, c in events if c in codes]
+    marker_order_diagnostic([t for t, _ in pairs], [lab for _, lab in pairs], n_perm=n_perm)
+
+
+def marker_order_diagnostic(times, labels, *, n_perm=2000, title_prefix="Marker"):
+    """Timeline + transition-bias shuffle test for an arbitrary ``(time, label)`` sequence.
+
+    Generalizes :func:`fl_marker_diagnostic`'s core check to any source: checks
+    whether ``labels``' order shows a statistically significant transition bias
+    (e.g. one category systematically following another), which could let a
+    decoder "cheat" via temporal autocorrelation instead of truly reading the
+    category from the signal. ``times`` are in seconds (any common origin);
+    ``labels`` is whatever "type" each event belongs to — an FL marker name, or
+    an encoding/retrieval trial's ``true_label``.
+    """
+    pairs = sorted(zip(times, labels))
+    order = [lab for _, lab in pairs]
+
+    times_by_label: dict[str, list[float]] = {}
+    for t, lab in pairs:
+        times_by_label.setdefault(lab, []).append(t)
     fig, ax = plt.subplots(figsize=(12, 3))
-    for name, ts in times_by_name.items():
+    for name, ts in times_by_label.items():
         ax.scatter(ts, [name] * len(ts), s=12)
-    ax.set(xlabel="time in recording (s)", title="Marker timeline — blocked or interleaved?")
+    ax.set(xlabel="time in recording (s)", title=f"{title_prefix} timeline — blocked or interleaved?")
     ax.grid(axis="x", alpha=0.3)
     plt.tight_layout(); plt.show()
 
-    codes = {ctx.event_mapping[n] for n in dc.raw_markers}
-    order = [ctx.name_by_code[c] for _, _, c in events if c in codes]
     TYPES = sorted(set(order))
     idx = {t: k for k, t in enumerate(TYPES)}
     K = len(TYPES)

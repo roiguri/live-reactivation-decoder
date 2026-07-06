@@ -1,4 +1,4 @@
-"""Recording load, marker extraction, and micro-batched online inference stream.
+"""Recording load, marker extraction, and probability-stream epoching.
 
 The exact plumbing the analysis notebooks share: read a BrainVision recording
 the way the replay feed does (EEG channels, EMG dropped), pull stimulus markers
@@ -30,9 +30,13 @@ def load_recording(
     """Load a recording and return ``(raw, eeg, sfreq)``.
 
     ``eeg`` is the ``(n_times, n_eeg)`` array fed to the online preprocessor:
-    EEG-typed channels with EMG dropped, matching the 64-channel replay feed.
-    When ``max_seconds`` is set the file is lazily cropped first so the full
-    multi-hour buffer never lives in RAM.
+    EEG-typed channels with EMG dropped, matching the 64-channel replay feed,
+    in **microvolts** — ``OnlinePreprocessor.process_batch`` applies a fixed
+    µV->SI-volt scale (``LSL_TO_SI_SCALE``) up front, mirroring the real LSL
+    wire unit, so replay must hand it µV the same way ``replay_vhdr_to_lsl.py``
+    does (MNE's default ``get_data()`` is SI volts, which this fix converts
+    from). When ``max_seconds`` is set the file is lazily cropped first so the
+    full multi-hour buffer never lives in RAM.
     """
     vhdr = find_vhdr(directory)
     if max_seconds is not None:
@@ -45,7 +49,7 @@ def load_recording(
     eeg_names = [raw.ch_names[i] for i in mne.pick_types(raw.info, eeg=True)]
     if "EMG" in eeg_names:
         eeg_names.remove("EMG")
-    eeg = raw.copy().pick(eeg_names).get_data().T  # (n_times, n_eeg) SI volts
+    eeg = raw.copy().pick(eeg_names).get_data(units="uV").T  # (n_times, n_eeg) µV
     return raw, eeg, float(raw.info["sfreq"])
 
 
@@ -93,25 +97,36 @@ def run_online_stream(
     return features, out_samples, float(preproc.target_sfreq)
 
 
+def _epoch_grid(fs: float, tmin: float, tmax: float) -> np.ndarray:
+    return np.arange(round(tmin * fs), round(tmax * fs) + 1) / fs
+
+
+def _interp_epoch(
+    rel_time: np.ndarray, values: np.ndarray, t_grid: np.ndarray, tmin: float, tmax: float
+) -> np.ndarray | None:
+    m = (rel_time >= tmin - 0.05) & (rel_time <= tmax + 0.05)
+    if m.sum() < 2:
+        return None
+    return np.interp(t_grid, rel_time[m], values[m])
+
+
 def make_epocher(
     out_samples: np.ndarray, sfreq: float, fs_out: float, tmin: float, tmax: float
 ) -> tuple[np.ndarray, Callable[[np.ndarray, list[int]], np.ndarray]]:
-    """Return ``(t_grid, epoch_stream)`` for the continuous probability stream.
+    """Return ``(t_grid, epoch_stream)`` for a raw-sample-indexed probability stream.
 
     ``epoch_stream(prob, marker_samples)`` interpolates each marker-locked
     window onto the shared ``t_grid``, returning an ``(n_epochs, n_grid)`` array.
     """
-    t_grid = np.arange(round(tmin * fs_out), round(tmax * fs_out) + 1) / fs_out
-    rel_time = out_samples / sfreq
+    t_grid = _epoch_grid(fs_out, tmin, tmax)
+    rel_time_base = out_samples / sfreq
 
     def epoch_stream(prob: np.ndarray, marker_samples: list[int]) -> np.ndarray:
         rows = []
         for s in marker_samples:
-            rt = rel_time - s / sfreq
-            m = (rt >= tmin - 0.05) & (rt <= tmax + 0.05)
-            if m.sum() < 2:
-                continue
-            rows.append(np.interp(t_grid, rt[m], prob[m]))
+            row = _interp_epoch(rel_time_base - s / sfreq, prob, t_grid, tmin, tmax)
+            if row is not None:
+                rows.append(row)
         return np.array(rows) if rows else np.empty((0, len(t_grid)))
 
     return t_grid, epoch_stream
