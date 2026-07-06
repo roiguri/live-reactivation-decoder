@@ -329,6 +329,46 @@ def test_prediction_ready_forwards_to_chart(screen_and_session) -> None:
     assert screen._chart._buffers[task_name][cap] == 0.1  # double-length mirror
 
 
+def test_latency_ready_updates_header_label(screen_and_session) -> None:
+    screen, fake, _, _ = screen_and_session
+    screen._start_halt_button.start_clicked.emit()
+
+    fake.latency_ready.emit({"total_ms": 12.0, "sample_to_decision_ms": 40.0})
+    QApplication.processEvents()
+
+    text = screen._header._latency_label.text()
+    assert "Pipeline: 12 ms" in text
+    assert "E2E: 40 ms" in text
+
+
+def test_latency_ready_shows_na_for_e2e_when_clock_sync_unavailable(screen_and_session) -> None:
+    screen, fake, _, _ = screen_and_session
+    screen._start_halt_button.start_clicked.emit()
+
+    fake.latency_ready.emit({"total_ms": 8.0, "sample_to_decision_ms": None})
+    QApplication.processEvents()
+
+    text = screen._header._latency_label.text()
+    assert "Pipeline: 8 ms" in text
+    assert "E2E: n/a" in text
+
+
+def test_latency_window_resets_on_new_start(screen_and_session) -> None:
+    screen, fake, _, _ = screen_and_session
+    screen._start_halt_button.start_clicked.emit()
+    fake.latency_ready.emit({"total_ms": 99.0, "sample_to_decision_ms": 99.0})
+    QApplication.processEvents()
+    assert "99" in screen._header._latency_label.text()
+
+    screen._start_halt_button.halt_clicked.emit()
+    assert screen._header._latency_label.text() == ""
+
+    screen._start_halt_button.start_clicked.emit()
+    assert screen._header._latency_label.text() == ""
+    assert screen._pipeline_ms_window == []
+    assert screen._e2e_ms_window == []
+
+
 def test_start_resets_chart_buffers(screen_and_session) -> None:
     """A fresh Start blanks any stale tail from a previous session."""
     screen, fake, _, _ = screen_and_session

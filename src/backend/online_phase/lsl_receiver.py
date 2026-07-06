@@ -116,6 +116,7 @@ class LSLReceiver:
 
         self.inlet = None
         self._last_trigger_code = 0
+        self._last_time_correction = 0.0
 
         logger.info(
             f"LSLReceiver initialized: stream='{self.stream_name}', type='{self.stream_type}'"
@@ -256,6 +257,25 @@ class LSLReceiver:
             )
 
         return np.concatenate(timestamps_parts), np.vstack(eeg_parts), markers
+
+    def time_correction(self, *, timeout_sec: float = 2.0) -> float:
+        """Offset (seconds) to add to this stream's own timestamps to express
+        them on this machine's ``local_clock()`` — needed because the sender
+        (LSLProxy, on the acquisition PC) and this receiver may be on
+        different machines with clocks that don't perfectly agree.
+        """
+        if self.inlet is None:
+            raise RuntimeError("LSLReceiver.start() must be called before time_correction().")
+        try:
+            self._last_time_correction = self.inlet.time_correction(timeout=timeout_sec)
+        except Exception:
+            logger.warning("time_correction unavailable; reusing last estimate", exc_info=True)
+        return self._last_time_correction
+
+    def local_clock(self) -> float:
+        """This machine's LSL-clock-domain timestamp — comparable to a remote
+        stream's sample timestamps once corrected via :meth:`time_correction`."""
+        return self._require_pylsl().local_clock()
 
     def stop(self) -> None:
         logger.info("Stopping LSLReceiver")

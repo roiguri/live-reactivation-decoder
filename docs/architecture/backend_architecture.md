@@ -848,12 +848,34 @@ If `live.error_occurred` fires, the worker loop has exited but external resource
 - `timestamps: np.ndarray` — LSL clock seconds, shape `(n_rows,)`, aligned to prediction rows.
 - `markers: list[tuple[float, int]]` — `(timestamp, trigger_code)` marker events.
 - `error_occurred` payload: concise string identifying the failing runtime stage (receiver pull, batch accumulation, preprocessing, or inference) and exception type.
-- `latency_ready` payload: diagnostic dictionary with millisecond timing keys `pull_ms`, `accumulation_ms`, `preprocessing_ms`, `inference_ms`, `emit_ms`, `total_ms`, plus `input_samples`, `emitted_rows`, `marker_count`, and `pending_samples`.
+- `latency_ready` payload: diagnostic dictionary with millisecond timing keys `pull_ms`, `accumulation_ms`, `preprocessing_ms`, `inference_ms`, `emit_ms`, `total_ms`, plus `sample_to_decision_ms`, `input_samples`, `emitted_rows`, `marker_count`, and `pending_samples`.
 
 `latency_ready` emits once per processed micro-batch. At the default 40-sample
 batch size on a 1000 Hz stream, this is about 25 Hz. UI consumers should
 throttle or aggregate it, for example by showing a rolling mean/p95 latency and
 pending backlog once per second.
+
+`pull_ms`/`accumulation_ms` are measured once per *outer*-loop pass (pulling
+whatever's newly available off the LSL inlet, then buffering it) — not once
+per batch. The *inner* loop then processes however many batches that pass's
+data was enough for; `total_ms` is `pull_ms + accumulation_ms +
+(this batch's own pop/preprocess/infer/emit time)`, so when one pull yields
+several batches, each of their `total_ms` values includes the same
+`pull_ms`/`accumulation_ms` — a deliberate choice, since every one of those
+batches genuinely waited on that same pull before its own processing could
+start. `total_ms` is our own pipeline's compute time per batch — it does not
+include acquisition-to-receiver transport.
+
+`sample_to_decision_ms` is the other latency definition: the project
+proposal's target (<100ms, acquisition of an EEG sample window →
+classification decision) is about this one, not `total_ms`. It's
+`LSLReceiver.local_clock()` (now) minus the batch's newest sample's LSL
+timestamp corrected via `LSLReceiver.time_correction()` — the correction
+matters because the acquisition PC and decoding laptop are separate machines
+with clocks that don't perfectly agree. `sample_to_decision_ms` is `None` if
+`time_correction()`/`local_clock()` failed for that batch (never raises into
+the pipeline itself). Both latency definitions are shown side by side in
+`Phase2Header` for now, pending a real-hardware comparison to pick one.
 
 **Frontend rule:** use only `live.prediction_ready`, `live.error_occurred`, `live.latency_ready`, `live.start()`, and `live.stop()` during normal operation. Do not reach into the underlying worker or private live-session members.
 

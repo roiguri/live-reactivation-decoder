@@ -49,6 +49,9 @@ _DEFAULT_THRESHOLD = 0.85
 # then it's a single knob here, same altitude as _DEFAULT_THRESHOLD.
 _DEFAULT_WINDOW_SECONDS = 5.0
 _CHART_MAX_HEIGHT = 420
+# Rolling window (in batches) the header's latency comparison label averages
+# over. ~1s at the default 40-sample batch on a 1000 Hz stream (~25 batches/s).
+_LATENCY_ROLLING_WINDOW = 25
 
 
 class Phase2Screen(QWidget):
@@ -123,6 +126,10 @@ class Phase2Screen(QWidget):
 
         # The session is built lazily on Start, bound to the chosen target.
         self._live: LiveStreamSession | None = None
+        # Rolling latency samples for the header comparison label (see
+        # _on_latency); reset on every Start so a new session starts blank.
+        self._pipeline_ms_window: list[float] = []
+        self._e2e_ms_window: list[float] = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -148,6 +155,7 @@ class Phase2Screen(QWidget):
         live.prediction_ready.connect(
             self._on_predictions, Qt.ConnectionType.QueuedConnection
         )
+        live.latency_ready.connect(self._on_latency, Qt.ConnectionType.QueuedConnection)
 
     def _on_predictions(
         self,
@@ -159,6 +167,27 @@ class Phase2Screen(QWidget):
         self._chart.append_markers(markers)
         self._frozen.append_predictions(predictions, out_ts)
         self._frozen.append_markers(markers)
+
+    def _on_latency(self, payload: dict) -> None:
+        """Roll a short window of two competing latency definitions (see
+        StreamWorker.latency_ready) into the header label. Temporary,
+        side-by-side display — meant to be resolved to one metric after
+        comparing both against real lab hardware, not a final UI design.
+        """
+        self._pipeline_ms_window.append(payload["total_ms"])
+        del self._pipeline_ms_window[:-_LATENCY_ROLLING_WINDOW]
+
+        e2e_ms = payload.get("sample_to_decision_ms")
+        if e2e_ms is not None:
+            self._e2e_ms_window.append(e2e_ms)
+            del self._e2e_ms_window[:-_LATENCY_ROLLING_WINDOW]
+
+        pipeline_text = f"{sum(self._pipeline_ms_window) / len(self._pipeline_ms_window):.0f} ms"
+        e2e_text = (
+            f"{sum(self._e2e_ms_window) / len(self._e2e_ms_window):.0f} ms"
+            if self._e2e_ms_window else "n/a"
+        )
+        self._header.set_latency_text(f"Pipeline: {pipeline_text}  |  E2E: {e2e_text}")
 
     # ── target selection ───────────────────────────────────────────────────────
 
@@ -190,6 +219,9 @@ class Phase2Screen(QWidget):
         # starts visually blank.
         self._chart.reset_buffers()
         self._frozen.reset_buffers()
+        self._pipeline_ms_window.clear()
+        self._e2e_ms_window.clear()
+        self._header.set_latency_text("")
         self._start_halt_button.set_connecting()
         # Force the disabled "Connecting…" repaint before the blocking
         # LSL resolve so the operator sees the state change.
@@ -238,6 +270,7 @@ class Phase2Screen(QWidget):
             self._live = None
         self._start_halt_button.set_idle()
         self._header.set_status("INFERENCE HALTED", color=TEXT_PRIMARY)
+        self._header.set_latency_text("")
 
     def closeEvent(self, event: QCloseEvent) -> None:
         # Stop the live session and the publishing source (proxy/replay).

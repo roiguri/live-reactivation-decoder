@@ -25,6 +25,8 @@ class FakeInlet:
     def __init__(self, chunks: list[tuple[np.ndarray, list[float]]]) -> None:
         self._chunks = list(chunks)
         self.closed = False
+        self.time_correction_value: float = 0.0
+        self.time_correction_error: Exception | None = None
 
     def pull_chunk(self, timeout: float = 0.0):
         if not self._chunks:
@@ -34,15 +36,24 @@ class FakeInlet:
     def close_stream(self) -> None:
         self.closed = True
 
+    def time_correction(self, timeout: float = 2.0):
+        if self.time_correction_error is not None:
+            raise self.time_correction_error
+        return self.time_correction_value
+
 
 class FakePylslModule:
     def __init__(self) -> None:
         self.created_inlets: list[FakeInlet] = []
+        self.local_clock_value: float = 0.0
 
     def StreamInlet(self, stream, recover: bool = True):
         inlet = FakeInlet([])
         self.created_inlets.append(inlet)
         return inlet
+
+    def local_clock(self) -> float:
+        return self.local_clock_value
 
 
 def test_decode_trigger_value_extracts_parallel_port_bits():
@@ -237,3 +248,40 @@ def test_start_raises_value_error_when_channel_count_wrong():
 
     with pytest.raises(ValueError, match="Expected 65 channels"):
         receiver.start()
+
+
+def test_time_correction_returns_inlet_estimate():
+    receiver = LSLReceiver()
+    inlet = FakeInlet([])
+    inlet.time_correction_value = 0.42
+    receiver.inlet = inlet
+
+    assert receiver.time_correction() == 0.42
+    assert receiver._last_time_correction == 0.42
+
+
+def test_time_correction_falls_back_to_last_known_on_failure(caplog):
+    receiver = LSLReceiver()
+    inlet = FakeInlet([])
+    inlet.time_correction_value = 0.1
+    receiver.inlet = inlet
+    assert receiver.time_correction() == 0.1  # establishes a last-known value
+
+    inlet.time_correction_error = TimeoutError("no clock sync")
+    assert receiver.time_correction() == 0.1  # falls back instead of raising
+    assert receiver._last_time_correction == 0.1
+
+
+def test_time_correction_raises_if_not_started():
+    receiver = LSLReceiver()
+    with pytest.raises(RuntimeError, match="start\\(\\) must be called"):
+        receiver.time_correction()
+
+
+def test_local_clock_delegates_to_pylsl(monkeypatch):
+    receiver = LSLReceiver()
+    fake_pylsl = FakePylslModule()
+    fake_pylsl.local_clock_value = 123.456
+    monkeypatch.setattr(lsl_receiver, "pylsl", fake_pylsl)
+
+    assert receiver.local_clock() == 123.456

@@ -4,15 +4,24 @@
 — same marker-is-identity principle as the FL localizer, just anchored during
 the couple-learning block (see :func:`encoding_trials`).
 
-**Retrieval** is harder: a retrieval cue (``retrieval_verb_N``) only names
+**Retrieval** is harder: a retrieval cue (``retrieval_verb_*``) only names
 which verb is being probed, not which image category it was paired with. That
 pairing is recovered from the *encoding* markers earlier in the same
-recording: ``learning_verb_N`` is immediately followed by
+recording: ``learning_verb_*`` is immediately followed by
 ``learning_<category>_NN`` on every encoding repeat of that couple (see
 ``experiment_config.realtime_animacy.yaml``), so majority-voting each verb's
 paired category across its repeats gives a robust ``verb -> category`` map.
 Retrieval trials are then labeled with that category as their ground-truth
 ``true_label``.
+
+A verb's identity is whatever follows ``learning_verb_``/``retrieval_verb_``
+in its marker name — an opaque string, not assumed numeric. This lets it work
+unchanged whether a config names verbs by bare index (``learning_verb_5``, as
+in ``experiment_config.realtime_animacy.yaml``) or spells out the known
+category (``learning_verb_animate_1``, as in
+``experiment_config.realtime_animacy_verb_labels.yaml``) — same verb, same
+identity string, matched consistently between its encoding and retrieval
+occurrences either way.
 
 Both let the FL-trained decoders be scored as an honest held-out test —
 encoding as a same-modality (perception) sanity check, retrieval as the real
@@ -36,9 +45,10 @@ _IMAGE_RE = re.compile(r"^([a-zA-Z]+)_\d+$")
 # markers_mapping. They're overridable per-call, and public so a caller can
 # validate them against a loaded config's ctx.event_mapping (see
 # sources.build_retrieval_epochs) instead of assuming a renamed config still
-# matches these string literals.
-VERB_RE = re.compile(r"^learning_verb_(\d+)$")
-RETRIEVAL_VERB_RE = re.compile(r"^retrieval_verb_(\d+)$")
+# matches these string literals. The captured group is a verb's identity —
+# whatever follows the prefix, e.g. "5" or "animate_1" — not necessarily numeric.
+VERB_RE = re.compile(r"^learning_verb_(.+)$")
+RETRIEVAL_VERB_RE = re.compile(r"^retrieval_verb_(.+)$")
 RETRIEVAL_END = "retrieval_end"
 RECALL_KEY_PRESS = "recall_key_press"
 
@@ -87,7 +97,7 @@ def group_couple_trials(
         cat = category_of(image)
         if cat is None:
             continue
-        out.append({"t": m.t, "verb": int(vm.group(1)), "image": image, "category": cat})
+        out.append({"t": m.t, "verb": vm.group(1), "image": image, "category": cat})
     return out
 
 
@@ -115,17 +125,17 @@ def encoding_trials(
     return out
 
 
-def verb_categories(couple_trials: list[dict]) -> dict[int, str]:
-    """Majority-vote category per verb index across its encoding repeats.
+def verb_categories(couple_trials: list[dict]) -> dict[str, str]:
+    """Majority-vote category per verb identity across its encoding repeats.
 
     Raises if any verb's repeats disagree — the couple is supposed to be fixed
     for the whole session, so a disagreement means something upstream (marker
     parsing, or the recording itself) is misaligned.
     """
-    by_verb: dict[int, list[str]] = {}
+    by_verb: dict[str, list[str]] = {}
     for t in couple_trials:
         by_verb.setdefault(t["verb"], []).append(t["category"])
-    out: dict[int, str] = {}
+    out: dict[str, str] = {}
     for verb, cats in by_verb.items():
         counts = Counter(cats)
         if len(counts) > 1:
@@ -135,7 +145,7 @@ def verb_categories(couple_trials: list[dict]) -> dict[int, str]:
 
 
 def retrieval_trials(
-    markers: list[Marker], verb_category: dict[int, str], *,
+    markers: list[Marker], verb_category: dict[str, str], *,
     retrieval_re: re.Pattern = RETRIEVAL_VERB_RE,
     end_name: str = RETRIEVAL_END, recall_name: str = RECALL_KEY_PRESS,
 ) -> list[dict]:
@@ -155,7 +165,7 @@ def retrieval_trials(
         if not vm:
             i += 1
             continue
-        verb = int(vm.group(1))
+        verb = vm.group(1)
         j = i + 1
         recalled = False
         while j < n and markers[j].name != end_name:

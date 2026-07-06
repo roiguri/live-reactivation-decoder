@@ -130,24 +130,43 @@ def test_group_couple_trials_pairs_verb_with_following_image():
     ])
     couples = task_labels.group_couple_trials(markers)
     assert [(c["verb"], c["image"], c["category"]) for c in couples] == [
-        (5, "inanimate_02", "inanimate"),
-        (1, "animate_01", "animate"),
+        ("5", "inanimate_02", "inanimate"),
+        ("1", "animate_01", "animate"),
+    ]
+
+
+def test_group_couple_trials_with_animate_inanimate_verb_names():
+    """Verb identity is opaque — works the same for a config that spells out
+    the category in the verb marker name (experiment_config.realtime_animacy_
+    verb_labels.yaml's convention) as for the bare-index convention above."""
+    markers = _mk([
+        (0.0, 204, "learning_verb_inanimate_1"),
+        (2.0, 215, "learning_inanimate_02"),
+        (7.0, 83, "encoding_response"),
+        (8.0, 201, "learning_verb_animate_1"),
+        (11.0, 211, "learning_animate_01"),
+        (16.0, 83, "encoding_response"),
+    ])
+    couples = task_labels.group_couple_trials(markers)
+    assert [(c["verb"], c["image"], c["category"]) for c in couples] == [
+        ("inanimate_1", "inanimate_02", "inanimate"),
+        ("animate_1", "animate_01", "animate"),
     ]
 
 
 def test_verb_categories_majority_vote_and_conflict():
     couples = [
-        {"verb": 1, "category": "animate"},
-        {"verb": 1, "category": "animate"},
-        {"verb": 2, "category": "inanimate"},
+        {"verb": "1", "category": "animate"},
+        {"verb": "1", "category": "animate"},
+        {"verb": "2", "category": "inanimate"},
     ]
-    assert task_labels.verb_categories(couples) == {1: "animate", 2: "inanimate"}
+    assert task_labels.verb_categories(couples) == {"1": "animate", "2": "inanimate"}
 
     import pytest
     with pytest.raises(ValueError, match="inconsistent categories"):
         task_labels.verb_categories([
-            {"verb": 1, "category": "animate"},
-            {"verb": 1, "category": "inanimate"},
+            {"verb": "1", "category": "animate"},
+            {"verb": "1", "category": "inanimate"},
         ])
 
 
@@ -181,13 +200,30 @@ def test_retrieval_trials_labels_and_recall_flag():
         (13.1, 88, "feature_question"),
         (14.0, 89, "feature_answer"),
     ])
-    trials = task_labels.retrieval_trials(markers, {2: "animate", 4: "inanimate"})
+    trials = task_labels.retrieval_trials(markers, {"2": "animate", "4": "inanimate"})
     assert [(t["verb"], t["true_label"], t["recalled"]) for t in trials] == [
-        (2, "animate", True),
-        (4, "inanimate", False),
+        ("2", "animate", True),
+        ("4", "inanimate", False),
     ]
     grouped = task_labels.group_samples_by_label(trials)
     assert grouped == {"animate": [0.0], "inanimate": [8.0]}
+
+
+def test_retrieval_trials_with_animate_inanimate_verb_names():
+    markers = _mk([
+        (0.0, 221, "retrieval_verb_animate_1"),
+        (5.0, 9, "recall_key_press"),
+        (6.0, 85, "retrieval_end"),
+        (8.0, 224, "retrieval_verb_inanimate_1"),
+        (13.0, 85, "retrieval_end"),   # no recall_key_press this trial
+    ])
+    trials = task_labels.retrieval_trials(
+        markers, {"animate_1": "animate", "inanimate_1": "inanimate"}
+    )
+    assert [(t["verb"], t["true_label"], t["recalled"]) for t in trials] == [
+        ("animate_1", "animate", True),
+        ("inanimate_1", "inanimate", False),
+    ]
 
 
 def test_display_config_identity_and_targets():
