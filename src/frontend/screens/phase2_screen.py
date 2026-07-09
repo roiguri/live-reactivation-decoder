@@ -26,6 +26,7 @@ from frontend.styles.theme import (
 )
 from frontend.widgets.live_probability_chart import LiveProbabilityChart
 from frontend.widgets.phase2 import (
+    DecisionPanel,
     FrozenEventView,
     Phase2Header,
     Phase2SettingsPanel,
@@ -105,6 +106,9 @@ class Phase2Screen(QWidget):
             threshold=_DEFAULT_THRESHOLD,
             event_names=event_names,
         )
+        # Live latched-decision readout: one row per decoder, driven by the
+        # decision stream (on/off) and the prediction stream (probability).
+        self._decision_panel = DecisionPanel(task_colors=self._chart.task_colors)
         # Live target chosen by the operator via the header. None until a
         # target is selected; Start is guarded against a missing target.
         self._target: dict | None = None
@@ -156,6 +160,10 @@ class Phase2Screen(QWidget):
             self._on_predictions, Qt.ConnectionType.QueuedConnection
         )
         live.latency_ready.connect(self._on_latency, Qt.ConnectionType.QueuedConnection)
+        if live.decision_ready is not None:
+            live.decision_ready.connect(
+                self._on_decision, Qt.ConnectionType.QueuedConnection
+            )
 
     def _on_predictions(
         self,
@@ -167,6 +175,10 @@ class Phase2Screen(QWidget):
         self._chart.append_markers(markers)
         self._frozen.append_predictions(predictions, out_ts)
         self._frozen.append_markers(markers)
+
+    def _on_decision(self, result) -> None:
+        # ``result`` is a DecisionResult, read duck-typed (no backend import).
+        self._decision_panel.update_decision(result)
 
     def _on_latency(self, payload: dict) -> None:
         """Roll a short window of two competing latency definitions (see
@@ -222,6 +234,7 @@ class Phase2Screen(QWidget):
         self._pipeline_ms_window.clear()
         self._e2e_ms_window.clear()
         self._header.set_latency_text("")
+        self._decision_panel.reset()
         self._start_halt_button.set_connecting()
         # Force the disabled "Connecting…" repaint before the blocking
         # LSL resolve so the operator sees the state change.
@@ -287,12 +300,30 @@ class Phase2Screen(QWidget):
 
     # ── center panel ──────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _panel_title(text: str) -> QLabel:
+        """Compact uppercase section title, matching the center-panel headings."""
+        label = QLabel(text)
+        f = label.font()
+        f.setPointSize(9)
+        f.setWeight(QFont.Weight.DemiBold)
+        label.setFont(f)
+        label.setStyleSheet(
+            f"color: {TEXT_MUTED}; background: transparent; letter-spacing: 1px;"
+        )
+        return label
+
     def _build_chart_panel(self) -> QWidget:
         panel = QWidget()
         panel.setStyleSheet(f"background: {BG_LIGHT};")
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(32, 24, 32, 24)
         layout.setSpacing(8)
+
+        layout.addWidget(self._panel_title("LIVE DECISIONS"))
+        # The tiles are their own cards, so no outer card wrapper here.
+        layout.addWidget(self._decision_panel)
+        layout.addSpacing(8)
 
         title = QLabel("PROBABILITY ANALYSIS")
         tf = title.font()

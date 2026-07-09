@@ -14,6 +14,7 @@ import os
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -44,6 +45,7 @@ class _FakeLiveStreamSession(QObject):
     """
 
     prediction_ready = Signal(dict, object, list)
+    decision_ready = Signal(object)
     error_occurred = Signal(str)
     latency_ready = Signal(dict)
 
@@ -367,6 +369,18 @@ def test_latency_window_resets_on_new_start(screen_and_session) -> None:
     assert screen._header._latency_label.text() == ""
     assert screen._pipeline_ms_window == []
     assert screen._e2e_ms_window == []
+
+
+def test_decision_ready_forwards_to_panel(screen_and_session) -> None:
+    """decision_ready emissions light up the decision panel's tile."""
+    screen, fake, _, _ = screen_and_session
+    screen._start_halt_button.start_clicked.emit()
+
+    task_name = next(iter(screen._chart.task_colors.keys()))
+    fake.decision_ready.emit(SimpleNamespace(active={task_name: np.array([False, True])}))
+    QApplication.processEvents()
+
+    assert screen._decision_panel.is_active(task_name)
 
 
 def test_start_resets_chart_buffers(screen_and_session) -> None:
