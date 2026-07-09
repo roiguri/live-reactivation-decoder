@@ -13,6 +13,8 @@ from backend.core.session_paths import SessionPaths
 from backend.core.settings_manager import SettingsManager
 from backend.offline_phase.orchestrator import OfflineOrchestrator
 from backend.online_phase.artifact_loader import load_decoder_pipeline_artifact
+from backend.online_phase.decision_binding import DecisionBinding
+from backend.online_phase.decision_engine import DecisionConfig, DecisionEngine
 from backend.online_phase.live_inference import LiveInferenceEngine
 from backend.online_phase.lsl_receiver import LSLReceiver
 from backend.online_phase.online_preprocessor import OnlinePreprocessor
@@ -29,6 +31,7 @@ class LiveStreamSession:
 
     _receiver: LSLReceiver
     _worker: StreamWorker
+    _binding: DecisionBinding | None = None
     _logger: LiveSessionLogger | None = None
 
     def __post_init__(self) -> None:
@@ -50,6 +53,16 @@ class LiveStreamSession:
         """Forward worker runtime diagnostics without exposing worker internals."""
         return self._worker.latency_ready
 
+    @property
+    def decision_ready(self) -> Any:
+        """Forward per-batch decisions (a ``DecisionResult``) to the UI/logger."""
+        return self._binding.decision_ready if self._binding is not None else None
+
+    def update_decision_config(self, config: DecisionConfig) -> None:
+        """Stage new decision settings; the engine applies them at the next batch."""
+        if self._binding is not None:
+            self._binding.set_pending_config(config)
+
     def start(self) -> None:
         """Start receiver and worker. Safe to call more than once."""
         if self._started:
@@ -57,6 +70,8 @@ class LiveStreamSession:
         if self._stopped:
             raise RuntimeError("Cannot restart a stopped live stream session.")
 
+        if self._binding is not None:
+            self._binding.reset()
         self._receiver.start()
         try:
             self._worker.start()
@@ -232,6 +247,20 @@ class AppSession:
             batch_size_samples=batch_size_samples,
         )
 
+        # The decision engine is a sibling consumer of prediction_ready (like the
+        # logger) — StreamWorker is untouched. It starts on hardcoded defaults
+        # (DecisionConfig()); a YAML/UI override is layered on later. Decisions are
+        # computed on every run, whether or not the run is being logged.
+        decision_engine = DecisionEngine(
+            decoder_names=list(artifact.models.keys()),
+            config=DecisionConfig(),
+        )
+        binding = DecisionBinding(decision_engine)
+        worker.prediction_ready.connect(
+            binding.on_predictions,
+            Qt.ConnectionType.DirectConnection,
+        )
+
         logger = None
         if log_dir is not None:
             # Receiver emits {name: id}; the log records every edge by code and
@@ -249,15 +278,21 @@ class AppSession:
                     "input_sfreq": preprocessor.input_sfreq,
                     "config": self._settings.config_filepath.name,
                 },
+                decision_config=decision_engine.public_config(),
             )
             worker.prediction_ready.connect(
                 logger.on_predictions,
+                Qt.ConnectionType.DirectConnection,
+            )
+            binding.decision_ready.connect(
+                logger.on_decisions,
                 Qt.ConnectionType.DirectConnection,
             )
 
         return LiveStreamSession(
             _receiver=receiver,
             _worker=worker,
+            _binding=binding,
             _logger=logger,
         )
 
