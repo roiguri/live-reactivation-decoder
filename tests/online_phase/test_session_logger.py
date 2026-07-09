@@ -200,8 +200,8 @@ from backend.online_phase.session_logger import episodes_from_decisions  # noqa:
 
 _INITIAL_CONFIG = {
     "threshold": 0.85,
-    "sustain_seconds": 0.1,
-    "release_seconds": 0.0,
+    "sustain_timepoints": 10,
+    "release_timepoints": 1,
 }
 
 
@@ -271,8 +271,8 @@ def test_config_change_appends_version_and_rows_carry_it(tmp_path):
 
     new_config = {
         "threshold": 0.70,
-        "sustain_seconds": 0.1,
-        "release_seconds": 0.0,
+        "sustain_timepoints": 7,
+        "release_timepoints": 1,
     }
     change = SimpleNamespace(version=1, lsl_timestamp=2.0, config=new_config)
     logger.on_decisions(

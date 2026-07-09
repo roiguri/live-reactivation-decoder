@@ -6,10 +6,15 @@ boolean per sample:
 
     proba[decoder] ─► [threshold] ─► [sustain gate] ─► active[decoder]
 
-- :class:`ThresholdCriterion` is instantaneous: ``proba >= per-decoder threshold``.
+- :class:`ThresholdCriterion` is instantaneous: ``proba >= threshold``.
 - :class:`SustainGate` is the temporal, stateful part: it latches ``on`` only after
-  the threshold has held continuously for ``sustain`` samples, and ``off`` only after
-  it has missed for ``release`` samples — debouncing single-sample noise on both edges.
+  the threshold has held continuously for ``sustain`` timepoints, and ``off`` only
+  after it has missed for ``release`` timepoints — debouncing noise on both edges.
+
+Everything is counted in **timepoints** — one timepoint is one prediction (the unit
+``prediction_ready`` already delivers). Because predictions/decisions are inherently
+per-timepoint, no sampling frequency is needed: the gate simply counts the
+predictions it receives.
 
 This module is **pure Python — no Qt, no I/O**. Settings default to the hardcoded
 module constants below; a YAML override is layered on later (plan Phase D). The Qt
@@ -19,7 +24,6 @@ so the logic here stays unit-testable without an event loop.
 
 from __future__ import annotations
 
-import math
 import threading
 from dataclasses import dataclass
 from typing import Mapping
@@ -27,11 +31,10 @@ from typing import Mapping
 import numpy as np
 
 # Hardcoded defaults — the sole source of decision settings until the optional
-# YAML override lands (plan Phase D). Iterate on these numbers here / via the UI
-# before freezing them into a config schema.
+# YAML override lands (plan Phase D). Counted in timepoints (one prediction each).
 DEFAULT_THRESHOLD = 0.85
-DEFAULT_SUSTAIN_SECONDS = 0.1
-DEFAULT_RELEASE_SECONDS = 0.0
+DEFAULT_SUSTAIN_TIMEPOINTS = 10
+DEFAULT_RELEASE_TIMEPOINTS = 1
 
 
 @dataclass(frozen=True)
@@ -40,24 +43,26 @@ class DecisionConfig:
 
     ``threshold`` is the single global positive-class gate, applied to every
     decoder (decoders still latch independently — they just share this value).
-    ``sustain_seconds`` / ``release_seconds`` are in human units and converted to
-    samples by the engine against ``target_sfreq``.
+    ``sustain_timepoints`` / ``release_timepoints`` are counts of predictions: how
+    many consecutive over-threshold predictions latch a decoder on, and how many
+    consecutive misses latch it off. No frequency is involved — a timepoint is one
+    prediction.
     """
 
     threshold: float = DEFAULT_THRESHOLD
-    sustain_seconds: float = DEFAULT_SUSTAIN_SECONDS
-    release_seconds: float = DEFAULT_RELEASE_SECONDS
+    sustain_timepoints: int = DEFAULT_SUSTAIN_TIMEPOINTS
+    release_timepoints: int = DEFAULT_RELEASE_TIMEPOINTS
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.threshold <= 1.0:
             raise ValueError(f"threshold must be in [0, 1], got {self.threshold}.")
-        if self.sustain_seconds < 0:
+        if self.sustain_timepoints < 1:
             raise ValueError(
-                f"sustain_seconds must be non-negative, got {self.sustain_seconds}."
+                f"sustain_timepoints must be >= 1, got {self.sustain_timepoints}."
             )
-        if self.release_seconds < 0:
+        if self.release_timepoints < 1:
             raise ValueError(
-                f"release_seconds must be non-negative, got {self.release_seconds}."
+                f"release_timepoints must be >= 1, got {self.release_timepoints}."
             )
 
 
@@ -84,18 +89,18 @@ class SustainGate:
     """Per-decoder, independent latch with both-edge debounce.
 
     Each decoder tracks its own latched state plus two run counters. It latches
-    ``on`` once the threshold has passed for ``sustain_samples`` consecutive samples,
-    and ``off`` once it has missed for ``release_samples`` consecutive samples. A
-    ``sustain``/``release`` of 0 seconds resolves to 1 sample (latch on the first
-    pass / drop on the first miss).
+    ``on`` once the threshold has passed for ``sustain_timepoints`` consecutive
+    timepoints, and ``off`` once it has missed for ``release_timepoints`` consecutive
+    timepoints. Both windows are at least 1 (latch on the first pass / drop on the
+    first miss).
     """
 
     def __init__(
-        self, decoders: list[str], sustain_samples: int, release_samples: int
+        self, decoders: list[str], sustain_timepoints: int, release_timepoints: int
     ) -> None:
         self._decoders = list(decoders)
-        self._sustain = max(1, int(sustain_samples))
-        self._release = max(1, int(release_samples))
+        self._sustain = max(1, int(sustain_timepoints))
+        self._release = max(1, int(release_timepoints))
         self.reset()
 
     def reset(self) -> None:
@@ -113,10 +118,10 @@ class SustainGate:
         self._on = {d: 0 for d in self._decoders}
         self._off = {d: 0 for d in self._decoders}
 
-    def set_windows(self, sustain_samples: int, release_samples: int) -> None:
+    def set_windows(self, sustain_timepoints: int, release_timepoints: int) -> None:
         """Update the debounce windows (on a config change). Latches unaffected."""
-        self._sustain = max(1, int(sustain_samples))
-        self._release = max(1, int(release_samples))
+        self._sustain = max(1, int(sustain_timepoints))
+        self._release = max(1, int(release_timepoints))
 
     def step(self, passed: Mapping[str, bool]) -> dict[str, bool]:
         """Advance every decoder one sample; return the new latched booleans."""
@@ -144,11 +149,6 @@ class SustainGate:
         if self._off[decoder] >= self._release:
             self._latched[decoder] = False
             self._on[decoder] = 0
-
-
-def seconds_to_samples(seconds: float, target_sfreq: float) -> int:
-    """Convert a debounce window in seconds to whole samples (min 1)."""
-    return max(1, math.ceil(float(seconds) * float(target_sfreq)))
 
 
 @dataclass(frozen=True)
@@ -196,21 +196,18 @@ class DecisionEngine:
         self,
         decoder_names: list[str],
         config: DecisionConfig,
-        target_sfreq: float,
     ) -> None:
         decoders = list(decoder_names)
         if not decoders:
             raise ValueError("DecisionEngine requires at least one decoder.")
-        if target_sfreq <= 0:
-            raise ValueError(f"target_sfreq must be positive, got {target_sfreq}.")
 
         self._decoders = decoders
-        self._target_sfreq = float(target_sfreq)
         self._config = config
         self._version = 0
         self._criterion = ThresholdCriterion(decoders)
-        sustain, release = self._windows(config)
-        self._gate = SustainGate(decoders, sustain, release)
+        self._gate = SustainGate(
+            decoders, config.sustain_timepoints, config.release_timepoints
+        )
 
         self._pending: DecisionConfig | None = None
         self._lock = threading.Lock()
@@ -260,12 +257,6 @@ class DecisionEngine:
 
     # ── internals ────────────────────────────────────────────────────────────────
 
-    def _windows(self, config: DecisionConfig) -> tuple[int, int]:
-        return (
-            seconds_to_samples(config.sustain_seconds, self._target_sfreq),
-            seconds_to_samples(config.release_seconds, self._target_sfreq),
-        )
-
     def _maybe_apply_pending(self, timestamps: np.ndarray) -> ConfigChange | None:
         with self._lock:
             pending = self._pending
@@ -275,8 +266,7 @@ class DecisionEngine:
 
         self._config = pending
         self._version += 1
-        sustain, release = self._windows(pending)
-        self._gate.set_windows(sustain, release)
+        self._gate.set_windows(pending.sustain_timepoints, pending.release_timepoints)
         self._gate.reset_counters()  # keep latches; drop stale runs
         return ConfigChange(
             version=self._version,
@@ -287,8 +277,8 @@ class DecisionEngine:
     def _public_config(self, config: DecisionConfig) -> dict:
         return {
             "threshold": config.threshold,
-            "sustain_seconds": config.sustain_seconds,
-            "release_seconds": config.release_seconds,
+            "sustain_timepoints": config.sustain_timepoints,
+            "release_timepoints": config.release_timepoints,
         }
 
     def _batch_columns(

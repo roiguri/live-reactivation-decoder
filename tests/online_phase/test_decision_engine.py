@@ -9,7 +9,6 @@ from backend.online_phase.decision_engine import (
     DecisionEngine,
     SustainGate,
     ThresholdCriterion,
-    seconds_to_samples,
 )
 
 
@@ -25,8 +24,8 @@ def test_defaults_come_from_constants():
     "kwargs",
     [
         {"threshold": 1.5},
-        {"sustain_seconds": -1.0},
-        {"release_seconds": -0.5},
+        {"sustain_timepoints": 0},
+        {"release_timepoints": 0},
     ],
 )
 def test_invalid_config_rejected(kwargs):
@@ -45,15 +44,6 @@ def test_threshold_criterion_is_global_and_inclusive():
     assert criterion.evaluate({"a": 0.20, "b": 0.90}, config) == {"a": False, "b": True}
 
 
-# ── seconds_to_samples ────────────────────────────────────────────────────────
-
-
-def test_seconds_to_samples_rounds_up_and_floors_at_one():
-    assert seconds_to_samples(0.1, 250.0) == 25
-    assert seconds_to_samples(0.0, 250.0) == 1  # 0 s → drop/latch on first sample
-    assert seconds_to_samples(0.001, 250.0) == 1  # ceil, never 0
-
-
 # ── SustainGate ───────────────────────────────────────────────────────────────
 
 
@@ -62,42 +52,42 @@ def _run(gate, decoder, passes):
     return [gate.step({decoder: p})[decoder] for p in passes]
 
 
-def test_latch_fires_exactly_sustain_samples_after_crossing():
-    gate = SustainGate(["d"], sustain_samples=3, release_samples=1)
-    # Off for the first two passing samples; latches on the 3rd.
+def test_latch_fires_exactly_sustain_timepoints_after_crossing():
+    gate = SustainGate(["d"], sustain_timepoints=3, release_timepoints=1)
+    # Off for the first two passing timepoints; latches on the 3rd.
     assert _run(gate, "d", [True, True, True, True]) == [False, False, True, True]
 
 
 def test_sub_sustain_blip_never_latches():
-    gate = SustainGate(["d"], sustain_samples=3, release_samples=1)
+    gate = SustainGate(["d"], sustain_timepoints=3, release_timepoints=1)
     assert _run(gate, "d", [True, True, False, True, True]) == [
         False, False, False, False, False
     ]  # the miss resets the run before it reaches 3
 
 
-def test_release_after_release_samples_of_misses():
-    gate = SustainGate(["d"], sustain_samples=1, release_samples=3)
+def test_release_after_release_timepoints_of_misses():
+    gate = SustainGate(["d"], sustain_timepoints=1, release_timepoints=3)
     # Latches immediately (sustain=1); releases only after 3 consecutive misses.
     assert _run(gate, "d", [True, False, False, False, False]) == [
         True, True, True, False, False
     ]
 
 
-def test_release_zero_drops_on_first_miss():
-    gate = SustainGate(["d"], sustain_samples=1, release_samples=1)
+def test_release_one_drops_on_first_miss():
+    gate = SustainGate(["d"], sustain_timepoints=1, release_timepoints=1)
     assert _run(gate, "d", [True, True, False, True]) == [True, True, False, True]
 
 
 def test_momentary_dip_does_not_release_when_release_window_generous():
-    gate = SustainGate(["d"], sustain_samples=1, release_samples=3)
-    # A single-sample dip inside the release window doesn't unlatch.
+    gate = SustainGate(["d"], sustain_timepoints=1, release_timepoints=3)
+    # A single-timepoint dip inside the release window doesn't unlatch.
     assert _run(gate, "d", [True, True, False, True, True]) == [
         True, True, True, True, True
     ]
 
 
 def test_decoders_are_independent():
-    gate = SustainGate(["a", "b"], sustain_samples=2, release_samples=1)
+    gate = SustainGate(["a", "b"], sustain_timepoints=2, release_timepoints=1)
     # a passes continuously and latches; b never passes and stays off.
     out = [gate.step({"a": True, "b": False}) for _ in range(3)]
     assert [o["a"] for o in out] == [False, True, True]
@@ -105,7 +95,7 @@ def test_decoders_are_independent():
 
 
 def test_reset_counters_keeps_latches_but_zeros_runs():
-    gate = SustainGate(["d"], sustain_samples=3, release_samples=3)
+    gate = SustainGate(["d"], sustain_timepoints=3, release_timepoints=3)
     _run(gate, "d", [True, True, True])  # latched
     gate.reset_counters()
     # Still latched; a single miss must not release (needs 3 now from a clean run).
@@ -114,8 +104,8 @@ def test_reset_counters_keeps_latches_but_zeros_runs():
 
 
 def test_set_windows_takes_effect_going_forward():
-    gate = SustainGate(["d"], sustain_samples=5, release_samples=1)
-    gate.set_windows(sustain_samples=2, release_samples=1)
+    gate = SustainGate(["d"], sustain_timepoints=5, release_timepoints=1)
+    gate.set_windows(sustain_timepoints=2, release_timepoints=1)
     gate.reset_counters()
     assert _run(gate, "d", [True, True]) == [False, True]  # now latches after 2
 
@@ -123,12 +113,14 @@ def test_set_windows_takes_effect_going_forward():
 # ── DecisionEngine ────────────────────────────────────────────────────────────
 
 
-def _engine(decoders=("a", "b"), sustain_seconds=0.0, release_seconds=0.0, **cfg):
-    # sustain 0 s at 1 Hz → 1 sample: latch on first pass (easy to reason about).
+def _engine(decoders=("a", "b"), sustain_timepoints=1, release_timepoints=1, **cfg):
+    # sustain 1 timepoint: latch on the first pass (easy to reason about).
     config = DecisionConfig(
-        sustain_seconds=sustain_seconds, release_seconds=release_seconds, **cfg
+        sustain_timepoints=sustain_timepoints,
+        release_timepoints=release_timepoints,
+        **cfg,
     )
-    return DecisionEngine(list(decoders), config, target_sfreq=1.0)
+    return DecisionEngine(list(decoders), config)
 
 
 def test_process_batch_returns_per_decoder_active_arrays():
@@ -144,10 +136,10 @@ def test_process_batch_returns_per_decoder_active_arrays():
 
 
 def test_sustain_window_spans_batch_boundary():
-    engine = _engine(decoders=("a",), sustain_seconds=3.0, threshold=0.5)  # 3 samples
+    engine = _engine(decoders=("a",), sustain_timepoints=3, threshold=0.5)
     r1 = engine.process_batch({"a": np.array([0.9, 0.9])}, np.array([0.0, 1.0]))
     r2 = engine.process_batch({"a": np.array([0.9, 0.9])}, np.array([2.0, 3.0]))
-    # Latches on the 3rd consecutive pass — the first sample of the second batch.
+    # Latches on the 3rd consecutive pass — the first timepoint of the second batch.
     np.testing.assert_array_equal(r1.active["a"], [False, False])
     np.testing.assert_array_equal(r2.active["a"], [True, True])
 
@@ -158,7 +150,7 @@ def test_pending_config_applies_at_next_batch_boundary():
     r1 = engine.process_batch({"a": np.array([0.8])}, np.array([100.0]))
     assert r1.config_version == 0 and not r1.active["a"][0]
 
-    engine.set_pending_config(DecisionConfig(threshold=0.5, sustain_seconds=0.0))
+    engine.set_pending_config(DecisionConfig(threshold=0.5, sustain_timepoints=1))
     # Not applied yet — only stashed.
     assert engine.config_version == 0
 
@@ -168,19 +160,20 @@ def test_pending_config_applies_at_next_batch_boundary():
     change = r2.config_change
     assert change is not None
     assert change.version == 1
-    assert change.lsl_timestamp == 101.0  # stamped at the batch's first sample
+    assert change.lsl_timestamp == 101.0  # stamped at the batch's first timepoint
     assert change.config["threshold"] == 0.5
+    assert change.config["sustain_timepoints"] == 1
 
 
 def test_config_change_resets_counters_but_keeps_latches():
-    engine = _engine(decoders=("a",), threshold=0.5, sustain_seconds=3.0)  # 3 samples
+    engine = _engine(decoders=("a",), threshold=0.5, sustain_timepoints=3)
     engine.process_batch({"a": np.array([0.9, 0.9, 0.9])}, np.array([0.0, 1.0, 2.0]))
     # Latched. Now change only the threshold; latch must survive, counters reset.
     engine.set_pending_config(
-        DecisionConfig(threshold=0.6, sustain_seconds=3.0, release_seconds=3.0)
+        DecisionConfig(threshold=0.6, sustain_timepoints=3, release_timepoints=3)
     )
     r = engine.process_batch({"a": np.array([0.1])}, np.array([3.0]))
-    # A single miss must not release (release is 3 samples from a clean run).
+    # A single miss must not release (release is 3 timepoints from a clean run).
     assert r.active["a"][0]
 
 
@@ -213,8 +206,6 @@ def test_missing_decoder_and_bad_shape_rejected():
         )
 
 
-def test_construction_validates_decoders_and_sfreq():
+def test_construction_requires_a_decoder():
     with pytest.raises(ValueError, match="at least one decoder"):
-        DecisionEngine([], DecisionConfig(), target_sfreq=1.0)
-    with pytest.raises(ValueError, match="target_sfreq"):
-        DecisionEngine(["a"], DecisionConfig(), target_sfreq=0.0)
+        DecisionEngine([], DecisionConfig())
