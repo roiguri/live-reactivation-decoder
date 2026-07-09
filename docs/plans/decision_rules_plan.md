@@ -57,8 +57,8 @@ the start); every `update_config` appends a version. Config at time T = latest v
 `lsl_timestamp ≤ T` (version 0 = −inf).
 
 ```json
-{"config_version": 0, "lsl_timestamp": null,     "config": {"thresholds": {"animate decoder": 0.85, "inanimate decoder": 0.85}, "sustain_seconds": 0.3, "release_seconds": 0.0}}
-{"config_version": 1, "lsl_timestamp": 179035.9, "config": {"thresholds": {"animate decoder": 0.70, "inanimate decoder": 0.85}, "sustain_seconds": 0.3, "release_seconds": 0.0}}
+{"config_version": 0, "lsl_timestamp": null,     "config": {"threshold": 0.85, "sustain_seconds": 0.3, "release_seconds": 0.0}}
+{"config_version": 1, "lsl_timestamp": 179035.9, "config": {"threshold": 0.70, "sustain_seconds": 0.3, "release_seconds": 0.0}}
 ```
 
 **`predictions.npz`** — unchanged. Decision booleans are lossless in the CSV already (no
@@ -69,7 +69,8 @@ precision concern), so the npz stays lean; nothing decision-related is added.
 | Decision | Choice | Why |
 |---|---|---|
 | Dense per-sample vs. edges | **Dense `decisions.csv`** (bool per decoder) | Faithful actuals, trivial join to predictions, no offline reconstruction. Edges are one `diff` away. |
-| Config provenance | **Separate `decision_config.jsonl`** (full snapshots) + `config_version` col | Decision rows stay criteria-invariant; nested per-decoder thresholds fit JSON, not CSV columns. |
+| Config provenance | **Separate `decision_config.jsonl`** (full snapshots) + `config_version` col | Decision rows stay criteria-invariant; the config (threshold + sustain/release) fits JSON, not CSV columns. |
+| Threshold scope | **Single global threshold** (shared by all decoders) | One knob, one chart line. Decoders still latch independently; a per-decoder threshold isn't needed and adds UI/log clutter. |
 | Latch on `update_config` | **Reset sustain counters; keep already-latched activations** | A count accrued under a different threshold is meaningless, but an on decoder shouldn't blink off on a knob change. |
 | Sustain unit | **Seconds** in config/UI/log; → samples via `target_sfreq` inside the engine | Human-meaningful, `target_sfreq`-independent on disk. |
 | npz decision array | **Omitted** | Booleans are lossless in the CSV; npz's full-precision reason doesn't apply. |
@@ -86,7 +87,7 @@ deferred to the very end (Phase D).**
 ### Phase A — Backend logic (pure Python, no Qt, unit-tested)
 
 - **A1 — Primitives.** New `src/backend/online_phase/decision_engine.py`: `DecisionConfig`
-  (frozen: `thresholds: dict[str, float]`, `sustain_seconds`, `release_seconds`) seeded from
+  (frozen: global `threshold: float`, `sustain_seconds`, `release_seconds`) seeded from
   **hardcoded module-level defaults** (`DEFAULT_THRESHOLD`, `DEFAULT_SUSTAIN_SECONDS`,
   `DEFAULT_RELEASE_SECONDS`); a YAML override is deferred to Phase D. `ThresholdCriterion`
   (instantaneous), `SustainGate` (per-decoder latch state machine).
@@ -137,8 +138,9 @@ deferred to the very end (Phase D).**
 - **C1 — Decision panel.** `widgets/phase2/decision_panel.py`: one row per decoder (on/off,
   live proba, sustain progress). `Phase2Screen._on_decision(result)` (QueuedConnection), reads
   `result` duck-typed (no backend import).
-- **C2 — Chart.** Per-decoder threshold line (replacing hardcoded `0.85`) + shade a trace while
-  its decoder is latched.
+- **C2 — Chart.** Make the single global threshold line live — driven by the applied config
+  (replacing the hardcoded `0.85`), moving on Apply — and shade each trace while its decoder is
+  latched (the shading is per-decoder; the threshold line is shared).
 - **C3 — History strip.** Piano-roll under the chart, one lane per decoder, sharing the chart's
   time axis; fed from `result.active`.
 - **C4 — Decision settings (apply-gated).** Threshold + sustain controls in `Phase2SettingsPanel`
@@ -155,7 +157,7 @@ Only now — after the engine, wiring, and UI are all proven on the hardcoded de
 the YAML seed the initial settings.
 
 - **D1 — Config.** Optional `decision_rules:` block + `DecisionRulesConfig` in `config_models.py`
-  (per-decoder thresholds w/ global fallback, sustain/release seconds); **absent → the hardcoded
+  (global threshold, sustain/release seconds); **absent → the hardcoded
   defaults** (existing configs keep loading unchanged). `AppSession` builds the initial
   `DecisionConfig` from the block when present, else the constants. *Verify:* valid block, absent
   block → defaults, bad values rejected.

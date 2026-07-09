@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import math
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Mapping
 
 import numpy as np
@@ -38,25 +38,19 @@ DEFAULT_RELEASE_SECONDS = 0.0
 class DecisionConfig:
     """Immutable snapshot of the tunable decision rule.
 
-    ``threshold`` is the global positive-class gate; ``thresholds`` holds optional
-    per-decoder overrides (a decoder absent from the map falls back to the global).
+    ``threshold`` is the single global positive-class gate, applied to every
+    decoder (decoders still latch independently — they just share this value).
     ``sustain_seconds`` / ``release_seconds`` are in human units and converted to
     samples by the engine against ``target_sfreq``.
     """
 
     threshold: float = DEFAULT_THRESHOLD
-    thresholds: Mapping[str, float] = field(default_factory=dict)
     sustain_seconds: float = DEFAULT_SUSTAIN_SECONDS
     release_seconds: float = DEFAULT_RELEASE_SECONDS
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.threshold <= 1.0:
             raise ValueError(f"threshold must be in [0, 1], got {self.threshold}.")
-        for name, value in self.thresholds.items():
-            if not 0.0 <= value <= 1.0:
-                raise ValueError(
-                    f"threshold for '{name}' must be in [0, 1], got {value}."
-                )
         if self.sustain_seconds < 0:
             raise ValueError(
                 f"sustain_seconds must be non-negative, got {self.sustain_seconds}."
@@ -65,10 +59,6 @@ class DecisionConfig:
             raise ValueError(
                 f"release_seconds must be non-negative, got {self.release_seconds}."
             )
-
-    def threshold_for(self, decoder: str) -> float:
-        """Per-decoder threshold, falling back to the global ``threshold``."""
-        return float(self.thresholds.get(decoder, self.threshold))
 
 
 class ThresholdCriterion:
@@ -85,7 +75,7 @@ class ThresholdCriterion:
         self, probs: Mapping[str, float], config: DecisionConfig
     ) -> dict[str, bool]:
         return {
-            name: float(probs[name]) >= config.threshold_for(name)
+            name: float(probs[name]) >= config.threshold
             for name in self._decoders
         }
 
@@ -296,7 +286,7 @@ class DecisionEngine:
 
     def _public_config(self, config: DecisionConfig) -> dict:
         return {
-            "thresholds": {d: config.threshold_for(d) for d in self._decoders},
+            "threshold": config.threshold,
             "sustain_seconds": config.sustain_seconds,
             "release_seconds": config.release_seconds,
         }

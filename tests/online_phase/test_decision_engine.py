@@ -16,23 +16,15 @@ from backend.online_phase.decision_engine import (
 # ── DecisionConfig ────────────────────────────────────────────────────────────
 
 
-def test_threshold_for_falls_back_to_global():
-    config = DecisionConfig(threshold=0.8, thresholds={"animate decoder": 0.6})
-    assert config.threshold_for("animate decoder") == 0.6
-    assert config.threshold_for("inanimate decoder") == 0.8  # fallback
-
-
 def test_defaults_come_from_constants():
     config = DecisionConfig()
     assert config.threshold == DEFAULT_THRESHOLD
-    assert config.threshold_for("anything") == DEFAULT_THRESHOLD
 
 
 @pytest.mark.parametrize(
     "kwargs",
     [
         {"threshold": 1.5},
-        {"thresholds": {"a": -0.1}},
         {"sustain_seconds": -1.0},
         {"release_seconds": -0.5},
     ],
@@ -45,12 +37,12 @@ def test_invalid_config_rejected(kwargs):
 # ── ThresholdCriterion ────────────────────────────────────────────────────────
 
 
-def test_threshold_criterion_is_per_decoder_and_inclusive():
-    config = DecisionConfig(threshold=0.85, thresholds={"b": 0.5})
+def test_threshold_criterion_is_global_and_inclusive():
+    config = DecisionConfig(threshold=0.85)
     criterion = ThresholdCriterion(["a", "b"])
-    # a: 0.85 exactly passes (>=); b uses its 0.5 override.
-    assert criterion.evaluate({"a": 0.85, "b": 0.49}, config) == {"a": True, "b": False}
-    assert criterion.evaluate({"a": 0.84, "b": 0.5}, config) == {"a": False, "b": True}
+    # 0.85 exactly passes (>=); the same global threshold gates every decoder.
+    assert criterion.evaluate({"a": 0.85, "b": 0.84}, config) == {"a": True, "b": False}
+    assert criterion.evaluate({"a": 0.20, "b": 0.90}, config) == {"a": False, "b": True}
 
 
 # ── seconds_to_samples ────────────────────────────────────────────────────────
@@ -177,7 +169,7 @@ def test_pending_config_applies_at_next_batch_boundary():
     assert change is not None
     assert change.version == 1
     assert change.lsl_timestamp == 101.0  # stamped at the batch's first sample
-    assert change.config["thresholds"]["a"] == 0.5
+    assert change.config["threshold"] == 0.5
 
 
 def test_config_change_resets_counters_but_keeps_latches():

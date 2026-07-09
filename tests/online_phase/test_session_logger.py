@@ -199,7 +199,7 @@ from types import SimpleNamespace  # noqa: E402
 from backend.online_phase.session_logger import episodes_from_decisions  # noqa: E402
 
 _INITIAL_CONFIG = {
-    "thresholds": {"animate decoder": 0.85, "inanimate decoder": 0.85},
+    "threshold": 0.85,
     "sustain_seconds": 0.1,
     "release_seconds": 0.0,
 }
@@ -270,7 +270,7 @@ def test_config_change_appends_version_and_rows_carry_it(tmp_path):
     logger.on_decisions(_result([1.0], {"animate decoder": [False], "inanimate decoder": [False]}, 0))
 
     new_config = {
-        "thresholds": {"animate decoder": 0.70, "inanimate decoder": 0.85},
+        "threshold": 0.70,
         "sustain_seconds": 0.1,
         "release_seconds": 0.0,
     }
