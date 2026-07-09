@@ -32,8 +32,8 @@ import numpy as np
 
 # Hardcoded defaults — the sole source of decision settings until the optional
 # YAML override lands (plan Phase D). Counted in timepoints (one prediction each).
-DEFAULT_THRESHOLD = 0.85
-DEFAULT_SUSTAIN_TIMEPOINTS = 10
+DEFAULT_THRESHOLD = 0.80
+DEFAULT_SUSTAIN_TIMEPOINTS = 3
 DEFAULT_RELEASE_TIMEPOINTS = 1
 
 
