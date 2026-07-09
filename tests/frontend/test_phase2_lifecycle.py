@@ -54,8 +54,12 @@ class _FakeLiveStreamSession(QObject):
         self.start_calls = 0
         self.stop_calls = 0
         self.raise_on_start: Exception | None = None
+        self.decision_config_updates: list[dict] = []
         self._started = False
         self._stopped = False
+
+    def update_decision_config(self, decision_params: dict) -> None:
+        self.decision_config_updates.append(dict(decision_params))
 
     def start(self) -> None:
         self.start_calls += 1
@@ -99,14 +103,21 @@ class _StubAppSession:
         self.source_running = False
         self.last_stream_name: str | None = None
         self.last_log_dir: Any = None
+        self.last_decision_params: dict | None = None
+
+    def decision_config_defaults(self) -> dict:
+        return {"threshold": 0.85, "sustain_timepoints": 10}
 
     def new_phase2_log_dir(self):
         # Pure path; the fake session never writes, so no directory is created.
         return Path("/fake/phase2_live/20260607_000000")
 
-    def build_live_stream_session(self, decoder_pipeline_path, log_dir=None, *, stream_name=None):
+    def build_live_stream_session(
+        self, decoder_pipeline_path, log_dir=None, *, stream_name=None, decision_params=None
+    ):
         self.last_stream_name = stream_name
         self.last_log_dir = log_dir
+        self.last_decision_params = decision_params
         # Hand out a fresh fake on each call to mirror the real one-shot
         # semantics (the screen builds a new session on every Start).
         if getattr(self._live, "_handed_out", False):
@@ -381,6 +392,37 @@ def test_decision_ready_forwards_to_panel(screen_and_session) -> None:
     QApplication.processEvents()
 
     assert screen._decision_panel.is_active(task_name)
+
+
+def test_apply_decision_settings_moves_line_and_stages_when_live(screen_and_session) -> None:
+    """Apply in the settings panel moves the chart threshold line, and — when a
+    run is live — stages the new settings on the session."""
+    screen, fake, _, _ = screen_and_session
+    screen._start_halt_button.start_clicked.emit()
+
+    panel = screen._settings_panel
+    panel._threshold_slider.setValue(60)  # 0.60
+    panel._sustain_spin.setValue(20)
+    panel._apply_decision_draft()
+
+    assert screen._chart.threshold == pytest.approx(0.60)
+    # Both charts follow the applied threshold (live + event-locked stay in parity).
+    assert screen._frozen._chart._threshold == pytest.approx(0.60)
+    assert fake.decision_config_updates == [{"threshold": 0.60, "sustain_timepoints": 20}]
+    assert screen._decision_params == {"threshold": 0.60, "sustain_timepoints": 20}
+
+
+def test_decision_settings_seed_next_run(screen_and_session) -> None:
+    """Applying settings before Start seeds the engine built on Start."""
+    screen, _, stub, _ = screen_and_session
+
+    panel = screen._settings_panel
+    panel._threshold_slider.setValue(70)
+    panel._apply_decision_draft()
+
+    screen._start_halt_button.start_clicked.emit()
+
+    assert stub.last_decision_params == {"threshold": 0.70, "sustain_timepoints": 10}
 
 
 def test_start_resets_chart_buffers(screen_and_session) -> None:

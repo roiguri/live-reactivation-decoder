@@ -58,10 +58,14 @@ class LiveStreamSession:
         """Forward per-batch decisions (a ``DecisionResult``) to the UI/logger."""
         return self._binding.decision_ready if self._binding is not None else None
 
-    def update_decision_config(self, config: DecisionConfig) -> None:
-        """Stage new decision settings; the engine applies them at the next batch."""
+    def update_decision_config(self, decision_params: dict) -> None:
+        """Stage new decision settings; the engine applies them at the next batch.
+
+        Takes plain values (e.g. ``{"threshold": 0.7, "sustain_timepoints": 20}``) so
+        the frontend never touches the backend ``DecisionConfig`` type.
+        """
         if self._binding is not None:
-            self._binding.set_pending_config(config)
+            self._binding.set_pending_config(DecisionConfig(**decision_params))
 
     def start(self) -> None:
         """Start receiver and worker. Safe to call more than once."""
@@ -204,6 +208,18 @@ class AppSession:
         self._ensure_proxy_source(start=True)
         return LSLReceiver().discover_streams(timeout_sec=timeout_sec)
 
+    def decision_config_defaults(self) -> dict:
+        """The initial decision settings as plain values, to seed the UI controls.
+
+        Plain dict (not a ``DecisionConfig``) so the frontend stays free of backend
+        types. Currently the hardcoded engine defaults; a YAML override lands later.
+        """
+        config = DecisionConfig()
+        return {
+            "threshold": config.threshold,
+            "sustain_timepoints": config.sustain_timepoints,
+        }
+
     def build_live_stream_session(
         self,
         decoder_pipeline_path: str | Path,
@@ -211,6 +227,7 @@ class AppSession:
         batch_size_samples: int = 40,
         *,
         stream_name: str | None = None,
+        decision_params: dict | None = None,
     ) -> LiveStreamSession:
         """Construct the live backend pipeline without starting it.
 
@@ -248,12 +265,15 @@ class AppSession:
         )
 
         # The decision engine is a sibling consumer of prediction_ready (like the
-        # logger) — StreamWorker is untouched. It starts on hardcoded defaults
-        # (DecisionConfig()); a YAML/UI override is layered on later. Decisions are
-        # computed on every run, whether or not the run is being logged.
+        # logger) — StreamWorker is untouched. It starts on the supplied settings
+        # (from the UI controls) or the hardcoded defaults. Decisions are computed
+        # on every run, whether or not the run is being logged.
+        decision_config = (
+            DecisionConfig(**decision_params) if decision_params else DecisionConfig()
+        )
         decision_engine = DecisionEngine(
             decoder_names=list(artifact.models.keys()),
-            config=DecisionConfig(),
+            config=decision_config,
         )
         binding = DecisionBinding(decision_engine)
         worker.prediction_ready.connect(

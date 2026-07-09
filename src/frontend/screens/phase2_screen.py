@@ -41,13 +41,12 @@ logger = logging.getLogger(__name__)
 # stream (auto-halt vs. confirm). One-way for now — restart the app
 # to leave Phase 2.
 #
-# TODO: threshold is hardcoded; the config schema has no
-# ``decoders.threshold`` field yet. Once it does, read it from
-# ``session.settings["decoders"]["threshold"]``.
-_DEFAULT_THRESHOLD = 0.85
+# The decision threshold is no longer hardcoded here — it comes from
+# ``session.decision_config_defaults()`` and is operator-tunable via the
+# settings panel (both charts follow the applied value).
 # Fixed rolling-window width for the live probability chart. Operator
 # control over this (5 / 10 / 30 / 60 s) is Goal 15 in the M2 plan; until
-# then it's a single knob here, same altitude as _DEFAULT_THRESHOLD.
+# then it's a single knob here.
 _DEFAULT_WINDOW_SECONDS = 5.0
 _CHART_MAX_HEIGHT = 420
 # Rolling window (in batches) the header's latency comparison label averages
@@ -90,11 +89,16 @@ class Phase2Screen(QWidget):
             for name, code in settings.get("event_mapping", {}).items()
         }
 
+        # Applied decision settings (plain values), seeded from the backend
+        # defaults. Edited via the settings panel (apply-gated) and used to seed
+        # each new run's engine; the chart threshold line follows this.
+        self._decision_params = session.decision_config_defaults()
+
         self._chart = LiveProbabilityChart(
             task_names=task_names,
             window_seconds=_DEFAULT_WINDOW_SECONDS,
             target_sfreq=target_sfreq,
-            threshold=_DEFAULT_THRESHOLD,
+            threshold=self._decision_params["threshold"],
             event_names=event_names,
         )
         # Event-locked snapshot view (Goals 9 + 11): epochs each trigger
@@ -103,7 +107,7 @@ class Phase2Screen(QWidget):
         self._frozen = FrozenEventView(
             task_names=task_names,
             target_sfreq=target_sfreq,
-            threshold=_DEFAULT_THRESHOLD,
+            threshold=self._decision_params["threshold"],
             event_names=event_names,
         )
         # Live latched-decision readout: one row per decoder, driven by the
@@ -114,7 +118,11 @@ class Phase2Screen(QWidget):
         self._target: dict | None = None
         self._header = Phase2Header()
         self._header.choose_target_clicked.connect(self._on_choose_target)
-        self._settings_panel = Phase2SettingsPanel(task_colors=self._chart.task_colors)
+        self._settings_panel = Phase2SettingsPanel(
+            task_colors=self._chart.task_colors,
+            decision_defaults=self._decision_params,
+        )
+        self._settings_panel.decision_params_changed.connect(self._on_decision_params)
         # Decoder show/hide drives both charts so they stay in sync.
         self._settings_panel.task_visibility_toggled.connect(
             self._chart.set_task_visible
@@ -179,6 +187,16 @@ class Phase2Screen(QWidget):
     def _on_decision(self, result) -> None:
         # ``result`` is a DecisionResult, read duck-typed (no backend import).
         self._decision_panel.update_decision(result)
+
+    def _on_decision_params(self, params: dict) -> None:
+        """Apply pressed in the settings panel: move the chart line and, if a run
+        is live, stage the new settings (they take effect on the next batch and
+        are logged). The values also seed the next run built from Start."""
+        self._decision_params = dict(params)
+        self._chart.set_threshold(params["threshold"])
+        self._frozen.set_threshold(params["threshold"])
+        if self._live is not None:
+            self._live.update_decision_config(params)
 
     def _on_latency(self, payload: dict) -> None:
         """Roll a short window of two competing latency definitions (see
@@ -250,6 +268,7 @@ class Phase2Screen(QWidget):
                 self.decoder_pipeline_path,
                 log_dir=log_dir,
                 stream_name=self._target.get("stream_name"),
+                decision_params=self._decision_params,
             )
             self._wire_session(self._live)
             self._live.start()

@@ -10,7 +10,6 @@ from PyQt6.QtWidgets import QApplication
 from backend.core.preprocessing_constants import FINAL_RESAMPLE_RATE
 from backend.core.session_paths import SessionPaths
 from backend.online_phase.artifact_loader import DecoderPipelineArtifact
-from backend.online_phase.decision_engine import DecisionConfig
 from backend.session import AppSession, LiveStreamSession
 
 
@@ -426,7 +425,7 @@ def test_decisions_logged_alongside_predictions(sample_config_path, tmp_path, mo
 
     decisions = (log_dir / "decisions.csv").read_text().splitlines()
     assert decisions[0] == "lsl_timestamp,t_sec,object,scene,config_version"
-    # Default threshold 0.85, sustain 0.1 s → neither latches on a single sample.
+    # Default threshold 0.85, sustain 10 timepoints → neither latches on one sample.
     assert decisions[1] == "1.0,0.0,False,False,0"
     # Timeline seeded with version 0 (the hardcoded defaults).
     assert (log_dir / "decision_config.jsonl").exists()
@@ -457,12 +456,37 @@ def test_update_decision_config_applies_on_next_batch(sample_config_path, monkey
     _emit(live, 0.9, 0.0, 1.0)  # still the default config
     assert received[-1].config_version == 0
 
-    # Lower the threshold and drop sustain to 1 sample: 'object' now latches at once.
+    # Lower the threshold, sustain 1 timepoint: 'object' now latches at once.
     live.update_decision_config(
-        DecisionConfig(threshold=0.5, sustain_timepoints=1, release_timepoints=100)
+        {"threshold": 0.5, "sustain_timepoints": 1, "release_timepoints": 100}
     )
     _emit(live, 0.6, 0.0, 2.0)
     assert received[-1].config_version == 1
+    assert received[-1].active["object"][0]
+
+
+def test_decision_config_defaults_are_plain_values(sample_config_path, monkeypatch):
+    _patch_runtime(monkeypatch)
+    session = AppSession(sample_config_path)
+    defaults = session.decision_config_defaults()
+    assert set(defaults) == {"threshold", "sustain_timepoints"}
+    assert 0.0 <= defaults["threshold"] <= 1.0
+
+
+def test_build_seeds_engine_with_decision_params(sample_config_path, monkeypatch):
+    _patch_runtime(monkeypatch)
+    session = AppSession(sample_config_path)
+
+    # Seed a run with threshold 0.5 / sustain 1 timepoint so 'object' latches at once.
+    live = session.build_live_stream_session(
+        Path("decoder_pipeline.joblib"),
+        decision_params={"threshold": 0.5, "sustain_timepoints": 1},
+    )
+    received = []
+    live.decision_ready.connect(received.append)
+
+    _emit(live, 0.6, 0.0, 1.0)
+    assert received[-1].config_version == 0  # applied at construction, not a change
     assert received[-1].active["object"][0]
 
 
@@ -474,9 +498,9 @@ def test_start_resets_decision_latches(sample_config_path, monkeypatch):
     received = []
     live.decision_ready.connect(received.append)
 
-    # Latch 'object' (sustain 1 sample); generous release so a miss won't drop it.
+    # Latch 'object' (sustain 1 timepoint); generous release so a miss won't drop it.
     live.update_decision_config(
-        DecisionConfig(threshold=0.5, sustain_timepoints=1, release_timepoints=100)
+        {"threshold": 0.5, "sustain_timepoints": 1, "release_timepoints": 100}
     )
     _emit(live, 0.9, 0.0, 1.0)
     assert received[-1].active["object"][0]
