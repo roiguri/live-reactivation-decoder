@@ -255,3 +255,40 @@ def test_perm_band_shapes():
     obs, lo, hi, nmean = metrics.perm_band(ep, "red decoder", "red", markers, n_perm=50)
     assert obs.shape == lo.shape == hi.shape == nmean.shape == (20,)
     assert np.all(lo <= hi)
+
+
+def test_permutation_auc_pvalue_separable_signal():
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import StratifiedKFold
+
+    rng = np.random.default_rng(0)
+    n = 40
+    X = np.concatenate([rng.normal(-2, 0.5, (n, 3)), rng.normal(2, 0.5, (n, 3))])
+    y = np.array([0] * n + [1] * n)
+    cv = StratifiedKFold(n_splits=4, shuffle=True, random_state=0)
+
+    observed, null, p_value = metrics.permutation_auc_pvalue(
+        X, y, LogisticRegression(), cv, n_perm=100, rng=np.random.default_rng(1))
+
+    assert null.shape == (100,)
+    assert 0.0 <= p_value <= 1.0
+    assert observed > 0.9
+    assert p_value < 0.05
+
+
+def test_permutation_auc_pvalue_reports_progress():
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import StratifiedKFold
+
+    rng = np.random.default_rng(0)
+    n = 20
+    X = np.concatenate([rng.normal(-2, 0.5, (n, 3)), rng.normal(2, 0.5, (n, 3))])
+    y = np.array([0] * n + [1] * n)
+    cv = StratifiedKFold(n_splits=4, shuffle=True, random_state=0)
+
+    calls = []
+    metrics.permutation_auc_pvalue(
+        X, y, LogisticRegression(), cv, n_perm=10, rng=np.random.default_rng(1),
+        on_progress=lambda done, total: calls.append((done, total)))
+
+    assert calls == [(i, 10) for i in range(1, 11)]

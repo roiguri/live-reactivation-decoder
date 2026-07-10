@@ -151,6 +151,53 @@ def plot_cv_auc(ctx, eval_results, *, custom_tp=None):
           f"suggested timepoint: {ev['suggested_timepoint']:.3f}s")
 
 
+def plot_tgm_matrix(tgm, times, title, ax=None):
+    """Train-time × test-time AUC heatmap — the full generalization matrix.
+
+    ``tgm[i, j]`` = AUC training on ``times[i]``, testing on ``times[j]``,
+    matching :class:`frontend.widgets.charts.tgm_chart.TGMChart`'s convention
+    (transposed for imshow so x reads train time, y reads test time). Same
+    ``RdBu_r`` / 0-1 scale as the GUI so chance (0.5) sits near-white.
+    """
+    own_fig = ax is None
+    if own_fig:
+        fig, ax = plt.subplots(figsize=(5, 4.5))
+    t0, t1 = float(times[0]), float(times[-1])
+    im = ax.imshow(np.asarray(tgm).T, vmin=0.0, vmax=1.0, cmap="RdBu_r",
+                    origin="lower", extent=[t0, t1, t0, t1], aspect="equal")
+    ax.axvline(0.0, color="k", ls=":", lw=0.8)
+    ax.axhline(0.0, color="k", ls=":", lw=0.8)
+    ax.set(title=title, xlabel="train time (s)", ylabel="test time (s)")
+    if own_fig:
+        fig.colorbar(im, ax=ax, fraction=0.046, label="AUC")
+        plt.tight_layout()
+    return im
+
+
+def plot_topomap_grid(patterns_by_task, info, *, ncols=2):
+    """One topomap panel per task's spatial pattern, mirroring ``TopomapWidget``.
+
+    ``patterns_by_task`` is ``{task_name: pattern}`` with each ``pattern``
+    shaped ``(n_channels,)`` (a Haufe activation pattern), aligned with
+    ``info["chs"]`` — same ``mne.viz.plot_topomap`` call shape as the GUI's
+    ``TopomapWidget.set_pattern``.
+    """
+    import mne
+
+    items = list(patterns_by_task.items())
+    fig, axes, nrows, ncols = _grid(len(items), ncols=ncols)
+    for idx, (task, pattern) in enumerate(items):
+        ax = axes[idx // ncols][idx % ncols]
+        mne.viz.plot_topomap(
+            np.asarray(pattern, dtype=float), info,
+            axes=ax, show=False, cmap="RdBu_r", sensors=True, contours=4, sphere="auto",
+        )
+        ax.set_title(task, fontsize=10, pad=6)
+    _blank(axes, len(items), nrows, ncols)
+    plt.tight_layout()
+    return fig
+
+
 def per_decoder(ctx, dc, epoched, t_grid, preds):
     """Single-trial (faint) + mean (navy) P(t) over each decoder's own positive group(s)."""
     tasks = list(preds)

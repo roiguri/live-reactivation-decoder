@@ -4,7 +4,8 @@
 # Scratch output folders from local runs (epochs, models, live logs).
 # Each developer regenerates their own; never commit.
 temp_output/
-
+docs/project_docs/
+tests/notebooks/analysis/report_assets/
 /semester_a_data/
 
 # Debug-mode snapshots (joblib dumps from scripts/demo_seed_debug_snapshots).
