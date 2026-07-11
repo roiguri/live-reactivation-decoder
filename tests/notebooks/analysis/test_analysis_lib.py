@@ -7,7 +7,13 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from analysis_lib import metrics, online_validation, streaming, task_labels  # noqa: E402
+from analysis_lib import (  # noqa: E402
+    cross_domain,
+    metrics,
+    online_validation,
+    streaming,
+    task_labels,
+)
 
 
 def test_imports_without_backend_on_path():
@@ -381,3 +387,125 @@ def test_operating_point_degradation_degraded_online_drops():
     assert res["auc_on"] < res["auc_off"]
     assert res["pct_drop"] > 0.0
     assert 0.0 <= res["auc_on"] <= 1.0
+
+
+# ── step 3: cross-domain generalization ──────────────────────────────────────
+
+def test_binary_test_set_maps_categories_and_drops_irrelevant():
+    task_cfg = {
+        "name": "animate decoder",
+        "pos_labels": ["animate_01", "animate_02"],
+        "neg_labels": ["inanimate_01", "rest_fixation"],  # rest -> None, dropped
+    }
+    X_all = np.arange(4 * 2 * 3).reshape(4, 2, 3)  # (n_trials, n_ch, n_grid)
+    cat_labels = ["animate", "inanimate", "scene", "animate"]  # "scene" in neither
+    X_test, y_test = cross_domain.binary_test_set(X_all, cat_labels, task_cfg)
+    assert X_test.shape == (3, 2, 3)  # the "scene" trial dropped
+    assert y_test.tolist() == [1, 0, 1]
+    np.testing.assert_array_equal(X_test, X_all[[0, 1, 3]])
+
+
+def test_binary_test_set_rejects_overlapping_polarity():
+    import pytest
+    task_cfg = {"name": "bad", "pos_labels": ["animate_01"], "neg_labels": ["animate_02"]}
+    with pytest.raises(ValueError, match="both pos and neg"):
+        cross_domain.binary_test_set(np.zeros((2, 1, 1)), ["animate", "animate"], task_cfg)
+
+
+def test_binary_test_set_single_class_raises():
+    import pytest
+    task_cfg = {"name": "animate decoder", "pos_labels": ["animate_01"],
+                "neg_labels": ["inanimate_01"]}
+    with pytest.raises(ValueError, match="single class"):
+        cross_domain.binary_test_set(np.zeros((2, 1, 1)), ["animate", "animate"], task_cfg)
+
+
+def test_tgm_auc_matches_roc_auc_score_per_cell_with_ties():
+    from sklearn.metrics import roc_auc_score
+
+    rng = np.random.default_rng(0)
+    n, n_fl, n_test = 30, 4, 5
+    # integer scores force ties, exercising average-rank handling
+    scores = rng.integers(0, 6, size=(n, n_fl, n_test)).astype(float)
+    y = np.array([0] * (n // 2) + [1] * (n // 2))
+    tgm = cross_domain.tgm_auc(scores, y)
+    assert tgm.shape == (n_fl, n_test)
+    for i in range(n_fl):
+        for j in range(n_test):
+            assert np.isclose(tgm[i, j], roc_auc_score(y, scores[:, i, j]))
+
+
+def _scores_with_signal(rng, *, n=40, n_fl=4, n_test=5, fl_row=1, test_col=3, sep=4.0):
+    """Noise everywhere except one (fl_row, test_col) cell that separates the classes."""
+    scores = rng.normal(0, 1.0, (n, n_fl, n_test))
+    y = np.array([0] * (n // 2) + [1] * (n // 2))
+    scores[y == 1, fl_row, test_col] += sep
+    return scores, y, fl_row, test_col
+
+
+def test_row_permutation_finds_signal_latency_and_is_significant():
+    rng = np.random.default_rng(1)
+    scores, y, fl_row, test_col = _scores_with_signal(rng)
+    res = cross_domain.row_permutation(scores, y, fl_row, n_perm=500,
+                                       rng=np.random.default_rng(0))
+    assert res["obs_row"].shape == (scores.shape[2],)
+    assert res["null_max"].shape == (500,)
+    assert res["argmax_test_idx"] == test_col   # latency of the planted effect
+    assert res["max_auc"] > 0.9
+    assert 0.0 <= res["p_value"] <= 1.0
+    assert res["p_value"] < 0.05
+
+
+def test_matrix_permutation_locates_cell_both_axes():
+    rng = np.random.default_rng(4)
+    scores, y, fl_row, test_col = _scores_with_signal(rng, sep=4.0)
+    res = cross_domain.matrix_permutation(scores, y, n_perm=500,
+                                          rng=np.random.default_rng(0))
+    assert res["tgm"].shape == scores.shape[1:]
+    assert res["null_max"].shape == (500,)
+    assert (res["fl_idx"], res["test_idx"]) == (fl_row, test_col)  # 2-D search finds it
+    assert res["max_auc"] > 0.9
+    assert res["p_value"] < 0.05
+    # whole-map max is >= any single row's max (searches strictly more cells)
+    row = cross_domain.row_permutation(scores, y, fl_row, n_perm=1,
+                                       rng=np.random.default_rng(0))
+    assert res["max_auc"] >= row["max_auc"] - 1e-12
+
+
+def test_row_permutation_pure_noise_pbounds():
+    rng = np.random.default_rng(2)
+    n, n_fl, n_test = 40, 3, 4
+    scores = rng.normal(0, 1.0, (n, n_fl, n_test))
+    y = np.array([0] * (n // 2) + [1] * (n // 2))
+    res = cross_domain.row_permutation(scores, y, 1, n_perm=300,
+                                       rng=np.random.default_rng(0))
+    # Efron-Tibshirani floor: never exactly 0
+    assert 1 / (300 + 1) <= res["p_value"] <= 1.0
+
+
+def test_cell_bootstrap_orders_and_brackets_observed():
+    from sklearn.metrics import roc_auc_score
+
+    rng = np.random.default_rng(3)
+    scores, y, fl_row, test_col = _scores_with_signal(rng)
+    observed = roc_auc_score(y, scores[:, fl_row, test_col])
+    lo, hi = cross_domain.cell_bootstrap(scores, y, fl_row, test_col, n_boot=400,
+                                         rng=np.random.default_rng(0))
+    assert lo <= hi
+    assert lo <= observed <= hi
+
+
+def test_stouffer_combines_and_sharpens():
+    z1, p1 = cross_domain.stouffer([0.05, 0.05, 0.05])
+    # three concordant results are jointly more significant than any one
+    assert p1 < 0.05
+    assert z1 > 0.0
+    # monotone: smaller inputs -> smaller combined p
+    _, p2 = cross_domain.stouffer([0.2, 0.2, 0.2])
+    assert p1 < p2 < 1.0
+
+
+def test_stouffer_rejects_zero_pvalue():
+    import pytest
+    with pytest.raises(ValueError, match="must be in"):
+        cross_domain.stouffer([0.0, 0.1, 0.1])
