@@ -130,3 +130,56 @@ def make_epocher(
         return np.array(rows) if rows else np.empty((0, len(t_grid)))
 
     return t_grid, epoch_stream
+
+
+def _interp_epoch_multichannel(
+    rel_time: np.ndarray, values: np.ndarray, t_grid: np.ndarray, tmin: float, tmax: float
+) -> np.ndarray | None:
+    """Multi-channel sibling of :func:`_interp_epoch`.
+
+    ``values`` is ``(n_samples, n_ch)``; interpolates each channel independently
+    onto ``t_grid`` and returns ``(n_ch, n_grid)`` (or ``None`` if fewer than 2
+    stream samples fall in the marker window — same drop rule as the 1-D case).
+    """
+    m = (rel_time >= tmin - 0.05) & (rel_time <= tmax + 0.05)
+    if m.sum() < 2:
+        return None
+    rt = rel_time[m]
+    vals = values[m]  # (n_sel, n_ch)
+    return np.stack([np.interp(t_grid, rt, vals[:, c]) for c in range(vals.shape[1])])
+
+
+def make_epocher_multichannel(
+    out_samples: np.ndarray, sfreq: float, fs_out: float, tmin: float, tmax: float
+) -> tuple[np.ndarray, Callable[[np.ndarray, list[int]], tuple[np.ndarray, list[int]]]]:
+    """Return ``(t_grid, epoch_features)`` for a raw-sample-indexed feature stream.
+
+    The multi-channel counterpart of :func:`make_epocher`: instead of epoching a
+    1-D probability stream, it epochs the ``(n_out, n_ch)`` feature stream that
+    :func:`run_online_stream` returns. ``epoch_features(features, marker_samples)``
+    interpolates every channel of each marker-locked window onto the shared
+    ``t_grid`` and returns ``(epochs, kept_samples)`` where ``epochs`` is
+    ``(n_epochs, n_ch, n_grid)`` and ``kept_samples`` lists the marker samples
+    that actually produced an epoch (those with >=2 stream samples in-window) —
+    the caller needs the survivors to pair online epochs with their offline
+    counterparts.
+    """
+    t_grid = _epoch_grid(fs_out, tmin, tmax)
+    rel_time_base = out_samples / sfreq
+
+    def epoch_features(
+        features: np.ndarray, marker_samples: list[int]
+    ) -> tuple[np.ndarray, list[int]]:
+        rows, kept = [], []
+        for s in marker_samples:
+            row = _interp_epoch_multichannel(
+                rel_time_base - s / sfreq, features, t_grid, tmin, tmax
+            )
+            if row is not None:
+                rows.append(row)
+                kept.append(s)
+        arr = (np.array(rows) if rows
+               else np.empty((0, features.shape[1], len(t_grid))))
+        return arr, kept
+
+    return t_grid, epoch_features

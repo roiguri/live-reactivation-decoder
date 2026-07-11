@@ -7,7 +7,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from analysis_lib import metrics, streaming, task_labels  # noqa: E402
+from analysis_lib import metrics, online_validation, streaming, task_labels  # noqa: E402
 
 
 def test_imports_without_backend_on_path():
@@ -292,3 +292,92 @@ def test_permutation_auc_pvalue_reports_progress():
         on_progress=lambda done, total: calls.append((done, total)))
 
     assert calls == [(i, 10) for i in range(1, 11)]
+
+
+# ── step 2: online-pipeline validation ──────────────────────────────────────
+
+_SETTINGS = {
+    "model": "Logistic", "scale_method": "standard", "params": {},
+    "random_state": 0, "cv": {"k": 3},
+}
+
+
+def _separable_timeseries(rng, *, n=30, n_ch=3, n_t=5, sep=3.0):
+    """Two-class Gaussian blobs decodable at every timepoint: (2n, n_ch, n_t), y."""
+    X = np.concatenate([rng.normal(-sep, 0.5, (n, n_ch, n_t)),
+                        rng.normal(sep, 0.5, (n, n_ch, n_t))])
+    y = np.array([0] * n + [1] * n)
+    return X, y
+
+
+def test_make_epocher_multichannel_shape_and_interp():
+    out = np.arange(0, 300)
+    t_grid, epoch = streaming.make_epocher_multichannel(
+        out, sfreq=100.0, fs_out=100.0, tmin=-0.1, tmax=0.5)
+    assert len(t_grid) == 61
+    feats = np.stack([np.linspace(0, 1, 300), np.linspace(1, 2, 300)], axis=1)  # (300, 2)
+    arr, kept = epoch(feats, [100, 200])
+    assert arr.shape == (2, 2, 61)  # (n_trials, n_ch, n_grid)
+    assert kept == [100, 200]
+    # t=0 lands exactly on the marker sample -> interpolated value == raw sample
+    zero_idx = int(np.argmin(np.abs(t_grid)))
+    assert np.isclose(arr[0, 0, zero_idx], feats[100, 0])
+    assert np.isclose(arr[0, 1, zero_idx], feats[100, 1])
+
+
+def test_make_epocher_multichannel_skips_uncovered_marker():
+    out = np.arange(0, 120)
+    _, epoch = streaming.make_epocher_multichannel(
+        out, sfreq=100.0, fs_out=100.0, tmin=-0.1, tmax=0.5)
+    feats = np.stack([np.linspace(0, 1, 120)] * 2, axis=1)
+    arr, kept = epoch(feats, [1000])  # no surrounding samples -> dropped
+    assert arr.shape == (0, 2, 61)
+    assert kept == []
+
+
+def test_pair_by_onset_drops_unmatched():
+    pairs = online_validation._pair_by_onset([0.0, 1.0, 2.0], [0.0, 2.0], tol=0.02)
+    assert pairs == [(0, 0), (2, 1)]  # the 1.0s offline trial has no online partner
+
+
+def test_cross_pipeline_tgm_identical_pipelines_match():
+    rng = np.random.default_rng(0)
+    X, y = _separable_timeseries(rng)
+    res = online_validation.cross_pipeline_tgm(X, X, y, _SETTINGS)
+    n_t = X.shape[2]
+    assert res["tgm_off"].shape == (n_t, n_t)
+    # same fits, same test data -> offline and online branches are identical
+    assert np.allclose(res["diag_off"], res["diag_on"])
+    assert res["diag_off"].max() > 0.9
+    assert (res["tgm_on"] >= 0.0).all() and (res["tgm_on"] <= 1.0).all()
+
+
+def test_cross_pipeline_tgm_degraded_online_loses_auc():
+    rng = np.random.default_rng(1)
+    X_off, y = _separable_timeseries(rng)
+    X_on = X_off + rng.normal(0, 8.0, X_off.shape)  # heavy noise wrecks separability
+    res = online_validation.cross_pipeline_tgm(X_off, X_on, y, _SETTINGS)
+    assert res["diag_on"].mean() < res["diag_off"].mean()
+
+
+def test_operating_point_degradation_identical_pipelines_pass():
+    rng = np.random.default_rng(2)
+    X, y = _separable_timeseries(rng)
+    res = online_validation.operating_point_degradation(
+        X, X, y, _SETTINGS, timepoint_idx=2, n_boot=200,
+        rng=np.random.default_rng(0))
+    assert np.isclose(res["auc_off"], res["auc_on"])
+    assert abs(res["delta"]) < 1e-9
+    assert res["passed"] is True
+
+
+def test_operating_point_degradation_degraded_online_drops():
+    rng = np.random.default_rng(3)
+    X_off, y = _separable_timeseries(rng)
+    X_on = X_off + rng.normal(0, 8.0, X_off.shape)
+    res = online_validation.operating_point_degradation(
+        X_off, X_on, y, _SETTINGS, timepoint_idx=2, n_boot=200,
+        rng=np.random.default_rng(0))
+    assert res["auc_on"] < res["auc_off"]
+    assert res["pct_drop"] > 0.0
+    assert 0.0 <= res["auc_on"] <= 1.0
