@@ -98,29 +98,31 @@ config:
     subGraphTitleMargin:
       top: 6
       bottom: 16
+    rankSpacing: 30
+    nodeSpacing: 30
 ---
 flowchart TB
-    subgraph P1["<b>Phase 1 — Offline Calibration</b>"]
+    subgraph P1["<span style='font-size:20px'><b>Phase 1 - Offline Calibration</b></span>"]
         direction LR
-        Data1["<b>Recorded EEG</b><br>Labelled functional-localizer recording with category markers"]
-        Pre1["<b>Preprocessing & ICA</b><br>Epoch · channel hygiene · causal band-pass · 50 Hz notch · downsample · interpolate bad channels · average reference · ICA"]
-        Train1["<b>MVPA Training & TGM</b><br>Per task: classifier trained at every timepoint (5-fold CV, AUC) → temporal-generalization matrix"]
-        Sel1["<b>Model Evaluation & Selection</b><br>Operator picks each decoder's timepoint (TGM diagonal peak). Final decoder fitted at that slice"]
+        Data1["<span style='font-size:20px'><b>Recorded EEG</b></span><br>Labelled functional-localizer recording with category markers"]
+        Pre1["<span style='font-size:20px'><b>Preprocessing & ICA</b></span><br>Epoch · channel hygiene · causal band-pass · 50 Hz notch · downsample · interpolate bad channels · average reference · ICA"]
+        Train1["<span style='font-size:20px'><b>MVPA Training & TGM</b></span><br>Per task: classifier trained at every timepoint (5-fold CV, AUC) → temporal-generalization matrix"]
+        Sel1["<span style='font-size:20px'><b>Model Evaluation & Selection</b></span><br>Operator picks each decoder's timepoint (TGM diagonal peak). Final decoder fitted at that slice"]
         Data1 --> Pre1 --> Train1 --> Sel1
     end
 
-    Pipe@{ shape: doc, label: "<b>Decoder Pipeline (decoder_pipeline.joblib)</b><br>per-task decoders · frozen preprocessing operators · decoding time-points" }
+    Pipe@{ shape: doc, label: "<span style='font-size:20px'><b>Decoder Pipeline (decoder_pipeline.joblib)</b></span><br>per-task decoders · frozen preprocessing operators · decoding time-points" }
 
-    subgraph P2["<b>Phase 2 — Online Inference</b>"]
+    subgraph P2["<span style='font-size:20px'><b>Phase 2 - Online Inference</b></span>"]
         direction LR
-        Stream2["<b>Live LSL Stream</b><br>65-channel LSL @ 1000 Hz (64 EEG + 1 event channel); non-blocking reads"]
-        Filt2["<b>Causal, stateful filtering</b><br>40-sample micro-batches; filters carry state across batches; frozen spatial operators replayed exactly"]
-        Inf2["<b>Inference Engine</b><br>Stateless - applies each frozen decoder to the batch → per-task reactivation probabilities"]
-        Dec2["<b>Decision Logic & Thresholding</b><br>Fires the trigger when a decoder stays above threshold for a sustained interval"]
+        Stream2["<span style='font-size:20px'><b>Live LSL Stream</b></span><br>65-channel LSL @ 1000 Hz (64 EEG + 1 event channel); non-blocking reads"]
+        Filt2["<span style='font-size:20px'><b>Causal, stateful filtering</b></span><br>40-sample micro-batches; filters carry state across batches; frozen spatial operators replayed exactly"]
+        Inf2["<span style='font-size:20px'><b>Inference Engine</b></span><br>Stateless - applies each frozen decoder to the batch → per-task reactivation probabilities"]
+        Dec2["<span style='font-size:20px'><b>Decision Logic & Thresholding</b></span><br>Fires the trigger when a decoder stays above threshold for a sustained interval"]
         Stream2 --> Filt2 --> Inf2 --> Dec2
     end
 
-    Interv["<b>Closed-loop intervention</b><br>Reactivation cue time-locked to the trigger"]
+    Interv["<span style='font-size:20px'><b>Closed-loop intervention</b></span><br>Reactivation cue time-locked to the trigger"]
 
     Sel1 -->|export| Pipe
     Pipe -->|load| P2
