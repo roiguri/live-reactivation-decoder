@@ -26,7 +26,7 @@ Requirements: Node.js on PATH (`npx` fetches mermaid-cli on first run). Keep eac
   * *Arrow 1 (to Offline Calibration):* Offline recording (category examples)
   * *Arrow 2 (to Live Inference):* EEG LSL stream
 * **Center — Reactivation Decoder Software** (container; subtitle *"PyQt application containing the full pipeline for lab researchers"*): two inner boxes forming the spine —
-  * Offline Calibration — *Train per-category decoders from labelled EEG*; emits the **frozen decoders (one per category)** into…
+  * Offline Calibration — *Train per-category decoders from labeled EEG*; emits the **frozen decoders (one per category)** into…
   * Live Inference — *Detect category reactivation in real time*; receives the LSL stream and the frozen decoders, and emits the trigger.
   * The acquisition's two arrows land **directly on the inner boxes** (offline recording → Offline Calibration, LSL → Live Inference), and the trigger exits **from the Live Inference box**.
 * **Right — Trigger output:** Digital trigger emitted by Live Inference, available for downstream closed-loop use (drawn dashed — designed, not yet deployed).
@@ -47,7 +47,7 @@ flowchart LR
     %% NOTE: no `direction TB` here — inheriting the parent LR direction is what
     %% lets the external arrows attach to the inner boxes instead of the border.
     subgraph Software["<center><b>Reactivation Decoder Software</b><br>PyQt application containing the full pipeline for lab researchers</center>"]
-        Off["<b>Offline Calibration</b><br>Train per-category decoders from labelled EEG"]
+        Off["<b>Offline Calibration</b><br>Train per-category decoders from labeled EEG"]
         On["<b>Live Inference</b><br>Detect category reactivation in real time"]
         Off -->|"frozen decoders (one per category)"| On
     end
@@ -104,7 +104,7 @@ config:
 flowchart TB
     subgraph P1["<span style='font-size:20px'><b>Phase 1 - Offline Calibration</b></span>"]
         direction LR
-        Data1["<span style='font-size:20px'><b>Recorded EEG</b></span><br>Labelled functional-localizer recording with category markers"]
+        Data1["<span style='font-size:20px'><b>Recorded EEG</b></span><br>Labeled functional-localizer recording with category markers"]
         Pre1["<span style='font-size:20px'><b>Preprocessing & ICA</b></span><br>Epoch · channel hygiene · causal band-pass · 50 Hz notch · downsample · interpolate bad channels · average reference · ICA"]
         Train1["<span style='font-size:20px'><b>MVPA Training & TGM</b></span><br>Per task: classifier trained at every timepoint (5-fold CV, AUC) → temporal-generalization matrix"]
         Sel1["<span style='font-size:20px'><b>Model Evaluation & Selection</b></span><br>Operator picks each decoder's timepoint (TGM diagonal peak). Final decoder fitted at that slice"]
@@ -133,54 +133,76 @@ flowchart TB
     linkStyle 8 stroke:#888,stroke-dasharray: 5 5;
 ```
 
+## **Figure 3: Offline Preprocessing Pipeline**
+
+**Location:** §3.2.1 (Offline Preprocessing and Training — "Preprocessing Deep Dive").
+
+**Purpose:** Show the offline preprocessing recipe as an ordered pipeline — one box per step, each leading with the *why* (key numbers in parentheses), in the actual `OfflinePreprocessor` order. Deeper altitude than Figure 2's single "Preprocessing & ICA" block.
+
+### **Blueprint Outline**
+
+* **Layout:** horizontal serpentine — steps 1–5 left→right on the top row, wrapping down to steps 6–9 running right→left on the bottom row (invisible row containers).
+* **Stages** (actual `OfflinePreprocessor` order; each description leads with the *why*, numbers in parentheses):
+  1. Load recording — read the recording and its markers (BrainVision; EEG channels only).
+  2. Channel hygiene — ensure known electrode positions (fix labels; drop non-cortical; montage).
+  3. High-pass — remove slow drift (0.1 Hz; causal, forward-only).
+  4. Notch Filter — suppress mains line noise (50 Hz).
+  5. Low-pass + downsample — band-limit and cut to the training rate (40 Hz LP; 1000 → 100 Hz, causal).
+  6. Bad-channel interpolation — reconstruct operator-marked bad channels (spherical spline).
+  7. Epoch — cut into labeled trials around each marker (−0.2 … +1.0 s). **Epoching is late** — after filtering and interpolation, not at ingestion.
+  8. Average reference — remove the signal shared across the scalp (mean of 64 channels).
+  9. ICA — remove artifact components (extended-infomax; ICLabel-suggested, operator-confirmed).
+* **Alignment & connector:** the two rows are **right-aligned** — row 2 is padded on the left with an invisible ghost box so its right edge matches row 1, putting Bad-channel interpolation directly under Low-pass + downsample. Mermaid can't attach a cross-row edge to a node (it docks to the row region), so the wrap arrow (Low-pass + downsample → Bad-channel interpolation) is drawn by hand after export.
+
+### **Mermaid Rendering**
+
+```mermaid
+---
+config:
+  flowchart:
+    nodeSpacing: 20
+    rankSpacing: 20
+---
+flowchart TB
+    subgraph row1[" "]
+        direction LR
+        Load["<span style='font-size:20px'><b>Load recording</b></span><br>Read the recording and its markers"]
+        Hygiene["<span style='font-size:20px'><b>Channel hygiene</b></span><br>Give each channel a correct label and known scalp position"]
+        HP["<span style='font-size:20px'><b>High-pass</b></span><br>Remove slow drift (0.1 Hz; causal, forward-only)"]
+        Notch["<span style='font-size:20px'><b>Notch Filter</b></span><br>Suppress mains line noise (50 Hz)"]
+        LPDown["<span style='font-size:20px'><b>Low-pass + downsample</b></span><br>Band-limit and cut to the training rate (40 Hz LP; 1000→100 Hz, causal)"]
+        Load --> Hygiene --> HP --> Notch --> LPDown
+    end
+    subgraph row2["&nbsp;"]
+        direction RL
+        Interp["<span style='font-size:20px'><b>Bad-channel interpolation</b></span><br>Keep bad channels from corrupting the average reference and ICA"]
+        Epoch["<span style='font-size:20px'><b>Epoch</b></span><br>Cut into labeled trials around each marker (-0.2…+1.0 s)"]
+        Ref["<span style='font-size:20px'><b>Average reference</b></span><br>Remove the signal shared across the scalp (mean of 64 channels)"]
+        ICA["<span style='font-size:20px'><b>ICA</b></span><br>Remove artifact components"]
+        Pad["<span style='font-size:20px'><b>Load recording</b></span><br>Read the recording and its markers"]
+        Interp --> Epoch --> Ref --> ICA
+        ICA ~~~ Pad
+    end
+    %% Row 2 is padded on the left with an invisible "ghost" box (a copy of Load recording) and
+    %% left-aligned to row 1 via `Load ~~~ Pad`, so the two rows are RIGHT-aligned (right edges match)
+    %% and Bad-channel interpolation lands directly under Low-pass + downsample.
+    %% The row-to-row connector (Low-pass + downsample --> Bad-channel interpolation) is added by hand
+    %% after export — Mermaid docks a cross-row edge to the row region, not the node.
+    Load ~~~ Pad
+
+    classDef ghost fill:transparent,stroke:transparent,color:transparent
+    class Pad ghost
+    style row1 fill:transparent,stroke:transparent
+    style row2 fill:transparent,stroke:transparent
+```
+
 ---
 
 # Planned Implementation Diagrams (descriptions only — Mermaid TBD)
 
 The figures below cover the Implementation chapter (§3.2–§3.3). They are described here first so we can agree scope and altitude before drawing; each keeps a distinct job so they don't duplicate Figure 2's overview. Numbering is internal to this blueprint and will be reconciled with the report's final figure numbers later.
 
-## **Figure 3: Offline Preprocessing Pipeline**
-
-**Location:** §3.2.1 (Offline Preprocessing and Training — "Preprocessing Deep Dive").
-
-**Purpose:** Show the fixed offline preprocessing recipe as an ordered pipeline and mark which fitted operators are extracted ("frozen") for reuse in Phase 2. Engineering audience; deeper altitude than Figure 2's single "Preprocessing & ICA" block.
-
-### **Blueprint Outline**
-
-* **Input:** Epoched EEG (−0.2 s … +1.0 s around each event; EEG channels only).
-* **Ordered stages** (hardcoded in `preprocessing_constants.py`, so offline and online cannot diverge):
-  1. Channel hygiene — drop non-cortical/mislabelled channels, apply standard montage.
-  2. Causal high-pass 0.1 Hz + low-pass 40 Hz (forward-only, so the live system can replicate without look-ahead).
-  3. Notch 50 Hz (line noise; needed because the shallow causal LP can't attenuate 50 Hz).
-  4. Downsample 1000 → 100 Hz (causal anti-alias filter + integer decimation).
-  5. Bad-channel interpolation (spherical spline, after operator marks bad channels).
-  6. Average reference (per-timepoint, inherently causal).
-  7. ICA (extended-Infomax) + ICLabel component labelling (operator confirms artefact components).
-* **Frozen-operators callout:** a side output collecting the operators reused live — ICA matrices, per-channel pre-whitener, bad-channel interpolation weights, components-to-remove set, channel-selection map — flowing toward the Phase-1→Phase-2 hand-off artifact.
-
-### **Mermaid Rendering**
-
-_To be built._
-
-## **Figure 4: Offline ↔ Online Preprocessing Correspondence**
-
-**Location:** §3.2.2 (Adaptations to Preprocessing); could also support §2.2.
-
-**Purpose:** Make the project's central claim visual — live preprocessing is *identical*, not merely similar, because fitted operators are frozen and replayed. This is the highest-value addition beyond the template's placeholders.
-
-### **Blueprint Outline**
-
-* **Two parallel columns**, Offline (left) and Online (right), step-aligned so each offline stage maps to its online counterpart.
-* **Filters (HP / notch / LP / decimation):** same coefficients both sides; offline runs over the whole recording, online applies them incrementally with carried filter state across micro-batches (stateful, causal).
-* **Spatial operators (channel selection, bad-channel interpolation, average reference, ICA artefact removal):** *fitted* offline; online applies them as **frozen matrices** — no re-estimation, an exact replay.
-* **Cross arrows:** frozen operators transferred offline → online (ICA matrices, pre-whitener, interpolation weights, component set, channel map).
-* **Takeaway label:** "filters = same math, carried state; spatial ops = exact frozen replay."
-
-### **Mermaid Rendering**
-
-_To be built._
-
-## **Figure 5: Online Real-Time Inference Loop**
+## **Figure 4: Online Real-Time Inference Loop**
 
 **Location:** §3.2.2 (Online Live Inference).
 
@@ -191,7 +213,7 @@ _To be built._
 * **Ingestion:** LSL stream (65 ch @ 1000 Hz) → non-blocking read on a dedicated background thread.
 * **Event split:** channel 65 (event channel) → rising-edge decode of packed parallel-port codes → markers, timestamped against the network clock.
 * **Batching:** fixed micro-batches of 40 raw samples (~25 updates/s); causal filters carry state across batch boundaries.
-* **Preprocessing:** applies the frozen operators (Figure 4) to each batch.
+* **Preprocessing:** applies the frozen operators (Figure 3) to each batch.
 * **Inference Engine:** per-task decoder → target-class probability (stateless).
 * **Decision Logic:** threshold + sustained-interval criterion → emits the trigger **within** the online stage.
 * **Outputs:** trigger → closed-loop intervention (external, dashed — mirrors Figure 1); probabilities → queued channel → UI (ring buffer + timer repaint); session logger (predictions / markers / triggers).
@@ -201,7 +223,7 @@ _To be built._
 
 _To be built._
 
-## **Figure 6: Hardware / Signal Path**
+## **Figure 5: Hardware / Signal Path**
 
 **Location:** §3.3 (Hardware Description).
 
@@ -218,7 +240,7 @@ _To be built._
 
 _To be built._
 
-## **Figure 7 (optional): UI / Threading Architecture**
+## **Figure 6 (optional): UI / Threading Architecture**
 
 **Location:** §3.2.3 (The User Interface). Nice-to-have — the prose stands on its own; include only if we want the threading model drawn.
 
