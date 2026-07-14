@@ -254,9 +254,12 @@ flowchart LR
 
 ### **Blueprint Outline**
 
-* **Ring (closed loop):** Subject → NeurOne amplifier (64 ch @ 1000 Hz) → LSLProxy (UDP → LSL bridge, Windows) → Reactivation Decoder app → *(dashed)* Closed-loop intervention (stimulus environment) → back to the Subject.
+* **Ring (closed loop):** Subject —*(direct electrode cable)*— NeurOne amplifier (64 ch @ 1000 Hz) —*raw UDP / Ethernet*→ **Acquisition PC (Windows)** → *(dashed)* Closed-loop intervention (stimulus environment) → back to the Subject.
+* **Acquisition PC is a container, not a single node:** it holds **LSLProxy** (receives the raw UDP and republishes it as an LSL stream) → **LSL stream (65 ch)** → **Reactivation Decoder app** (decode + decide). Both run on the *same* machine, so the LSL stream is a **local hand-off**, not a network hop to a separate computer.
+* **Scalp EEG → NeurOne is a direct hardwired connection** (the electrode bundle), drawn as a plain line with no arrowhead — not a data-flow arrow like the other hops.
 * **Solid = live acquisition path; dashed = the designed-but-not-deployed closed-loop leg** (trigger → intervention → subject), mirroring the dashed "downstream use" in Figures 1–2.
-* **Omitted for clarity:** the marker path in (Stimulus PC → parallel-port event codes → amplifier event channel, ch 65) — described in the §3.3 prose; can be added to the ring if wanted.
+* **Layout note (Mermaid vs. final image):** the loop is conceptually a **single-subject ring**, but Mermaid's layout engine (dagre) flips the whole chain if the return edge closes the ring *through the Acquisition PC cluster* — verified with mermaid-cli. So the Mermaid is drawn as an **open left-to-right chain** ending at the intervention (one Subject, on the left; no return edge). The `intervention / stimulus` return leg is therefore conceptual here — the **final generated image renders the true closed ring back to the single Subject**. Do **not** add a second Subject node to close it (a duplicate reads as two subjects and confuses image generation).
+* **Omitted for clarity:** the marker path (Stimulus PC → parallel-port event codes → amplifier event channel, ch 65) — described in the §3.3 prose; can be added to the ring if wanted.
 * **Note:** LSLProxy + its drivers are Windows components, so live acquisition is Windows-only.
 
 ### **Mermaid Rendering**
@@ -265,19 +268,21 @@ flowchart LR
 flowchart LR
     Subject["<span style='font-size:20px'><b>Subject</b></span>"]
     Amp["<span style='font-size:20px'><b>NeurOne amplifier</b></span><br>64 ch @ 1000 Hz"]
-    Proxy["<span style='font-size:20px'><b>LSLProxy</b></span><br>UDP → LSL bridge (Windows)"]
-    App["<span style='font-size:20px'><b>Reactivation Decoder app</b></span><br>decode + decide"]
+    subgraph AcqPC["<span style='font-size:20px'><b>Acquisition PC (Windows)</b></span>"]
+        direction LR
+        Proxy["<span style='font-size:20px'><b>LSLProxy</b></span><br>UDP → LSL bridge"]
+        App["<span style='font-size:20px'><b>Reactivation Decoder app</b></span><br>decode + decide"]
+        Proxy -->|"LSL stream 65 ch"| App
+    end
     Down["<span style='font-size:20px'><b>Closed-loop intervention</b></span><br>stimulus environment"]
 
-    Subject -->|scalp EEG| Amp
-    Amp -->|raw UDP / ethernet| Proxy
-    Proxy -->|LSL stream 65 ch| App
-    App -.->|trigger| Down
-    Down -.->|intervention| Subject
+    Subject ---|"scalp EEG (64 ch)"| Amp
+    Amp -->|"raw UDP / Ethernet"| Proxy
+    App -.->|"trigger (parallel port)"| Down
 
     classDef future stroke:#888,stroke-dasharray: 5 5,color:#555;
     class Down future;
-    linkStyle 3,4 stroke:#888,stroke-dasharray: 5 5;
+    linkStyle 3 stroke:#888,stroke-dasharray: 5 5;
 ```
 
 ### **Prompt for a realistic version (image generation)**
@@ -286,10 +291,11 @@ Use this to generate the real image that replaces the placeholder above — keep
 
 > Create a clean flat-vector technical diagram of a closed-loop EEG brain–computer-interface signal path, laid out left-to-right and looping back to the start. Use simplified but realistic illustrations of each component (not plain rectangles), joined by labeled arrows:
 > 1. **Subject** — a person wearing a 64-channel EEG cap with scalp electrodes.
-> 2. → *scalp EEG (64 ch)* → **NeurOne amplifier** — a small research EEG amplifier unit with a bundle of electrode cables.
-> 3. → *raw UDP / Ethernet* → **Acquisition PC running LSLProxy** — a desktop computer with a small "Windows" tag.
-> 4. → *LSL stream (65 ch)* → **Reactivation Decoder app** — a laptop whose screen shows a live probability chart.
-> 5. ⇢ *trigger (parallel port)* ⇢ **Closed-loop intervention** — a stimulus monitor / experiment PC showing a cue.
-> 6. ⇢ *intervention / stimulus* ⇢ back to the **Subject**, closing the loop.
+> 2. — *scalp EEG (64 ch)*, drawn as a **direct electrode cable with no arrowhead** — **NeurOne amplifier**, a small research EEG amplifier unit with a bundle of electrode cables; caption it exactly "64 ch @ 1000 Hz".
+> 3. a solid arrow labeled exactly *raw UDP / Ethernet* (keep this label) → **Acquisition PC (Windows)** — drawn as a **flat abstract rectangle / panel** (*not* a realistic 3D computer or tower), with the title *Acquisition PC* and a small **Windows logo mark at the top** of the rectangle. Inside it are two **plain abstract labeled blocks** (rounded rectangles, not device illustrations) running on the *same machine*:
+>     * **LSLProxy** — a plain labeled block (**no bridge or pictorial icon**); receives the raw UDP and republishes it as an LSL stream. It has **exactly one** outgoing arrow (the internal *LSL stream (65 ch)* to the app); draw no other arrows out of it.
+>     * that single internal arrow, labeled exactly *LSL stream (65 ch)*, a **local hand-off inside the PC**, → **Reactivation Decoder app** — drawn as a small **abstract application window** (thin title/menu bar on top, content area showing a live **predictions chart**), kept flat and schematic (an app-window mockup, *not* a laptop/monitor).
+> 4. ⇢ *trigger (parallel port)* ⇢ **Closed-loop intervention** — a stimulus monitor / experiment PC showing a cue.
+> 5. **one** single long dashed arc labeled *intervention / stimulus* running along the **bottom edge** of the whole diagram, from the Closed-loop intervention on the far right all the way back to the **Subject person** on the far left — it must terminate at the Subject (the person with the EEG cap), **not** at the NeurOne amplifier; label it **once**, and route it *under* the row of components (not circling the intervention monitor).
 >
-> Draw steps 5–6 (the closed-loop leg) faded / dashed to signal "designed, not yet deployed". Style: modern 2-D or isometric schematic, muted lavender-blue palette to match the abstract diagram, clear labels, white background, no photorealism — it must still read as a system flow diagram.
+> **This is a cyclic diagram with exactly ONE Subject.** Draw the Subject a single time (at the left); the return arc must end at that *same* subject person — do **not** draw a second subject box on the right, and do **not** loop the arc around the intervention monitor. Draw the closed-loop leg (steps 4–5) faded / dashed to signal "designed, not yet deployed". Keep LSLProxy and the app visually grouped inside one Acquisition PC enclosure. Style: modern 2-D schematic, muted lavender-blue palette to match the abstract diagram, clear correctly-spelled labels, white background, no photorealism — it must still read as a system flow diagram. **Deliberate contrast:** the physical hardware (Subject, NeurOne amplifier, Closed-loop intervention monitor) are simplified realistic illustrations, while the **Acquisition PC and its inner LSLProxy / app-window blocks are flat abstract panels** (a software-host boundary), *not* realistic computer illustrations. Render the Acquisition PC and its inner blocks with **gentle, soft styling** — thin light strokes, softly rounded corners, very light pastel fills, subtle soft shadow — so the software host looks light and airy rather than heavily outlined.
