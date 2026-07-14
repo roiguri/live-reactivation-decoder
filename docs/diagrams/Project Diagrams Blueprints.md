@@ -38,22 +38,22 @@ Requirements: Node.js on PATH (`npx` fetches mermaid-cli on first run). Keep eac
 ### **Mermaid Rendering**
 
 ```mermaid
-%%{init: {"flowchart": {"subGraphTitleMargin": {"top": 6, "bottom": 16}}}}%%
+%%{init: {"flowchart": {"subGraphTitleMargin": {"top": 10, "bottom": 34}}}}%%
 flowchart LR
     %% ---------- Left: single acquisition block ----------
-    Acq["<b>EEG Acquisition</b><br>Human subject · NeurOne + LSL"]
+    Acq["<span style='font-size:24px'><b>EEG Acquisition</b></span><br><span style='font-size:16px'>Human subject · NeurOne + LSL</span>"]
 
     %% ---------- Center: software container ----------
     %% NOTE: no `direction TB` here — inheriting the parent LR direction is what
     %% lets the external arrows attach to the inner boxes instead of the border.
-    subgraph Software["<center><b>Reactivation Decoder Software</b><br>PyQt application containing the full pipeline for lab researchers</center>"]
-        Off["<b>Offline Calibration</b><br>Train per-category decoders from labeled EEG"]
-        On["<b>Live Inference</b><br>Detect category reactivation in real time"]
+    subgraph Software["<center><span style='font-size:24px'><b>Reactivation Decoder Software</b></span><br><span style='font-size:16px'>PyQt application containing the full pipeline for lab researchers</span></center>"]
+        Off["<span style='font-size:24px'><b>Offline Calibration</b></span><br><span style='font-size:16px'>Train per-category decoders from labeled EEG</span>"]
+        On["<span style='font-size:24px'><b>Live Inference</b></span><br><span style='font-size:16px'>Detect category reactivation in real time</span>"]
         Off -->|"frozen decoders (one per category)"| On
     end
 
     %% ---------- Right: trigger output ----------
-    Use["<b>Downstream use</b><br>(closed-loop intervention)"]
+    Use["<span style='font-size:24px'><b>Downstream use</b></span><br><span style='font-size:16px'>(closed-loop intervention)</span>"]
 
     %% ---------- Flows ----------
     Acq -->|"offline recording<br>(category examples)"| Off
@@ -102,27 +102,27 @@ config:
     nodeSpacing: 30
 ---
 flowchart TB
-    subgraph P1["<span style='font-size:20px'><b>Phase 1 - Offline Calibration</b></span>"]
+    subgraph P1["<span style='font-size:24px'><b>Phase 1 - Offline Calibration</b></span>"]
         direction LR
-        Data1["<span style='font-size:20px'><b>Recorded EEG</b></span><br>Labeled functional-localizer recording with category markers"]
-        Pre1["<span style='font-size:20px'><b>Preprocessing & ICA</b></span><br>Epoch · channel hygiene · causal band-pass · 50 Hz notch · downsample · interpolate bad channels · average reference · ICA"]
-        Train1["<span style='font-size:20px'><b>MVPA Training & TGM</b></span><br>Per task: classifier trained at every timepoint (5-fold CV, AUC) → temporal-generalization matrix"]
-        Sel1["<span style='font-size:20px'><b>Model Evaluation & Selection</b></span><br>Operator picks each decoder's timepoint (TGM diagonal peak). Final decoder fitted at that slice"]
+        Data1["<span style='font-size:24px'><b>Recorded EEG</b></span><br><span style='font-size:16px'>Labeled functional-localizer recording with category markers</span>"]
+        Pre1["<span style='font-size:24px'><b>Preprocessing & ICA</b></span><br><span style='font-size:16px'>Epoch · channel hygiene · causal band-pass · 50 Hz notch · downsample · interpolate bad channels · average reference · ICA</span>"]
+        Train1["<span style='font-size:24px'><b>MVPA Training & TGM</b></span><br><span style='font-size:16px'>Per task: classifier trained at every timepoint (5-fold CV, AUC) → temporal-generalization matrix</span>"]
+        Sel1["<span style='font-size:24px'><b>Model Evaluation & Selection</b></span><br><span style='font-size:16px'>Operator picks each decoder's timepoint (TGM diagonal peak). Final decoder fitted at that slice</span>"]
         Data1 --> Pre1 --> Train1 --> Sel1
     end
 
-    Pipe@{ shape: doc, label: "<span style='font-size:20px'><b>Decoder Pipeline (decoder_pipeline.joblib)</b></span><br>per-task decoders · frozen preprocessing operators · decoding time-points" }
+    Pipe@{ shape: doc, label: "<span style='font-size:24px'><b>Decoder Pipeline (decoder_pipeline.joblib)</b></span><br><span style='font-size:16px'>per-task decoders · frozen preprocessing operators · decoding time-points</span>" }
 
-    subgraph P2["<span style='font-size:20px'><b>Phase 2 - Online Inference</b></span>"]
+    subgraph P2["<span style='font-size:24px'><b>Phase 2 - Online Inference</b></span>"]
         direction LR
-        Stream2["<span style='font-size:20px'><b>Live LSL Stream</b></span><br>65-channel LSL @ 1000 Hz (64 EEG + 1 event channel); non-blocking reads"]
-        Filt2["<span style='font-size:20px'><b>Causal, stateful filtering</b></span><br>40-sample micro-batches; filters carry state across batches; frozen spatial operators replayed exactly"]
-        Inf2["<span style='font-size:20px'><b>Inference Engine</b></span><br>Stateless - applies each frozen decoder to the batch → per-task reactivation probabilities"]
-        Dec2["<span style='font-size:20px'><b>Decision Logic & Thresholding</b></span><br>Fires the trigger when a decoder stays above threshold for a sustained interval"]
+        Stream2["<span style='font-size:24px'><b>Live LSL Stream</b></span><br><span style='font-size:16px'>65-channel LSL @ 1000 Hz (64 EEG + 1 event channel); non-blocking reads</span>"]
+        Filt2["<span style='font-size:24px'><b>Causal, stateful filtering</b></span><br><span style='font-size:16px'>40-sample micro-batches; filters carry state across batches; frozen spatial operators replayed exactly</span>"]
+        Inf2["<span style='font-size:24px'><b>Inference Engine</b></span><br><span style='font-size:16px'>Stateless - applies each frozen decoder to the batch → per-task reactivation probabilities</span>"]
+        Dec2["<span style='font-size:24px'><b>Decision Logic & Thresholding</b></span><br><span style='font-size:16px'>Fires the trigger when a decoder stays above threshold for a sustained interval</span>"]
         Stream2 --> Filt2 --> Inf2 --> Dec2
     end
 
-    Interv["<span style='font-size:20px'><b>Closed-loop intervention</b></span><br>Reactivation cue time-locked to the trigger"]
+    Interv["<span style='font-size:24px'><b>Closed-loop intervention</b></span><br><span style='font-size:16px'>Reactivation cue time-locked to the trigger</span>"]
 
     Sel1 -->|export| Pipe
     Pipe -->|load| P2
@@ -166,20 +166,20 @@ config:
 flowchart TB
     subgraph row1[" "]
         direction LR
-        Load["<span style='font-size:20px'><b>Load recording</b></span><br>Read the recording and its markers"]
-        Hygiene["<span style='font-size:20px'><b>Channel hygiene</b></span><br>Give each channel a correct label and known scalp position"]
-        HP["<span style='font-size:20px'><b>High-pass</b></span><br>Remove slow drift (0.1 Hz; causal, forward-only)"]
-        Notch["<span style='font-size:20px'><b>Notch Filter</b></span><br>Suppress mains line noise (50 Hz)"]
-        LPDown["<span style='font-size:20px'><b>Low-pass + downsample</b></span><br>Band-limit and cut to the training rate (40 Hz LP; 1000→100 Hz, causal)"]
+        Load["<span style='font-size:24px'><b>Load recording</b></span><br><span style='font-size:16px'>Read the recording and its markers</span>"]
+        Hygiene["<span style='font-size:24px'><b>Channel hygiene</b></span><br><span style='font-size:16px'>Give each channel a correct label and known scalp position</span>"]
+        HP["<span style='font-size:24px'><b>High-pass</b></span><br><span style='font-size:16px'>Remove slow drift (0.1 Hz; causal, forward-only)</span>"]
+        Notch["<span style='font-size:24px'><b>Notch Filter</b></span><br><span style='font-size:16px'>Suppress mains line noise (50 Hz)</span>"]
+        LPDown["<span style='font-size:24px'><b>Low-pass + downsample</b></span><br><span style='font-size:16px'>Band-limit and cut to the training rate (40 Hz LP; 1000→100 Hz, causal)</span>"]
         Load --> Hygiene --> HP --> Notch --> LPDown
     end
     subgraph row2["&nbsp;"]
         direction RL
-        Interp["<span style='font-size:20px'><b>Bad-channel interpolation</b></span><br>Keep bad channels from corrupting the average reference and ICA"]
-        Epoch["<span style='font-size:20px'><b>Epoch</b></span><br>Cut into labeled trials around each marker (-0.2…+1.0 s)"]
-        Ref["<span style='font-size:20px'><b>Average reference</b></span><br>Remove the signal shared across the scalp (mean of 64 channels)"]
-        ICA["<span style='font-size:20px'><b>ICA</b></span><br>Remove artifact components"]
-        Pad["<span style='font-size:20px'><b>Load recording</b></span><br>Read the recording and its markers"]
+        Interp["<span style='font-size:24px'><b>Bad-channel interpolation</b></span><br><span style='font-size:16px'>Keep bad channels from corrupting the average reference and ICA</span>"]
+        Epoch["<span style='font-size:24px'><b>Epoch</b></span><br><span style='font-size:16px'>Cut into labeled trials around each marker (-0.2…+1.0 s)</span>"]
+        Ref["<span style='font-size:24px'><b>Average reference</b></span><br><span style='font-size:16px'>Remove the signal shared across the scalp (mean of 64 channels)</span>"]
+        ICA["<span style='font-size:24px'><b>ICA</b></span><br><span style='font-size:16px'>Remove artifact components</span>"]
+        Pad["<span style='font-size:24px'><b>Load recording</b></span><br><span style='font-size:16px'>Read the recording and its markers</span>"]
         Interp --> Epoch --> Ref --> ICA
         ICA ~~~ Pad
     end
@@ -224,12 +224,12 @@ config:
 ---
 flowchart LR
     In[" "]
-    Batch["<span style='font-size:20px'><b>Micro-batching</b></span><br>Buffer fixed 40-sample batches (~25 updates/s)"]
-    Prep["<span style='font-size:20px'><b>Real-time preprocessing</b></span><br>Causal, stateful filtering + frozen spatial operators (exact replay of training)"]
-    Infer["<span style='font-size:20px'><b>Live inference</b></span><br>Score each category live → reactivation probability"]
-    Decide["<span style='font-size:20px'><b>Decision</b></span><br>Fire when a category stays above threshold for a sustained interval"]
-    Viz["<span style='font-size:20px'><b>Live visualization</b></span><br>Rolling probability chart"]
-    Log["<span style='font-size:20px'><b>Session log</b></span><br>Probabilities, markers, triggers"]
+    Batch["<span style='font-size:24px'><b>Micro-batching</b></span><br><span style='font-size:16px'>Buffer fixed 40-sample batches (~25 updates/s)</span>"]
+    Prep["<span style='font-size:24px'><b>Real-time preprocessing</b></span><br><span style='font-size:16px'>Causal, stateful filtering + frozen spatial operators (exact replay of training)</span>"]
+    Infer["<span style='font-size:24px'><b>Live inference</b></span><br><span style='font-size:16px'>Score each category live → reactivation probability</span>"]
+    Decide["<span style='font-size:24px'><b>Decision</b></span><br><span style='font-size:16px'>Fire when a category stays above threshold for a sustained interval</span>"]
+    Viz["<span style='font-size:24px'><b>Live visualization</b></span><br><span style='font-size:16px'>Rolling probability chart</span>"]
+    Log["<span style='font-size:24px'><b>Session log</b></span><br><span style='font-size:16px'>Probabilities, markers, triggers</span>"]
     Out[" "]
 
     In ==>|"EEG stream"| Batch
@@ -266,15 +266,15 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    Subject["<span style='font-size:20px'><b>Subject</b></span>"]
-    Amp["<span style='font-size:20px'><b>NeurOne amplifier</b></span><br>64 ch @ 1000 Hz"]
-    subgraph AcqPC["<span style='font-size:20px'><b>Acquisition PC (Windows)</b></span>"]
+    Subject["<span style='font-size:24px'><b>Subject</b></span>"]
+    Amp["<span style='font-size:24px'><b>NeurOne amplifier</b></span><br><span style='font-size:16px'>64 ch @ 1000 Hz</span>"]
+    subgraph AcqPC["<span style='font-size:24px'><b>Acquisition PC (Windows)</b></span>"]
         direction LR
-        Proxy["<span style='font-size:20px'><b>LSLProxy</b></span><br>UDP → LSL bridge"]
-        App["<span style='font-size:20px'><b>Reactivation Decoder app</b></span><br>decode + decide"]
+        Proxy["<span style='font-size:24px'><b>LSLProxy</b></span><br><span style='font-size:16px'>UDP → LSL bridge</span>"]
+        App["<span style='font-size:24px'><b>Reactivation Decoder app</b></span><br><span style='font-size:16px'>decode + decide</span>"]
         Proxy -->|"LSL stream 65 ch"| App
     end
-    Down["<span style='font-size:20px'><b>Closed-loop intervention</b></span><br>stimulus environment"]
+    Down["<span style='font-size:24px'><b>Closed-loop intervention</b></span><br><span style='font-size:16px'>stimulus environment</span>"]
 
     Subject ---|"scalp EEG (64 ch)"| Amp
     Amp -->|"raw UDP / Ethernet"| Proxy
