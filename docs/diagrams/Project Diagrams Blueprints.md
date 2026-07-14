@@ -227,18 +227,49 @@ _To be built._
 
 **Location:** §3.3 (Hardware Description).
 
-**Purpose:** The physical signal path and the closed-loop hardware, end to end.
+**Purpose:** Convey the closed-loop hardware signal path end to end. **Placeholder** — this Mermaid ring exists only to show the flow and is intended to be replaced with a real hardware image/diagram in the report.
 
 ### **Blueprint Outline**
 
-* **Acquisition:** Subject → NeurOne amplifier (64 ch @ 1000 Hz) → dedicated ethernet as raw UDP packets → **LSLProxy** (Windows bridging utility) → LSL stream (65 ch = 64 EEG + 1 event) → application.
-* **Marker path in:** Stimulus PC (PsychoPy) → parallel-port event codes → captured by the amplifier and recoded onto the event channel (ch 65).
-* **Closed-loop out:** application Decision Logic → digital trigger over the parallel port → stimulus PC (time-locks the intervention). Rendered per the trigger-status decision (dashed if designed-not-wired, solid if wired).
-* **Notes:** proxy + drivers are Windows components, so live acquisition is Windows-only; the output trigger reuses the same code encoding the acquisition side decodes, so interventions are recorded back into the stream.
+* **Ring (closed loop):** Subject → NeurOne amplifier (64 ch @ 1000 Hz) → LSLProxy (UDP → LSL bridge, Windows) → Reactivation Decoder app → *(dashed)* Closed-loop intervention (stimulus environment) → back to the Subject.
+* **Solid = live acquisition path; dashed = the designed-but-not-deployed closed-loop leg** (trigger → intervention → subject), mirroring the dashed "downstream use" in Figures 1–2.
+* **Omitted for clarity:** the marker path in (Stimulus PC → parallel-port event codes → amplifier event channel, ch 65) — described in the §3.3 prose; can be added to the ring if wanted.
+* **Note:** LSLProxy + its drivers are Windows components, so live acquisition is Windows-only.
 
 ### **Mermaid Rendering**
 
-_To be built._
+```mermaid
+flowchart LR
+    Subject["<span style='font-size:20px'><b>Subject</b></span>"]
+    Amp["<span style='font-size:20px'><b>NeurOne amplifier</b></span><br>64 ch @ 1000 Hz"]
+    Proxy["<span style='font-size:20px'><b>LSLProxy</b></span><br>UDP → LSL bridge (Windows)"]
+    App["<span style='font-size:20px'><b>Reactivation Decoder app</b></span><br>decode + decide"]
+    Down["<span style='font-size:20px'><b>Closed-loop intervention</b></span><br>stimulus environment"]
+
+    Subject -->|scalp EEG| Amp
+    Amp -->|raw UDP / ethernet| Proxy
+    Proxy -->|LSL stream 65 ch| App
+    App -.->|trigger| Down
+    Down -.->|intervention| Subject
+
+    classDef future stroke:#888,stroke-dasharray: 5 5,color:#555;
+    class Down future;
+    linkStyle 3,4 stroke:#888,stroke-dasharray: 5 5;
+```
+
+### **Prompt for a realistic version (image generation)**
+
+Use this to generate the real image that replaces the placeholder above — keep the same flow and labels, but draw realistic component illustrations instead of plain boxes:
+
+> Create a clean flat-vector technical diagram of a closed-loop EEG brain–computer-interface signal path, laid out left-to-right and looping back to the start. Use simplified but realistic illustrations of each component (not plain rectangles), joined by labeled arrows:
+> 1. **Subject** — a person wearing a 64-channel EEG cap with scalp electrodes.
+> 2. → *scalp EEG (64 ch)* → **NeurOne amplifier** — a small research EEG amplifier unit with a bundle of electrode cables.
+> 3. → *raw UDP / Ethernet* → **Acquisition PC running LSLProxy** — a desktop computer with a small "Windows" tag.
+> 4. → *LSL stream (65 ch)* → **Reactivation Decoder app** — a laptop whose screen shows a live probability chart.
+> 5. ⇢ *trigger (parallel port)* ⇢ **Closed-loop intervention** — a stimulus monitor / experiment PC showing a cue.
+> 6. ⇢ *intervention / stimulus* ⇢ back to the **Subject**, closing the loop.
+>
+> Draw steps 5–6 (the closed-loop leg) faded / dashed to signal "designed, not yet deployed". Style: modern 2-D or isometric schematic, muted lavender-blue palette to match the abstract diagram, clear labels, white background, no photorealism — it must still read as a system flow diagram.
 
 ## **Figure 6 (optional): UI / Threading Architecture**
 
