@@ -206,22 +206,51 @@ The figures below cover the Implementation chapter (§3.2–§3.3). They are des
 
 **Location:** §3.2.2 (Online Live Inference).
 
-**Purpose:** Show the live loop and its threading — from LSL ingestion to trigger, logging, and UI update — at ~25 Hz micro-batches. Deeper altitude than Figure 2's Phase-2 lane.
+**Purpose:** The live inference pipeline — the online counterpart to Figure 3 — showing how the incoming EEG stream becomes per-category reactivation probabilities, a trigger, and the live monitoring outputs. Abstract (no code / threading detail), but it explains the real-time mechanics (batching, causal-stateful filtering, threshold + sustain).
 
 ### **Blueprint Outline**
 
-* **Ingestion:** LSL stream (65 ch @ 1000 Hz) → non-blocking read on a dedicated background thread.
-* **Event split:** channel 65 (event channel) → rising-edge decode of packed parallel-port codes → markers, timestamped against the network clock.
-* **Batching:** fixed micro-batches of 40 raw samples (~25 updates/s); causal filters carry state across batch boundaries.
-* **Preprocessing:** applies the frozen operators (Figure 3) to each batch.
-* **Inference Engine:** per-task decoder → target-class probability (stateless).
-* **Decision Logic:** threshold + sustained-interval criterion → emits the trigger **within** the online stage.
-* **Outputs:** trigger → closed-loop intervention (external, dashed — mirrors Figure 1); probabilities → queued channel → UI (ring buffer + timer repaint); session logger (predictions / markers / triggers).
-* **Threading note:** background stream thread vs UI thread, decoupled by the queued channel.
+* **Input:** a tagged **EEG stream** arrow feeds the pipeline — the acquisition detail lives in Figures 1, 2 & 5, so it isn't repeated here.
+* **Spine (left→right), each box why-first:**
+  1. Micro-batching — buffer fixed 40-sample batches (~25 updates/s).
+  2. Real-time preprocessing — causal, stateful filtering + frozen spatial operators (exact replay of training; the operators frozen in Figure 3).
+  3. Live inference — score each category live → reactivation probability.
+  4. Decision — fire when a category stays above threshold for a sustained interval.
+* **Trigger out:** Decision emits a dashed **trigger** arrow; the closed-loop intervention box itself is shown in Figures 1, 2 & 5, so only the tag is kept here.
+* **Two live outputs** branch off the probability stream after Live inference: Live visualization (rolling probability chart) and Session log (probabilities, markers, triggers).
 
 ### **Mermaid Rendering**
 
-_To be built._
+```mermaid
+---
+config:
+  flowchart:
+    nodeSpacing: 25
+    rankSpacing: 30
+---
+flowchart LR
+    In[" "]
+    Batch["<span style='font-size:20px'><b>Micro-batching</b></span><br>Buffer fixed 40-sample batches (~25 updates/s)"]
+    Prep["<span style='font-size:20px'><b>Real-time preprocessing</b></span><br>Causal, stateful filtering + frozen spatial operators (exact replay of training)"]
+    Infer["<span style='font-size:20px'><b>Live inference</b></span><br>Score each category live → reactivation probability"]
+    Decide["<span style='font-size:20px'><b>Decision</b></span><br>Fire when a category stays above threshold for a sustained interval"]
+    Viz["<span style='font-size:20px'><b>Live visualization</b></span><br>Rolling probability chart"]
+    Log["<span style='font-size:20px'><b>Session log</b></span><br>Probabilities, markers, triggers"]
+    Out[" "]
+
+    In ==>|"EEG stream"| Batch
+    Batch --> Prep --> Infer --> Decide
+    Decide -.->|trigger| Out
+    Infer -->|probabilities| Viz
+    Infer --> Log
+
+    %% In/Out are invisible: the EEG stream and trigger are shown only as tagged arrows
+    %% (their source/target components live in Figures 1, 2 and 5).
+    classDef ghost fill:transparent,stroke:transparent,color:transparent
+    class In ghost
+    class Out ghost
+    linkStyle 4 stroke:#888,stroke-dasharray: 5 5;
+```
 
 ## **Figure 5: Hardware / Signal Path**
 
