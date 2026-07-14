@@ -74,47 +74,61 @@ flowchart LR
 
 ### **Blueprint Outline**
 
-* **Phase 1 Area (Offline Calibration):**  
-  * **Box:** Recorded EEG Data (.xdf / .vhdr)  
-  * **Box:** Preprocessing & ICA  
-  * **Box:** MVPA Training & TGM Evaluation  
-  * *Arrow linking to the bridge:* Export parameters  
-* **The Bridge (Shared State):**  
-  * **Database/File Icon:** Experiment Config & Trained Model (.joblib)  
-* **Phase 2 Area (Online Inference):**  
-  * **Box:** Live NeurOne LSL Stream  
-  * **Box:** Ring Buffer & Causal Filtering  
-  * **Box:** Inference Engine (pulls from The Bridge)  
-  * **Box:** Decision Logic & Thresholding  
-  * **Box:** Hardware Trigger via Parallel Port
+* **Phase 1 lane (Offline Calibration), left→right:**
+  * Recorded EEG (.xdf / .vhdr)
+  * Preprocessing & ICA
+  * MVPA Training & TGM
+  * Model Evaluation & Selection — *operator picks the decoding time-point*
+* **Hand-off — Decoder Pipeline (`decoder_pipeline.joblib`):** a document-shaped artifact sitting between the two lanes, bundling per-task decoders + frozen preprocessing operators + decoding time-points. Phase 1 *exports* it; Phase 2 *loads* it.
+* **Phase 2 lane (Online Inference), left→right:**
+  * Live LSL Stream
+  * Causal, stateful filtering
+  * Inference Engine
+  * Decision Logic & Thresholding — emits the trigger
+* **Output — Closed-loop intervention (stimulus environment):** outside the Phase 2 lane, reached by a dashed *trigger* arrow (designed, not yet deployed — mirrors Figure 1).
+
+> **Layout note.** Two horizontal swimlanes stacked vertically (parent `TB`, each lane `direction LR`); the hand-off flows straight down through the `Decoder Pipeline`. The pipeline attaches at the Phase-2 *lane* level because it provisions the whole online phase — the frozen operators feed the causal filtering and the decoders feed inference — which also sidesteps the inner-box border-attachment issue for the cross-lane edge. The pipeline uses Mermaid's `doc` (document) shape so it reads as a saved file, not a datastore.
 
 ### **Mermaid Rendering**
 
 ```mermaid
-flowchart TD
-    subgraph Phase1["Phase 1: Offline Calibration"]
-        Data1["Recorded EEG Data<br>(.xdf / .vhdr)"]
-        Pre1["Preprocessing & ICA"]
-        Train1["MVPA Training & TGM Evaluation"]
-        Data1 --> Pre1 --> Train1
+---
+config:
+  flowchart:
+    subGraphTitleMargin:
+      top: 6
+      bottom: 16
+---
+flowchart TB
+    subgraph P1["<b>Phase 1 — Offline Calibration</b>"]
+        direction LR
+        Data1["<b>Recorded EEG</b><br>Labelled functional-localizer recording with category markers"]
+        Pre1["<b>Preprocessing & ICA</b><br>Epoch · channel hygiene · causal band-pass · 50 Hz notch · downsample · interpolate bad channels · average reference · ICA"]
+        Train1["<b>MVPA Training & TGM</b><br>Per task: classifier trained at every timepoint (5-fold CV, AUC) → temporal-generalization matrix"]
+        Sel1["<b>Model Evaluation & Selection</b><br>Operator picks each decoder's timepoint (TGM diagonal peak). Final decoder fitted at that slice"]
+        Data1 --> Pre1 --> Train1 --> Sel1
     end
 
-    Bridge[("The Bridge (Shared State)<br>Experiment Config &<br>Trained Model (.joblib)")]
+    Pipe@{ shape: doc, label: "<b>Decoder Pipeline (decoder_pipeline.joblib)</b><br>per-task decoders · frozen preprocessing operators · decoding time-points" }
 
-    subgraph Phase2["Phase 2: Online Inference"]
-        Stream2["Live NeurOne LSL Stream"]
-        Buff2["Ring Buffer & Causal Filtering"]
-        Inf2["Inference Engine"]
-        Dec2["Decision Logic & Thresholding"]
-        Trig2["Hardware Trigger via Parallel Port<br>(designed, not yet deployed)"]
-        Stream2 --> Buff2 --> Inf2 --> Dec2 -.-> Trig2
+    subgraph P2["<b>Phase 2 — Online Inference</b>"]
+        direction LR
+        Stream2["<b>Live LSL Stream</b><br>65-channel LSL @ 1000 Hz (64 EEG + 1 event channel); non-blocking reads"]
+        Filt2["<b>Causal, stateful filtering</b><br>40-sample micro-batches; filters carry state across batches; frozen spatial operators replayed exactly"]
+        Inf2["<b>Inference Engine</b><br>Stateless - applies each frozen decoder to the batch → per-task reactivation probabilities"]
+        Dec2["<b>Decision Logic & Thresholding</b><br>Fires the trigger when a decoder stays above threshold for a sustained interval"]
+        Stream2 --> Filt2 --> Inf2 --> Dec2
     end
 
-    Train1 -->|Export parameters| Bridge
-    Bridge -.->|Pulls from| Inf2
+    Interv["<b>Closed-loop intervention</b><br>Reactivation cue time-locked to the trigger"]
+
+    Sel1 -->|export| Pipe
+    Pipe -->|load| P2
+    Dec2 -->|trigger| Interv
 
     classDef future stroke:#888,stroke-dasharray: 5 5,color:#555;
-    class Trig2 future;
+    class Interv future;
+    linkStyle 8 stroke:#888,stroke-dasharray: 5 5;
 ```
 
 ---
