@@ -196,12 +196,6 @@ flowchart TB
     style row2 fill:transparent,stroke:transparent
 ```
 
----
-
-# Planned Implementation Diagrams (descriptions only — Mermaid TBD)
-
-The figures below cover the Implementation chapter (§3.2–§3.3). They are described here first so we can agree scope and altitude before drawing; each keeps a distinct job so they don't duplicate Figure 2's overview. Numbering is internal to this blueprint and will be reconciled with the report's final figure numbers later.
-
 ## **Figure 4: Online Real-Time Inference Loop**
 
 **Location:** §3.2.2 (Online Live Inference).
@@ -299,19 +293,3 @@ Use this to generate the real image that replaces the placeholder above — keep
 > 6. ⇢ *intervention / stimulus* ⇢ back to the **Subject**, closing the loop.
 >
 > Draw steps 5–6 (the closed-loop leg) faded / dashed to signal "designed, not yet deployed". Style: modern 2-D or isometric schematic, muted lavender-blue palette to match the abstract diagram, clear labels, white background, no photorealism — it must still read as a system flow diagram.
-
-## **Figure 6 (optional): UI / Threading Architecture**
-
-**Location:** §3.2.3 (The User Interface). Nice-to-have — the prose stands on its own; include only if we want the threading model drawn.
-
-**Purpose:** Show the supervising-coordinator / session-as-gateway structure and how heavy work stays off the UI thread.
-
-### **Blueprint Outline**
-
-* **Gateway:** `AppSession` is the single boundary to the backend; a thin main window hosts a stack of screens (Phase1Screen, Phase2Screen); views/controls never reach past the session.
-* **Phase 1:** each long task (load, preprocess, cross-validate, train) runs in a worker on its own thread, reporting via async messages.
-* **Phase 2:** streaming loop on a background thread emits prediction/latency/error messages; a queued channel hands them to the UI thread, whose handlers only copy into ring buffers; a timer drives repaint — decoupling the ~25 Hz data rate from the display.
-
-### **Mermaid Rendering**
-
-_To be built._
