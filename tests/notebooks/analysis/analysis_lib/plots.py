@@ -174,6 +174,36 @@ def plot_tgm_matrix(tgm, times, title, ax=None):
     return im
 
 
+def plot_tgm_rect(tgm, train_times, test_times, title, ax=None, *, mark=None):
+    """Rectangular train-time × test-time AUC heatmap (test axis longer than train).
+
+    Same convention and colour scale as :func:`plot_tgm_matrix` — ``tgm[i, j]`` =
+    AUC training on ``train_times[i]``, testing on ``test_times[j]``, x reads
+    train time and y reads test time — but the FL-train and recall-test axes have
+    different spans/lengths, so it uses ``aspect="auto"`` and draws no diagonal
+    (there is no shared time axis). ``mark`` optionally stars a located cell
+    ``(train_t, test_t)`` in seconds (e.g. the whole-map argmax the headline
+    reports).
+    """
+    own_fig = ax is None
+    if own_fig:
+        fig, ax = plt.subplots(figsize=(6, 4.5))
+    x0, x1 = float(train_times[0]), float(train_times[-1])
+    y0, y1 = float(test_times[0]), float(test_times[-1])
+    im = ax.imshow(np.asarray(tgm).T, vmin=0.0, vmax=1.0, cmap="RdBu_r",
+                   origin="lower", extent=[x0, x1, y0, y1], aspect="auto")
+    ax.axvline(0.0, color="k", ls=":", lw=0.8)
+    ax.axhline(0.0, color="k", ls=":", lw=0.8)
+    if mark is not None:
+        ax.plot(float(mark[0]), float(mark[1]), marker="*", color="k",
+                markersize=11, markeredgecolor="white", markeredgewidth=0.6)
+    ax.set(title=title, xlabel="FL train time (s)", ylabel="recall test time (s)")
+    if own_fig:
+        fig.colorbar(im, ax=ax, fraction=0.046, label="AUC")
+        plt.tight_layout()
+    return im
+
+
 def plot_topomap_grid(patterns_by_task, info, *, ncols=2):
     """One topomap panel per task's spatial pattern, mirroring ``TopomapWidget``.
 

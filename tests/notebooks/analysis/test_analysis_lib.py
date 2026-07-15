@@ -232,6 +232,36 @@ def test_retrieval_trials_with_animate_inanimate_verb_names():
     ]
 
 
+def test_block_starts_opens_a_block_per_learning_phase():
+    """Two learning->retrieval cycles: a block opens at the first learning_verb
+    of each learning phase (the first one, and the first after any retrieval)."""
+    markers = _mk([
+        # block 0 — learning phase (two study cues), then retrieval phase
+        (0.0, 201, "learning_verb_1"),
+        (2.0, 211, "learning_animate_01"),
+        (4.0, 205, "learning_verb_5"),
+        (6.0, 215, "learning_inanimate_02"),
+        (10.0, 221, "retrieval_verb_1"),
+        (16.0, 85, "retrieval_end"),
+        (17.0, 225, "retrieval_verb_5"),
+        (23.0, 85, "retrieval_end"),
+        # block 1 — new learning phase, then retrieval
+        (30.0, 201, "learning_verb_1"),
+        (32.0, 211, "learning_animate_01"),
+        (36.0, 221, "retrieval_verb_1"),
+        (42.0, 85, "retrieval_end"),
+    ])
+    assert task_labels.block_starts(markers) == [0.0, 30.0]
+
+
+def test_block_starts_empty_when_no_learning_cues():
+    markers = _mk([
+        (0.0, 221, "retrieval_verb_1"),
+        (6.0, 85, "retrieval_end"),
+    ])
+    assert task_labels.block_starts(markers) == []
+
+
 def test_display_config_identity_and_targets():
     from analysis_lib import plots
 

@@ -181,6 +181,35 @@ def retrieval_trials(
     return out
 
 
+def block_starts(
+    markers: list[Marker], *, verb_re: re.Pattern = VERB_RE,
+    retrieval_re: re.Pattern = RETRIEVAL_VERB_RE,
+) -> list[float]:
+    """Onset ``t`` of each block — one couple-learning phase followed by its retrieval phase.
+
+    The couple task has no explicit block marker; blocks are its alternating
+    learning/retrieval phases. A new block opens at the first ``learning_verb_*``
+    study cue (:data:`VERB_RE`) seen after any ``retrieval_verb_*`` cue
+    (:data:`RETRIEVAL_VERB_RE`) — i.e. the first study cue of a fresh learning
+    phase; the very first learning cue opens block 0. Returns the block onset
+    times in marker order (same ``t`` unit as the input), so a trial at time
+    ``t`` is in block ``searchsorted(starts, t, side="right") - 1``.
+
+    Used to drop the earliest blocks (before couple associations are reliably
+    acquired) from the cross-domain test sets.
+    """
+    starts: list[float] = []
+    seen_retrieval = True  # so the first learning cue opens block 0
+    for m in markers:
+        if verb_re.match(m.name):
+            if seen_retrieval:
+                starts.append(m.t)
+                seen_retrieval = False
+        elif retrieval_re.match(m.name):
+            seen_retrieval = True
+    return starts
+
+
 def group_samples_by_label(trials: list[dict], *, key: str = "true_label") -> dict[str, list[float]]:
     """``{label: [t, ...]}`` from trial records, dropping null labels."""
     out: dict[str, list[float]] = {}

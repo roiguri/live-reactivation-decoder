@@ -89,6 +89,19 @@ def _extract_task_markers(ctx, raw, *, n_times=None) -> list[task_labels.Marker]
     return [task_labels.Marker(t=s, code=c, name=ctx.name_by_code[c]) for s, c in pairs]
 
 
+def task_block_starts(ctx, raw, *, n_times=None) -> list[float]:
+    """Raw-sample onset of each block (couple-learning phase) for block-based filtering.
+
+    Thin wrapper: pulls the recording's markers the same way the ``build_*``
+    builders do and delegates to :func:`analysis_lib.task_labels.block_starts`.
+    Trial records from those builders carry a raw-sample ``"t"``, so a trial is
+    in block ``searchsorted(starts, t, side="right") - 1`` — subset trials to the
+    later blocks by comparing against these starts.
+    """
+    markers = _extract_task_markers(ctx, raw, n_times=n_times)
+    return task_labels.block_starts(markers)
+
+
 def _epoch_by_group(out_samples, sfreq, fs_out, dc, trials, preds, *, tmin, tmax):
     """Shared plumbing: epoch a freshly-replayed prediction stream around labeled ``trials``.
 
