@@ -150,6 +150,70 @@ flowchart TB
     linkStyle 8 stroke:#9E9E9E,stroke-dasharray: 5 5;
 ```
 
+## **Figure 2b: Architectural Diagram (Titles Only)**
+
+**Location:** Section 3.1 (High-Level System Overview) — complementary to Figure 2.
+
+**Purpose:** A stripped-down companion to Figure 2 showing the same two-phase data flow with **titles only** (no per-block descriptions). Use it as a compact at-a-glance overview, or as a slide/figure where the detailed captions would be too dense; Figure 2 remains the fully-annotated version.
+
+### **Blueprint Outline**
+
+Identical topology and layout to Figure 2 (two stacked swimlanes, hand-off document between them, dashed trigger to the closed-loop intervention). The only change is that each node carries just its bold title — the descriptive subtitle spans are dropped.
+
+### **Mermaid Rendering**
+
+```mermaid
+---
+config:
+  themeVariables:
+    edgeLabelBackground: '#E8EEF6'
+  flowchart:
+    subGraphTitleMargin:
+      top: 6
+      bottom: 16
+    rankSpacing: 30
+    nodeSpacing: 30
+---
+flowchart TB
+    subgraph P1["<span style='font-size:24px'><b>Phase 1 - Offline Calibration</b></span>"]
+        direction LR
+        Data1["<span style='font-size:24px'><b>Recorded EEG</b></span>"]
+        Pre1["<span style='font-size:24px'><b>Preprocessing & ICA</b></span>"]
+        Train1["<span style='font-size:24px'><b>MVPA Training & TGM</b></span>"]
+        Sel1["<span style='font-size:24px'><b>Model Evaluation & Selection</b></span>"]
+        Data1 --> Pre1 --> Train1 --> Sel1
+    end
+
+    Pipe@{ shape: doc, label: "<span style='font-size:24px'><b>Offline to Online Adaptation</b></span>" }
+
+    subgraph P2["<span style='font-size:24px'><b>Phase 2 - Online Inference</b></span>"]
+        direction LR
+        Stream2["<span style='font-size:24px'><b>Live LSL Stream</b></span>"]
+        Filt2["<span style='font-size:24px'><b>Causal, stateful filtering</b></span>"]
+        Inf2["<span style='font-size:24px'><b>Inference Engine</b></span>"]
+        Dec2["<span style='font-size:24px'><b>Decision Logic & Thresholding</b></span>"]
+        Stream2 --> Filt2 --> Inf2 --> Dec2
+    end
+
+    Interv["<span style='font-size:24px'><b>Closed-loop intervention</b></span>"]
+
+    Sel1 -->|export| Pipe
+    Pipe -->|load| P2
+    Dec2 -->|trigger| Interv
+
+    classDef offline fill:#E3F2FD,stroke:#1E88E5,stroke-width:1.5px,color:#0D47A1,rx:8,ry:8;
+    classDef online fill:#E0F2F1,stroke:#00897B,stroke-width:1.5px,color:#004D40,rx:8,ry:8;
+    classDef artifact fill:#FFF8E1,stroke:#F9A825,stroke-width:1.5px,color:#E65100;
+    classDef future fill:#F5F5F5,stroke:#9E9E9E,stroke-width:1.5px,stroke-dasharray: 5 5,color:#616161,rx:8,ry:8;
+    class Data1,Pre1,Train1,Sel1 offline;
+    class Stream2,Filt2,Inf2,Dec2 online;
+    class Pipe artifact;
+    class Interv future;
+    style P1 fill:#F5FAFF,stroke:#90CAF9,rx:12,ry:12;
+    style P2 fill:#F1FAF9,stroke:#80CBC4,rx:12,ry:12;
+    linkStyle 8 stroke:#9E9E9E,stroke-dasharray: 5 5;
+```
+
 ## **Figure 3: Offline Preprocessing Pipeline**
 
 **Location:** §3.2.1 (Offline Preprocessing and Training — "Preprocessing Deep Dive").
