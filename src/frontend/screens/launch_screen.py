@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
 from frontend.styles.theme import (
     BG_LIGHT, BORDER_GRAY, CARD_WHITE, TEXT_MUTED, TEXT_PRIMARY,
 )
+from frontend.widgets.logo import logo_label
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,9 @@ class LaunchScreen(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.addStretch()
+
+        root.addWidget(logo_label(110), 0, Qt.AlignmentFlag.AlignHCenter)
+        root.addSpacing(16)
 
         title = QLabel("Live Reactivation Decoder")
         f = title.font()
