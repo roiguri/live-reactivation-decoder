@@ -7,10 +7,10 @@ This document contains the structural blueprints, purposes, and Mermaid renderin
 Every ```` ```mermaid ```` block below can be exported to PNG with [mermaid-cli](https://github.com/mermaid-js/mermaid-cli) reading **this Markdown file directly** — no separate `.mmd` files to maintain. From the repo root (PowerShell):
 
 ```powershell
-npx -p @mermaid-js/mermaid-cli mmdc -i "docs/diagrams/Project Diagrams Blueprints.md" -o "docs/diagrams/fig.png" -b white -s 3
+npx -p @mermaid-js/mermaid-cli mmdc -i "docs/diagrams/Project Diagrams Blueprints.md" -o "docs/diagrams/fig.png" -b white -s 4
 ```
 
-This emits one PNG per diagram, numbered in document order: `fig-1.png` (Figure 1), `fig-2.png` (Figure 2), and so on. Flags: `-b white` gives a white background (blends into a Google Doc / report page), `-s 3` renders at 3× for crisp text — raise it for higher resolution. To place a diagram in Google Docs (which cannot render Mermaid natively), export the PNG and use **Insert → Image → Upload from computer**.
+This emits one PNG per diagram, numbered in document order: `fig-1.png` (Figure 1), `fig-2.png` (Figure 2), and so on. Flags: `-b white` gives a white background (blends into a Google Doc / report page), `-s 4` renders at 4× for crisp text — raise it for higher resolution. To place a diagram in Google Docs (which cannot render Mermaid natively), export the PNG and use **Insert → Image → Upload from computer**.
 
 Requirements: Node.js on PATH (`npx` fetches mermaid-cli on first run). Keep each ```` ```mermaid ```` block free of trailing whitespace — mermaid-cli's Markdown reader errors on trailing spaces inside a fenced block.
 
@@ -38,7 +38,7 @@ Requirements: Node.js on PATH (`npx` fetches mermaid-cli on first run). Keep eac
 ### **Mermaid Rendering**
 
 ```mermaid
-%%{init: {"flowchart": {"subGraphTitleMargin": {"top": 10, "bottom": 34}}}}%%
+%%{init: {"themeVariables": {"edgeLabelBackground": "#E8EEF6"}, "flowchart": {"subGraphTitleMargin": {"top": 10, "bottom": 34}}}}%%
 flowchart LR
     %% ---------- Left: single acquisition block ----------
     Acq["<span style='font-size:24px'><b>EEG Acquisition</b></span><br><span style='font-size:16px'>Human subject · NeurOne + LSL</span>"]
@@ -60,10 +60,17 @@ flowchart LR
     Acq -->|EEG LSL stream| On
     On -->|trigger| Use
 
-    %% ---------- Styling: dashed = future / not yet deployed ----------
-    classDef future stroke:#888,stroke-dasharray: 5 5,color:#555;
+    %% ---------- Styling: semantic palette + rounded corners; dashed = future ----------
+    classDef offline fill:#E3F2FD,stroke:#1E88E5,stroke-width:1.5px,color:#0D47A1,rx:8,ry:8;
+    classDef online fill:#E0F2F1,stroke:#00897B,stroke-width:1.5px,color:#004D40,rx:8,ry:8;
+    classDef source fill:#ECEFF1,stroke:#607D8B,stroke-width:1.5px,color:#37474F,rx:8,ry:8;
+    classDef future fill:#F5F5F5,stroke:#9E9E9E,stroke-width:1.5px,stroke-dasharray: 5 5,color:#616161,rx:8,ry:8;
+    class Acq source;
+    class Off offline;
+    class On online;
     class Use future;
-    linkStyle 3 stroke:#888,stroke-dasharray: 5 5;
+    style Software fill:#FBFBFD,stroke:#CFD8DC,rx:12,ry:12;
+    linkStyle 3 stroke:#9E9E9E,stroke-dasharray: 5 5;
 ```
 
 ## **Figure 2: Architectural Diagram**
@@ -94,6 +101,8 @@ flowchart LR
 ```mermaid
 ---
 config:
+  themeVariables:
+    edgeLabelBackground: '#E8EEF6'
   flowchart:
     subGraphTitleMargin:
       top: 6
@@ -128,9 +137,17 @@ flowchart TB
     Pipe -->|load| P2
     Dec2 -->|trigger| Interv
 
-    classDef future stroke:#888,stroke-dasharray: 5 5,color:#555;
+    classDef offline fill:#E3F2FD,stroke:#1E88E5,stroke-width:1.5px,color:#0D47A1,rx:8,ry:8;
+    classDef online fill:#E0F2F1,stroke:#00897B,stroke-width:1.5px,color:#004D40,rx:8,ry:8;
+    classDef artifact fill:#FFF8E1,stroke:#F9A825,stroke-width:1.5px,color:#E65100;
+    classDef future fill:#F5F5F5,stroke:#9E9E9E,stroke-width:1.5px,stroke-dasharray: 5 5,color:#616161,rx:8,ry:8;
+    class Data1,Pre1,Train1,Sel1 offline;
+    class Stream2,Filt2,Inf2,Dec2 online;
+    class Pipe artifact;
     class Interv future;
-    linkStyle 8 stroke:#888,stroke-dasharray: 5 5;
+    style P1 fill:#F5FAFF,stroke:#90CAF9,rx:12,ry:12;
+    style P2 fill:#F1FAF9,stroke:#80CBC4,rx:12,ry:12;
+    linkStyle 8 stroke:#9E9E9E,stroke-dasharray: 5 5;
 ```
 
 ## **Figure 3: Offline Preprocessing Pipeline**
@@ -159,6 +176,8 @@ flowchart TB
 ```mermaid
 ---
 config:
+  themeVariables:
+    edgeLabelBackground: '#E8EEF6'
   flowchart:
     nodeSpacing: 20
     rankSpacing: 20
@@ -190,6 +209,8 @@ flowchart TB
     %% after export — Mermaid docks a cross-row edge to the row region, not the node.
     Load ~~~ Pad
 
+    classDef offline fill:#E3F2FD,stroke:#1E88E5,stroke-width:1.5px,color:#0D47A1,rx:8,ry:8;
+    class Load,Hygiene,HP,Notch,LPDown,Interp,Epoch,Ref,ICA offline;
     classDef ghost fill:transparent,stroke:transparent,color:transparent
     class Pad ghost
     style row1 fill:transparent,stroke:transparent
@@ -218,6 +239,8 @@ flowchart TB
 ```mermaid
 ---
 config:
+  themeVariables:
+    edgeLabelBackground: '#E8EEF6'
   flowchart:
     nodeSpacing: 25
     rankSpacing: 30
@@ -240,10 +263,14 @@ flowchart LR
 
     %% In/Out are invisible: the EEG stream and trigger are shown only as tagged arrows
     %% (their source/target components live in Figures 1, 2 and 5).
+    classDef online fill:#E0F2F1,stroke:#00897B,stroke-width:1.5px,color:#004D40,rx:8,ry:8;
+    classDef output fill:#F1F8F7,stroke:#4DB6AC,stroke-width:1.5px,color:#00695C,rx:8,ry:8;
+    class Batch,Prep,Infer,Decide online;
+    class Viz,Log output;
     classDef ghost fill:transparent,stroke:transparent,color:transparent
     class In ghost
     class Out ghost
-    linkStyle 4 stroke:#888,stroke-dasharray: 5 5;
+    linkStyle 4 stroke:#9E9E9E,stroke-dasharray: 5 5;
 ```
 
 ## **Figure 5: Hardware / Signal Path**
@@ -265,6 +292,7 @@ flowchart LR
 ### **Mermaid Rendering**
 
 ```mermaid
+%%{init: {"themeVariables": {"edgeLabelBackground": "#E8EEF6"}}}%%
 flowchart LR
     Subject["<span style='font-size:24px'><b>Subject</b></span>"]
     Amp["<span style='font-size:24px'><b>NeurOne amplifier</b></span><br><span style='font-size:16px'>64 ch @ 1000 Hz</span>"]
@@ -280,9 +308,14 @@ flowchart LR
     Amp -->|"raw UDP / Ethernet"| Proxy
     App -.->|"trigger (parallel port)"| Down
 
-    classDef future stroke:#888,stroke-dasharray: 5 5,color:#555;
+    classDef source fill:#ECEFF1,stroke:#607D8B,stroke-width:1.5px,color:#37474F,rx:8,ry:8;
+    classDef online fill:#E0F2F1,stroke:#00897B,stroke-width:1.5px,color:#004D40,rx:8,ry:8;
+    classDef future fill:#F5F5F5,stroke:#9E9E9E,stroke-width:1.5px,stroke-dasharray: 5 5,color:#616161,rx:8,ry:8;
+    class Subject,Amp,Proxy source;
+    class App online;
     class Down future;
-    linkStyle 3 stroke:#888,stroke-dasharray: 5 5;
+    style AcqPC fill:#FBFBFD,stroke:#CFD8DC,rx:12,ry:12;
+    linkStyle 3 stroke:#9E9E9E,stroke-dasharray: 5 5;
 ```
 
 ### **Prompt for a realistic version (image generation)**
