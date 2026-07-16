@@ -64,6 +64,12 @@ class Phase2Header(QWidget):
 
         layout.addStretch(1)
 
+        self._latency_label = QLabel("")
+        self._latency_label.setStyleSheet(
+            f"color: {TEXT_PRIMARY}; background: transparent; font-size: 10pt;"
+        )
+        layout.addWidget(self._latency_label)
+
     def set_status(self, text: str, *, color: str = TEXT_PRIMARY) -> None:
         """Update the status label text and tint."""
         self._status_label.setText(text)
@@ -74,3 +80,7 @@ class Phase2Header(QWidget):
     def set_target_text(self, text: str) -> None:
         """Update the target selector's label (e.g. ``Target: X (LSL)``)."""
         self._target_button.setText(text)
+
+    def set_latency_text(self, text: str) -> None:
+        """Update the latency comparison label (empty string hides it)."""
+        self._latency_label.setText(text)

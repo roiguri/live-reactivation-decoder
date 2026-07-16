@@ -54,6 +54,10 @@ def patched(monkeypatch, tmp_path):
         return proc
 
     monkeypatch.setattr(stream_source.subprocess, "Popen", _factory)
+    # start() runs `taskkill /F /IM LSLProxy.exe` via subprocess.run to reap
+    # orphaned proxies. Stub it so the test neither shells out nor routes that
+    # call through the Popen factory above (which would pollute `created`).
+    monkeypatch.setattr(stream_source.subprocess, "run", lambda *a, **k: None)
     monkeypatch.setattr(stream_source.os, "name", "nt")
     return proxy_path, created
 

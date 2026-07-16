@@ -97,7 +97,16 @@ class StreamWorker(QThread):
                 self.prediction_ready.emit(predictions, out_ts, batch_markers)
                 emit_ms = (time.perf_counter() - emit_started) * 1000.0
                 batch_processed = True
-                total_ms = (time.perf_counter() - batch_started) * 1000.0
+                total_ms = pull_ms + accumulation_ms + (time.perf_counter() - batch_started) * 1000.0
+
+                sample_to_decision_ms = None
+                try:
+                    correction = self.receiver.time_correction()
+                    sample_to_decision_ms = (
+                        self.receiver.local_clock() - (batch_end_ts + correction)
+                    ) * 1000.0
+                except Exception:
+                    logger.warning("sample_to_decision_ms unavailable this batch", exc_info=True)
 
                 # TODO(open): Consider moving diagnostics throttling/aggregation
                 # to a dedicated consumer. At the default 40-sample batch size
@@ -111,6 +120,7 @@ class StreamWorker(QThread):
                     "inference_ms": inference_ms,
                     "emit_ms": emit_ms,
                     "total_ms": total_ms,
+                    "sample_to_decision_ms": sample_to_decision_ms,
                     "input_samples": int(batch_eeg.shape[0]),
                     "emitted_rows": int(np.asarray(out_ts).shape[0]),
                     "marker_count": len(batch_markers),

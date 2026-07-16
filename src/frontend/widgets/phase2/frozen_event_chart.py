@@ -168,7 +168,11 @@ class FrozenEventChart(pg.PlotWidget):
 
         self._configure_axes()
         self._add_h_line(y=_CHANCE_LEVEL, color=TEXT_MUTED, dashed=True, width=1.0)
-        self._add_h_line(y=self._threshold, color=ALERT_RED, dashed=True, width=1.2)
+        # Handle kept so the threshold guide can move with the applied decision
+        # config (set_threshold), staying in parity with the live chart.
+        self._threshold_line = self._add_h_line(
+            y=self._threshold, color=ALERT_RED, dashed=True, width=1.2
+        )
         # Onset line at x = 0. Always present (the window is defined relative
         # to it); its label carries the event name, set on each freeze.
         self._onset_line = self._add_v_line(
@@ -247,6 +251,11 @@ class FrozenEventChart(pg.PlotWidget):
             if code not in self._event_names:
                 continue
             self._pending.append({"ts": float(ts), "code": code})
+
+    def set_threshold(self, value: float) -> None:
+        """Move the threshold guide, kept in parity with the live chart's line."""
+        self._threshold = float(value)
+        self._threshold_line.setPos(self._threshold)
 
     def set_task_visible(self, name: str, visible: bool) -> None:
         """Show or hide a decoder's curve, kept in sync with the live chart's

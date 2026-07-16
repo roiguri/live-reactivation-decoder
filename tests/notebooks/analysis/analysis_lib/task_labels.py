@@ -1,215 +1,191 @@
-"""Retrieval-label alignment for the *task* (held-out) recording.
+"""Encoding/retrieval trial labeling for the real-time task's held-out phases.
 
-Unlike the functional localizer — where the EEG trigger codes *are* the
-stimulus identity (11-18) — the binding-task EEG markers encode trial **phase**
-events (BMR parallel-port codes; see
-``knowledge_base/02_reference/BMR Data Specification.md``), not which colour or
-scene. The identity lives in the behavioral metadata. These helpers parse the
-BrainVision ``.vmrk``, split Stage 2 / Stage 3 by their unique anchor codes, and
-join each Stage 3 retrieval trial to its colour/scene label so decoder epochs
-can be labeled and the FL-trained decoders run as an honest held-out test.
+**Encoding** markers directly name what was shown (``learning_<category>_NN``)
+— same marker-is-identity principle as the FL localizer, just anchored during
+the couple-learning block (see :func:`encoding_trials`).
 
-Pure / backend-free: functions take already-loaded markers / dicts so they unit
-test without MNE or disk. The notebook owns recording load + streaming.
+**Retrieval** is harder: a retrieval cue (``retrieval_verb_*``) only names
+which verb is being probed, not which image category it was paired with. That
+pairing is recovered from the *encoding* markers earlier in the same
+recording: ``learning_verb_*`` is immediately followed by
+``learning_<category>_NN`` on every encoding repeat of that couple (see
+``experiment_config.realtime_animacy.yaml``), so majority-voting each verb's
+paired category across its repeats gives a robust ``verb -> category`` map.
+Retrieval trials are then labeled with that category as their ground-truth
+``true_label``.
+
+A verb's identity is whatever follows ``learning_verb_``/``retrieval_verb_``
+in its marker name — an opaque string, not assumed numeric. This lets it work
+unchanged whether a config names verbs by bare index (``learning_verb_5``, as
+in ``experiment_config.realtime_animacy.yaml``) or spells out the known
+category (``learning_verb_animate_1``, as in
+``experiment_config.realtime_animacy_verb_labels.yaml``) — same verb, same
+identity string, matched consistently between its encoding and retrieval
+occurrences either way.
+
+Both let the FL-trained decoders be scored as an honest held-out test —
+encoding as a same-modality (perception) sanity check, retrieval as the real
+reactivation-from-memory question.
+
+Pure / backend-free: functions take already-parsed ``(t, code, name)`` marker
+rows — e.g. straight from a live run's ``markers.csv``
+(:func:`analysis_lib.streaming.load_live_run`) — so they unit test without MNE
+or disk. ``t`` is whatever time axis the caller used (seconds); only relative
+order and marker names matter here.
 """
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from collections import Counter
+from typing import NamedTuple, Optional
 
-# --- BMR trigger codes (data spec, "Trigger Code Reference") ---
-SHOW_BINDING = 41     # Stage 2 learning: object (colour+scene) shown  (binding order)
-PROBE = 71            # Stage 3: show probe cue           (unique to Stage 3)
-SHOW_OBJECT = 51      # shared: show object in retrieval   (Stage 2 test + Stage 3)
-START_RETRIEVAL = 53  # shared: start retrieval window     (Stage 2 test + Stage 3)
-ANSWER_RETRIEVAL = 54 # shared: answer during retrieval
-REMEMBER_Q = 55       # Stage 2 test: "what do you remember?"  (unique to Stage 2 test)
+_IMAGE_RE = re.compile(r"^([a-zA-Z]+)_\d+$")
 
-# behavioral keys that sit beside the object key in a trial dict (across files)
-_NON_OBJECT_KEYS = ("retrival_success", "retrival_report_color",
-                    "retrival_report_scene", "trial_times")
+# Defaults match the marker *names* in experiment_config.realtime_animacy.yaml's
+# markers_mapping. They're overridable per-call, and public so a caller can
+# validate them against a loaded config's ctx.event_mapping (see
+# sources.build_retrieval_epochs) instead of assuming a renamed config still
+# matches these string literals. The captured group is a verb's identity —
+# whatever follows the prefix, e.g. "5" or "animate_1" — not necessarily numeric.
+VERB_RE = re.compile(r"^learning_verb_(.+)$")
+RETRIEVAL_VERB_RE = re.compile(r"^retrieval_verb_(.+)$")
+RETRIEVAL_END = "retrieval_end"
+RECALL_KEY_PRESS = "recall_key_press"
 
 
-def parse_vmrk_text(text: str) -> list[tuple[int, int]]:
-    """Return ``[(code, sample), ...]`` for every ``Stimulus`` marker, in file order."""
-    out: list[tuple[int, int]] = []
-    for line in text.splitlines():
-        m = re.match(r"Mk\d+=Stimulus,S ?(\d+),(\d+),", line)
-        if m:
-            out.append((int(m.group(1)), int(m.group(2))))
+class Marker(NamedTuple):
+    t: float
+    code: int
+    name: str
+
+
+def category_of(image_name: str) -> Optional[str]:
+    """The category prefix of an image name (``"animate_02" -> "animate"``), or ``None``."""
+    m = _IMAGE_RE.match(image_name)
+    return m.group(1) if m else None
+
+
+def marker_groups_by_category(names: list[str]) -> dict[str, list[str]]:
+    """Pool ``names`` (e.g. ``ctx.event_mapping`` keys) by :func:`category_of`.
+
+    Names that don't match the ``<category>_<NN>`` convention are dropped.
+    """
+    out: dict[str, list[str]] = {}
+    for n in names:
+        cat = category_of(n)
+        if cat is not None:
+            out.setdefault(cat, []).append(n)
     return out
 
 
-def parse_vmrk(path: str | Path) -> list[tuple[int, int]]:
-    """``parse_vmrk_text`` over the file at ``path``."""
-    return parse_vmrk_text(Path(path).read_text())
-
-
-def stage3_markers(markers: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """Markers from the first :data:`PROBE` (71) onward — i.e. all of Stage 3.
-
-    Stage 3 is the only stage that emits code 71, so the first 71 cleanly marks
-    where Stage 2 ends and Stage 3 begins (codes 51/53/54 are reused across both).
-    """
-    idx = next((i for i, (c, _) in enumerate(markers) if c == PROBE), None)
-    return markers[idx:] if idx is not None else []
-
-
-def samples_of(markers: list[tuple[int, int]], code: int) -> list[int]:
-    """Sample indices of every marker with trigger ``code``, in order."""
-    return [s for c, s in markers if c == code]
-
-
-def object_of(trial: dict) -> str:
-    """The object name key inside a partial_retrival / true_answers trial dict."""
-    return next(k for k in trial if k not in _NON_OBJECT_KEYS)
-
-
-def stage3_trials(
-    markers: list[tuple[int, int]],
-    partial_retrival: dict[str, dict],
-    *,
-    anchor_code: int = START_RETRIEVAL,
-    true_label_of: dict[str, str] | None = None,
+def group_couple_trials(
+    markers: list[Marker], *, verb_re: re.Pattern = VERB_RE, image_prefix: str = "learning_"
 ) -> list[dict]:
-    """Join Stage 3 anchor markers to ``partial_retrival`` trials, in order.
+    """One record per encoding repeat: pairs a verb cue with the image that follows it.
 
-    Order alignment is reliable because the per-trial marker sequence is fixed
-    and the anchor count matches the trial count exactly (validate independently
-    with :func:`gap_residuals`). Each record carries the EEG ``sample`` of
-    ``anchor_code`` plus the trial's labels/covariates:
-
-    - ``reported_label``: the feature the subject reported (``subject_answer``)
-    - ``true_label``: the cued category's ground-truth feature, if ``true_label_of``
-      (object -> feature) is supplied; else ``None``
-    - ``probe`` (``colors``/``scenes``), ``is_remember``, ``object``, ``trial``
-
-    Raises if the anchor count and trial count disagree (alignment unsafe).
+    Returns ``[{"t", "verb", "image", "category"}, ...]`` in marker order.
     """
-    s3 = stage3_markers(markers)
-    anchors = samples_of(s3, anchor_code)
-    trials = list(partial_retrival.items())
-    if len(anchors) != len(trials):
-        raise ValueError(
-            f"Stage 3 anchor(code={anchor_code}) count {len(anchors)} "
-            f"!= partial_retrival trials {len(trials)} — alignment unsafe"
-        )
     out: list[dict] = []
-    for sample, (tid, v) in zip(anchors, trials):
-        obj = object_of(v)
-        d = v[obj]
+    for i, m in enumerate(markers):
+        vm = verb_re.match(m.name)
+        if not vm:
+            continue
+        nxt = markers[i + 1] if i + 1 < len(markers) else None
+        if nxt is None or not nxt.name.startswith(image_prefix):
+            continue
+        image = nxt.name[len(image_prefix):]
+        cat = category_of(image)
+        if cat is None:
+            continue
+        out.append({"t": m.t, "verb": vm.group(1), "image": image, "category": cat})
+    return out
+
+
+def encoding_trials(
+    markers: list[Marker], *, verb_re: re.Pattern = VERB_RE, image_prefix: str = "learning_"
+) -> list[dict]:
+    """One record per encoding image onset — the image marker *is* the stimulus identity.
+
+    Unlike retrieval, no verb-pairing is needed: ``learning_<category>_NN``
+    directly names what was shown, same marker-is-identity principle as the
+    FL localizer, just anchored during the couple-learning block instead.
+    ``learning_verb_N`` cue markers are skipped (they're not image onsets).
+
+    Returns ``[{"t", "image", "true_label"}, ...]`` in marker order.
+    """
+    out: list[dict] = []
+    for m in markers:
+        if verb_re.match(m.name) or not m.name.startswith(image_prefix):
+            continue
+        image = m.name[len(image_prefix):]
+        cat = category_of(image)
+        if cat is None:
+            continue
+        out.append({"t": m.t, "image": image, "true_label": cat})
+    return out
+
+
+def verb_categories(couple_trials: list[dict]) -> dict[str, str]:
+    """Majority-vote category per verb identity across its encoding repeats.
+
+    Raises if any verb's repeats disagree — the couple is supposed to be fixed
+    for the whole session, so a disagreement means something upstream (marker
+    parsing, or the recording itself) is misaligned.
+    """
+    by_verb: dict[str, list[str]] = {}
+    for t in couple_trials:
+        by_verb.setdefault(t["verb"], []).append(t["category"])
+    out: dict[str, str] = {}
+    for verb, cats in by_verb.items():
+        counts = Counter(cats)
+        if len(counts) > 1:
+            raise ValueError(f"verb {verb} paired with inconsistent categories: {dict(counts)}")
+        out[verb] = cats[0]
+    return out
+
+
+def retrieval_trials(
+    markers: list[Marker], verb_category: dict[str, str], *,
+    retrieval_re: re.Pattern = RETRIEVAL_VERB_RE,
+    end_name: str = RETRIEVAL_END, recall_name: str = RECALL_KEY_PRESS,
+) -> list[dict]:
+    """One record per retrieval cue.
+
+    Returns ``[{"t", "verb", "true_label", "recalled"}, ...]``: ``t`` is the cue
+    onset (start of the recall window), ``true_label`` the category the cued
+    verb was encoded with (``None`` if the verb was never seen at encoding),
+    and ``recalled`` whether ``recall_name`` fired before the trial's
+    ``end_name`` marker.
+    """
+    out: list[dict] = []
+    i, n = 0, len(markers)
+    while i < n:
+        m = markers[i]
+        vm = retrieval_re.match(m.name)
+        if not vm:
+            i += 1
+            continue
+        verb = vm.group(1)
+        j = i + 1
+        recalled = False
+        while j < n and markers[j].name != end_name:
+            if markers[j].name == recall_name:
+                recalled = True
+            j += 1
         out.append({
-            "sample": int(sample),
-            "trial": tid,
-            "object": obj,
-            "probe": d["probe"],
-            "reported_label": d.get("subject_answer"),
-            "true_label": (true_label_of or {}).get(obj),
-            "is_remember": d.get("is_remember"),
-            "retrival_success": v.get("retrival_success"),
+            "t": m.t, "verb": verb,
+            "true_label": verb_category.get(verb),
+            "recalled": recalled,
         })
+        i = j + 1
     return out
 
 
-def stage2_region(markers: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """Markers *before* the first :data:`PROBE` (71) — the Stage 2 binding block.
-
-    Codes 51/53/54 are reused by Stage 2 test and Stage 3, so the first 71 is the
-    clean Stage 2 / Stage 3 boundary. (The functional localizer is a separate
-    recording, so on the task file everything before Stage 3 is Stage 2.)
-    """
-    idx = next((i for i, (c, _) in enumerate(markers) if c == PROBE), len(markers))
-    return markers[:idx]
-
-
-def stage2_learning_trials(
-    markers: list[tuple[int, int]],
-    true_answers: dict[str, dict],
-    *,
-    anchor_code: int = SHOW_BINDING,
-) -> list[dict]:
-    """Join Stage 2 *learning* (encoding) markers to ``true_answers``, in binding order.
-
-    Learning is **perceptual**: the object is shown tinted a colour on a scene
-    background, so each trial carries BOTH a ``colour_label`` and a ``scene_label``
-    — the closest analogue to the decoders' FL training. Learning markers and
-    ``true_answers`` trials are both in binding order (keys ``"1".."45"``).
-    Raises if the counts disagree (alignment unsafe).
-    """
-    anchors = samples_of(stage2_region(markers), anchor_code)
-    trials = [true_answers[k] for k in sorted(true_answers, key=int)]
-    if len(anchors) != len(trials):
-        raise ValueError(
-            f"Stage 2 learning anchor(code={anchor_code}) count {len(anchors)} "
-            f"!= true_answers trials {len(trials)} — alignment unsafe")
-    out: list[dict] = []
-    for sample, v in zip(anchors, trials):
-        obj = object_of(v)
-        d = v[obj]
-        out.append({"sample": int(sample), "object": obj,
-                    "colour_label": d["colors"], "scene_label": d["scenes"]})
-    return out
-
-
-def stage2_test_trials(
-    markers: list[tuple[int, int]],
-    subject_answer: dict[str, dict],
-    combined_by_object: dict[str, dict],
-    *,
-    anchor_code: int = REMEMBER_Q,
-) -> list[dict]:
-    """Join Stage 2 *test* (retrieval) markers to ``subject_answer``, in test order.
-
-    Test is **recall**: the plain object is shown and the subject recalls the
-    binding. Labels are the binding's ground truth (``colour_label``/``scene_label``)
-    from ``combined_by_object`` (object -> combined.csv row); per-trial correctness
-    (``colour_correct``/``scene_correct``/``both_correct``) and ``difficulty`` are
-    carried through. Test markers and ``subject_answer`` trials are both in
-    test-presentation order (``trial_1..trial_45``). Raises on count mismatch.
-    """
-    anchors = samples_of(stage2_region(markers), anchor_code)
-    trials = [subject_answer[k] for k in sorted(subject_answer, key=lambda s: int(s.split("_")[1]))]
-    if len(anchors) != len(trials):
-        raise ValueError(
-            f"Stage 2 test anchor(code={anchor_code}) count {len(anchors)} "
-            f"!= subject_answer trials {len(trials)} — alignment unsafe")
-    out: list[dict] = []
-    for sample, v in zip(anchors, trials):
-        obj = object_of(v)
-        r = combined_by_object[obj]
-        out.append({"sample": int(sample), "object": obj,
-                    "colour_label": r["colors"], "scene_label": r["scenes"],
-                    "colour_correct": r["color_correct"] == "TRUE",
-                    "scene_correct": r["scene_correct"] == "TRUE",
-                    "both_correct": r["both_correct"] == "TRUE",
-                    "difficulty": r.get("difficulty")})
-    return out
-
-
-def group_samples_by_label(trials: list[dict], *, key: str = "true_label") -> dict[str, list[int]]:
-    """``{label: [sample, ...]}`` from Stage 3 trial records, dropping null labels."""
-    out: dict[str, list[int]] = {}
+def group_samples_by_label(trials: list[dict], *, key: str = "true_label") -> dict[str, list[float]]:
+    """``{label: [t, ...]}`` from trial records, dropping null labels."""
+    out: dict[str, list[float]] = {}
     for t in trials:
         lab = t.get(key)
         if lab is not None:
-            out.setdefault(lab, []).append(t["sample"])
+            out.setdefault(lab, []).append(t["t"])
     return out
-
-
-def gap_residuals(
-    anchor_samples: list[int], event_times_s: list[float], sfreq: float
-) -> list[float]:
-    """Per-pair ``|Δgap|`` (seconds) between EEG-marker spacing and metadata spacing.
-
-    Independent check that order-alignment is correct: the time *between*
-    consecutive anchor markers (from EEG samples) should match the time between
-    the corresponding behavioral timestamps. Near-zero residuals confirm the
-    i-th marker is the i-th trial. Lengths must match.
-    """
-    if len(anchor_samples) != len(event_times_s):
-        raise ValueError("anchor / event-time counts differ")
-    eeg = [(anchor_samples[i + 1] - anchor_samples[i]) / sfreq
-           for i in range(len(anchor_samples) - 1)]
-    meta = [event_times_s[i + 1] - event_times_s[i]
-            for i in range(len(event_times_s) - 1)]
-    return [abs(eeg[i] - meta[i]) for i in range(len(eeg))]

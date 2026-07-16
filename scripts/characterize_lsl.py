@@ -43,6 +43,31 @@ def _describe_stream(stream) -> str:
     )
 
 
+def channel_metadata(stream) -> list[dict[str, str]]:
+    """Return per-channel ``{label, unit, type}`` declared in the stream.
+
+    LSL carries this in the ``desc()`` XML (``channels/channel/{label,unit,type}``).
+    The NeurOne proxy may or may not populate ``unit`` — an empty value is
+    itself the finding we care about when checking the µV/V wire unit. Returns
+    an empty list if no channel metadata is advertised.
+    """
+    channels: list[dict[str, str]] = []
+    try:
+        node = stream.desc().child("channels").child("channel")
+        while not node.empty():
+            channels.append(
+                {
+                    "label": node.child_value("label"),
+                    "unit": node.child_value("unit"),
+                    "type": node.child_value("type"),
+                }
+            )
+            node = node.next_sibling()
+    except Exception:  # pragma: no cover - metadata shapes vary by producer
+        return []
+    return channels
+
+
 def list_streams(*, timeout_s: float = 3.0) -> list:
     """Return all currently visible LSL streams."""
 
@@ -178,6 +203,21 @@ def format_summary(summary: dict[str, Any]) -> str:
         f"Channel histogram: {summary['channel_count_histogram']}",
     ]
 
+    declared_channels = summary.get("declared_channels") or []
+    if declared_channels:
+        distinct_units = sorted({c.get("unit") or "<none>" for c in declared_channels})
+        lines.append(f"Declared channel units: {distinct_units}")
+        # Print each channel's label/unit/type for manual inspection of the wire
+        # unit (the µV-vs-V question behind LSL_TO_SI_SCALE).
+        lines.append("Declared channels (index: label [unit] type):")
+        for idx, ch in enumerate(declared_channels):
+            lines.append(
+                f"  {idx}: {ch.get('label') or '<none>'} "
+                f"[{ch.get('unit') or '<none>'}] {ch.get('type') or ''}".rstrip()
+            )
+    else:
+        lines.append("Declared channel units: <stream advertises no channel metadata>")
+
     if summary["inter_arrival_ms_mean"] is not None:
         lines.append(
             "Inter-arrival ms: "
@@ -220,6 +260,7 @@ def characterize_stream(
         verbose=verbose,
     )
     inlet = pylsl_module.StreamInlet(stream, recover=True)
+    declared_channels = channel_metadata(stream)
 
     if verbose:
         print(
@@ -280,6 +321,7 @@ def characterize_stream(
     summary = summarize_chunk_records(records, nominal_srate_hz=stream.nominal_srate())
     summary["stream_name"] = stream.name()
     summary["stream_type"] = stream.type()
+    summary["declared_channels"] = declared_channels
     return summary
 
 

@@ -19,6 +19,17 @@ from backend.core.preprocessing_constants import (
 logger = logging.getLogger(__name__)
 
 
+# LSL wire units -> SI volts. The NeurOne proxy (and the µV-emitting VHDR
+# replay) stream microvolts, but the offline pipeline and decoder are calibrated
+# in SI volts (MNE loads recordings in volts). Convert once at ingestion so the
+# DSP and classifier see the training unit space; otherwise features arrive ~1e6x
+# too large and predict_proba saturates to exactly 0/1. Proven against the lab
+# recording: physical µV / MNE-volts = 1e6 exactly, so µV -> V is 1e-6. If
+# characterize_lsl.py shows the proxy advertises a different unit, change this
+# single constant.
+LSL_TO_SI_SCALE = 1e-6
+
+
 class OnlinePreprocessor:
     """
     Stateful causal EEG preprocessor for the online phase.
@@ -121,10 +132,10 @@ class OnlinePreprocessor:
 
         logger.info(
             "OnlinePreprocessor ready: %d ch (%d good / %d bad), %g→%g Hz "
-            "(decim %d), HP %g Hz, notch %s Hz, LP %g Hz, %d ICA excluded",
+            "(decim %d), µV→SI ×%g, HP %g Hz, notch %s Hz, LP %g Hz, %d ICA excluded",
             self._n_eeg, len(self._good_indices), len(self._bad_indices),
             self._input_sfreq, self._target_sfreq, self._decimation,
-            HIGHPASS_L_FREQ,
+            LSL_TO_SI_SCALE, HIGHPASS_L_FREQ,
             NOTCH_FREQ if NOTCH_FREQ is not None else "off", LOWPASS_H_FREQ,
             len(self._ica_exclude),
         )
@@ -185,8 +196,11 @@ class OnlinePreprocessor:
         if eeg_batch.shape[0] == 0:
             return np.empty((0, self.n_channels)), np.empty((0,))
 
-        # Apply positional EEG hygiene.
+        # Apply positional EEG hygiene, then convert LSL wire units (µV) to the
+        # SI volts the DSP + decoder were trained in. astype(float) copies, so
+        # the in-place scale never mutates the caller's array.
         data = eeg_batch[:, self._eeg_chunk_indices].astype(float)
+        data *= LSL_TO_SI_SCALE
         data = self._apply_filter(data)
         # LP + decimate happen before the spatial transforms.
         data = self._apply_lowpass(data)

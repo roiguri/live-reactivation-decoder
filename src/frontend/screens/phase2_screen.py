@@ -26,6 +26,7 @@ from frontend.styles.theme import (
 )
 from frontend.widgets.live_probability_chart import LiveProbabilityChart
 from frontend.widgets.phase2 import (
+    DecisionPanel,
     FrozenEventView,
     Phase2Header,
     Phase2SettingsPanel,
@@ -40,15 +41,17 @@ logger = logging.getLogger(__name__)
 # stream (auto-halt vs. confirm). One-way for now — restart the app
 # to leave Phase 2.
 #
-# TODO: threshold is hardcoded; the config schema has no
-# ``decoders.threshold`` field yet. Once it does, read it from
-# ``session.settings["decoders"]["threshold"]``.
-_DEFAULT_THRESHOLD = 0.85
+# The decision threshold is no longer hardcoded here — it comes from
+# ``session.decision_config_defaults()`` and is operator-tunable via the
+# settings panel (both charts follow the applied value).
 # Fixed rolling-window width for the live probability chart. Operator
 # control over this (5 / 10 / 30 / 60 s) is Goal 15 in the M2 plan; until
-# then it's a single knob here, same altitude as _DEFAULT_THRESHOLD.
+# then it's a single knob here.
 _DEFAULT_WINDOW_SECONDS = 5.0
 _CHART_MAX_HEIGHT = 420
+# Rolling window (in batches) the header's latency comparison label averages
+# over. ~1s at the default 40-sample batch on a 1000 Hz stream (~25 batches/s).
+_LATENCY_ROLLING_WINDOW = 25
 
 
 class Phase2Screen(QWidget):
@@ -86,11 +89,16 @@ class Phase2Screen(QWidget):
             for name, code in settings.get("event_mapping", {}).items()
         }
 
+        # Applied decision settings (plain values), seeded from the backend
+        # defaults. Edited via the settings panel (apply-gated) and used to seed
+        # each new run's engine; the chart threshold line follows this.
+        self._decision_params = session.decision_config_defaults()
+
         self._chart = LiveProbabilityChart(
             task_names=task_names,
             window_seconds=_DEFAULT_WINDOW_SECONDS,
             target_sfreq=target_sfreq,
-            threshold=_DEFAULT_THRESHOLD,
+            threshold=self._decision_params["threshold"],
             event_names=event_names,
         )
         # Event-locked snapshot view (Goals 9 + 11): epochs each trigger
@@ -99,15 +107,22 @@ class Phase2Screen(QWidget):
         self._frozen = FrozenEventView(
             task_names=task_names,
             target_sfreq=target_sfreq,
-            threshold=_DEFAULT_THRESHOLD,
+            threshold=self._decision_params["threshold"],
             event_names=event_names,
         )
+        # Live latched-decision readout: one row per decoder, driven by the
+        # decision stream (on/off) and the prediction stream (probability).
+        self._decision_panel = DecisionPanel(task_colors=self._chart.task_colors)
         # Live target chosen by the operator via the header. None until a
         # target is selected; Start is guarded against a missing target.
         self._target: dict | None = None
         self._header = Phase2Header()
         self._header.choose_target_clicked.connect(self._on_choose_target)
-        self._settings_panel = Phase2SettingsPanel(task_colors=self._chart.task_colors)
+        self._settings_panel = Phase2SettingsPanel(
+            task_colors=self._chart.task_colors,
+            decision_defaults=self._decision_params,
+        )
+        self._settings_panel.decision_params_changed.connect(self._on_decision_params)
         # Decoder show/hide drives both charts so they stay in sync.
         self._settings_panel.task_visibility_toggled.connect(
             self._chart.set_task_visible
@@ -123,6 +138,10 @@ class Phase2Screen(QWidget):
 
         # The session is built lazily on Start, bound to the chosen target.
         self._live: LiveStreamSession | None = None
+        # Rolling latency samples for the header comparison label (see
+        # _on_latency); reset on every Start so a new session starts blank.
+        self._pipeline_ms_window: list[float] = []
+        self._e2e_ms_window: list[float] = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -148,6 +167,11 @@ class Phase2Screen(QWidget):
         live.prediction_ready.connect(
             self._on_predictions, Qt.ConnectionType.QueuedConnection
         )
+        live.latency_ready.connect(self._on_latency, Qt.ConnectionType.QueuedConnection)
+        if live.decision_ready is not None:
+            live.decision_ready.connect(
+                self._on_decision, Qt.ConnectionType.QueuedConnection
+            )
 
     def _on_predictions(
         self,
@@ -159,6 +183,41 @@ class Phase2Screen(QWidget):
         self._chart.append_markers(markers)
         self._frozen.append_predictions(predictions, out_ts)
         self._frozen.append_markers(markers)
+
+    def _on_decision(self, result) -> None:
+        # ``result`` is a DecisionResult, read duck-typed (no backend import).
+        self._decision_panel.update_decision(result)
+
+    def _on_decision_params(self, params: dict) -> None:
+        """Apply pressed in the settings panel: move the chart line and, if a run
+        is live, stage the new settings (they take effect on the next batch and
+        are logged). The values also seed the next run built from Start."""
+        self._decision_params = dict(params)
+        self._chart.set_threshold(params["threshold"])
+        self._frozen.set_threshold(params["threshold"])
+        if self._live is not None:
+            self._live.update_decision_config(params)
+
+    def _on_latency(self, payload: dict) -> None:
+        """Roll a short window of two competing latency definitions (see
+        StreamWorker.latency_ready) into the header label. Temporary,
+        side-by-side display — meant to be resolved to one metric after
+        comparing both against real lab hardware, not a final UI design.
+        """
+        self._pipeline_ms_window.append(payload["total_ms"])
+        del self._pipeline_ms_window[:-_LATENCY_ROLLING_WINDOW]
+
+        e2e_ms = payload.get("sample_to_decision_ms")
+        if e2e_ms is not None:
+            self._e2e_ms_window.append(e2e_ms)
+            del self._e2e_ms_window[:-_LATENCY_ROLLING_WINDOW]
+
+        pipeline_text = f"{sum(self._pipeline_ms_window) / len(self._pipeline_ms_window):.0f} ms"
+        e2e_text = (
+            f"{sum(self._e2e_ms_window) / len(self._e2e_ms_window):.0f} ms"
+            if self._e2e_ms_window else "n/a"
+        )
+        self._header.set_latency_text(f"Pipeline: {pipeline_text}  |  E2E: {e2e_text}")
 
     # ── target selection ───────────────────────────────────────────────────────
 
@@ -190,6 +249,10 @@ class Phase2Screen(QWidget):
         # starts visually blank.
         self._chart.reset_buffers()
         self._frozen.reset_buffers()
+        self._pipeline_ms_window.clear()
+        self._e2e_ms_window.clear()
+        self._header.set_latency_text("")
+        self._decision_panel.reset()
         self._start_halt_button.set_connecting()
         # Force the disabled "Connecting…" repaint before the blocking
         # LSL resolve so the operator sees the state change.
@@ -205,6 +268,7 @@ class Phase2Screen(QWidget):
                 self.decoder_pipeline_path,
                 log_dir=log_dir,
                 stream_name=self._target.get("stream_name"),
+                decision_params=self._decision_params,
             )
             self._wire_session(self._live)
             self._live.start()
@@ -238,6 +302,7 @@ class Phase2Screen(QWidget):
             self._live = None
         self._start_halt_button.set_idle()
         self._header.set_status("INFERENCE HALTED", color=TEXT_PRIMARY)
+        self._header.set_latency_text("")
 
     def closeEvent(self, event: QCloseEvent) -> None:
         # Stop the live session and the publishing source (proxy/replay).
@@ -254,12 +319,30 @@ class Phase2Screen(QWidget):
 
     # ── center panel ──────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _panel_title(text: str) -> QLabel:
+        """Compact uppercase section title, matching the center-panel headings."""
+        label = QLabel(text)
+        f = label.font()
+        f.setPointSize(9)
+        f.setWeight(QFont.Weight.DemiBold)
+        label.setFont(f)
+        label.setStyleSheet(
+            f"color: {TEXT_MUTED}; background: transparent; letter-spacing: 1px;"
+        )
+        return label
+
     def _build_chart_panel(self) -> QWidget:
         panel = QWidget()
         panel.setStyleSheet(f"background: {BG_LIGHT};")
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(32, 24, 32, 24)
         layout.setSpacing(8)
+
+        layout.addWidget(self._panel_title("LIVE DECISIONS"))
+        # The tiles are their own cards, so no outer card wrapper here.
+        layout.addWidget(self._decision_panel)
+        layout.addSpacing(8)
 
         title = QLabel("PROBABILITY ANALYSIS")
         tf = title.font()

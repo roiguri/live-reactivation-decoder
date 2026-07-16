@@ -14,6 +14,7 @@ import os
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -44,6 +45,7 @@ class _FakeLiveStreamSession(QObject):
     """
 
     prediction_ready = Signal(dict, object, list)
+    decision_ready = Signal(object)
     error_occurred = Signal(str)
     latency_ready = Signal(dict)
 
@@ -52,8 +54,12 @@ class _FakeLiveStreamSession(QObject):
         self.start_calls = 0
         self.stop_calls = 0
         self.raise_on_start: Exception | None = None
+        self.decision_config_updates: list[dict] = []
         self._started = False
         self._stopped = False
+
+    def update_decision_config(self, decision_params: dict) -> None:
+        self.decision_config_updates.append(dict(decision_params))
 
     def start(self) -> None:
         self.start_calls += 1
@@ -91,16 +97,27 @@ class _StubAppSession:
         self.settings = settings or _make_session_settings()
         self.start_source_calls = 0
         self.stop_source_calls = 0
+        # Real AppSession.start_stream_source is idempotent (reuses a running
+        # proxy). Track running state, not just raw call counts — Phase2Screen
+        # eagerly starts the source in __init__ and again on Start.
+        self.source_running = False
         self.last_stream_name: str | None = None
         self.last_log_dir: Any = None
+        self.last_decision_params: dict | None = None
+
+    def decision_config_defaults(self) -> dict:
+        return {"threshold": 0.85, "sustain_timepoints": 10}
 
     def new_phase2_log_dir(self):
         # Pure path; the fake session never writes, so no directory is created.
         return Path("/fake/phase2_live/20260607_000000")
 
-    def build_live_stream_session(self, decoder_pipeline_path, log_dir=None, *, stream_name=None):
+    def build_live_stream_session(
+        self, decoder_pipeline_path, log_dir=None, *, stream_name=None, decision_params=None
+    ):
         self.last_stream_name = stream_name
         self.last_log_dir = log_dir
+        self.last_decision_params = decision_params
         # Hand out a fresh fake on each call to mirror the real one-shot
         # semantics (the screen builds a new session on every Start).
         if getattr(self._live, "_handed_out", False):
@@ -112,9 +129,11 @@ class _StubAppSession:
 
     def start_stream_source(self) -> None:
         self.start_source_calls += 1
+        self.source_running = True
 
     def stop_stream_source(self) -> None:
         self.stop_source_calls += 1
+        self.source_running = False
 
     def discover_streams(self, timeout_sec: float = 3.0) -> list[str]:
         return ["NeuroneStream", "OtherStream"]
@@ -323,6 +342,89 @@ def test_prediction_ready_forwards_to_chart(screen_and_session) -> None:
     assert screen._chart._buffers[task_name][cap] == 0.1  # double-length mirror
 
 
+def test_latency_ready_updates_header_label(screen_and_session) -> None:
+    screen, fake, _, _ = screen_and_session
+    screen._start_halt_button.start_clicked.emit()
+
+    fake.latency_ready.emit({"total_ms": 12.0, "sample_to_decision_ms": 40.0})
+    QApplication.processEvents()
+
+    text = screen._header._latency_label.text()
+    assert "Pipeline: 12 ms" in text
+    assert "E2E: 40 ms" in text
+
+
+def test_latency_ready_shows_na_for_e2e_when_clock_sync_unavailable(screen_and_session) -> None:
+    screen, fake, _, _ = screen_and_session
+    screen._start_halt_button.start_clicked.emit()
+
+    fake.latency_ready.emit({"total_ms": 8.0, "sample_to_decision_ms": None})
+    QApplication.processEvents()
+
+    text = screen._header._latency_label.text()
+    assert "Pipeline: 8 ms" in text
+    assert "E2E: n/a" in text
+
+
+def test_latency_window_resets_on_new_start(screen_and_session) -> None:
+    screen, fake, _, _ = screen_and_session
+    screen._start_halt_button.start_clicked.emit()
+    fake.latency_ready.emit({"total_ms": 99.0, "sample_to_decision_ms": 99.0})
+    QApplication.processEvents()
+    assert "99" in screen._header._latency_label.text()
+
+    screen._start_halt_button.halt_clicked.emit()
+    assert screen._header._latency_label.text() == ""
+
+    screen._start_halt_button.start_clicked.emit()
+    assert screen._header._latency_label.text() == ""
+    assert screen._pipeline_ms_window == []
+    assert screen._e2e_ms_window == []
+
+
+def test_decision_ready_forwards_to_panel(screen_and_session) -> None:
+    """decision_ready emissions light up the decision panel's tile."""
+    screen, fake, _, _ = screen_and_session
+    screen._start_halt_button.start_clicked.emit()
+
+    task_name = next(iter(screen._chart.task_colors.keys()))
+    fake.decision_ready.emit(SimpleNamespace(active={task_name: np.array([False, True])}))
+    QApplication.processEvents()
+
+    assert screen._decision_panel.is_active(task_name)
+
+
+def test_apply_decision_settings_moves_line_and_stages_when_live(screen_and_session) -> None:
+    """Apply in the settings panel moves the chart threshold line, and — when a
+    run is live — stages the new settings on the session."""
+    screen, fake, _, _ = screen_and_session
+    screen._start_halt_button.start_clicked.emit()
+
+    panel = screen._settings_panel
+    panel._threshold_slider.setValue(60)  # 0.60
+    panel._sustain_spin.setValue(20)
+    panel._apply_decision_draft()
+
+    assert screen._chart.threshold == pytest.approx(0.60)
+    # Both charts follow the applied threshold (live + event-locked stay in parity).
+    assert screen._frozen._chart._threshold == pytest.approx(0.60)
+    assert fake.decision_config_updates == [{"threshold": 0.60, "sustain_timepoints": 20}]
+    assert screen._decision_params == {"threshold": 0.60, "sustain_timepoints": 20}
+
+
+def test_decision_settings_seed_next_run(screen_and_session) -> None:
+    """Applying settings before Start seeds the engine built on Start."""
+    screen, _, stub, _ = screen_and_session
+
+    panel = screen._settings_panel
+    panel._threshold_slider.setValue(70)
+    panel._apply_decision_draft()
+
+    screen._start_halt_button.start_clicked.emit()
+
+    assert stub.last_decision_params == {"threshold": 0.70, "sustain_timepoints": 10}
+
+
 def test_start_resets_chart_buffers(screen_and_session) -> None:
     """A fresh Start blanks any stale tail from a previous session."""
     screen, fake, _, _ = screen_and_session
@@ -421,12 +523,15 @@ def test_start_without_target_opens_picker_cancel_starts_nothing(qapp) -> None:
             decoder_pipeline_path=Path("/nonexistent.joblib"),
         )
         assert screen._target is None
+        # Baseline: the constructor already started the source eagerly. A
+        # cancelled Start must not build a run or issue a further start.
+        baseline_source_calls = app_session.start_source_calls
         screen._start_halt_button.start_clicked.emit()
 
         # Cancelled picker → still no target, nothing built/started, idle.
         assert screen._target is None
         assert fake.start_calls == 0
-        assert app_session.start_source_calls == 0
+        assert app_session.start_source_calls == baseline_source_calls
         assert screen._start_halt_button._state == "idle"
 
 
@@ -449,7 +554,7 @@ def test_start_without_target_picks_then_starts(qapp) -> None:
         # Picker accepted → target set and the session started.
         assert screen._target == {"source": "lsl", "stream_name": "PickedStream"}
         assert fake.start_calls == 1
-        assert app_session.start_source_calls == 1
+        assert app_session.source_running is True
         assert screen._start_halt_button._state == "live"
 
 
@@ -457,7 +562,7 @@ def test_start_uses_selected_stream_and_starts_source(screen_and_session) -> Non
     screen, fake, app_session, _ = screen_and_session
     screen._start_halt_button.start_clicked.emit()
 
-    assert app_session.start_source_calls == 1
+    assert app_session.source_running is True
     assert app_session.last_stream_name == "NeuroneStream"
     assert fake.start_calls == 1
     assert screen._start_halt_button._state == "live"
@@ -472,12 +577,24 @@ def test_start_passes_resolved_log_dir(screen_and_session) -> None:
     assert app_session.last_log_dir == Path("/fake/phase2_live/20260607_000000")
 
 
-def test_halt_stops_stream_source(screen_and_session) -> None:
+def test_halt_keeps_source_running_close_stops_it(screen_and_session) -> None:
+    """Halt tears down the live session but keeps the publishing proxy alive
+    (so NeurOne stays connected across Stop/Start cycles); the source is only
+    stopped when the screen closes."""
+    from PyQt6.QtGui import QCloseEvent
+
     screen, _, app_session, _ = screen_and_session
     screen._start_halt_button.start_clicked.emit()
     screen._start_halt_button.halt_clicked.emit()
 
+    # Halt does not stop the source.
+    assert app_session.stop_source_calls == 0
+    assert app_session.source_running is True
+
+    # Closing the screen stops it.
+    screen.closeEvent(QCloseEvent())
     assert app_session.stop_source_calls >= 1
+    assert app_session.source_running is False
 
 
 # ── discovery worker + dialog ───────────────────────────────────────────────────

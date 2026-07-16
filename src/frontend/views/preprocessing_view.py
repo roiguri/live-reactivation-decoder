@@ -201,23 +201,17 @@ class PreprocessingView(QWidget):
 
     @staticmethod
     def _annotate_ica_titles(figs, component_labels) -> None:
-        """Append each component's ICLabel category + confidence to its
-        ``plot_components`` subplot title (e.g. ``ICA001`` → ``ICA001 - eye 98%``).
+        """Render each component's ICLabel category + confidence as the axes
+        xlabel below its topomap (e.g. ``eye 98%``), leaving the subplot title
+        as the bare index (``ICA001``). ``component_labels`` is a per-index
+        list of ``(category, confidence)`` from
+        ``AppSession.offline.ica_component_labels()``, or ``None`` (ICLabel
+        disabled) — then the axes are left untouched.
 
-        ``component_labels`` is a per-index list of ``(category, confidence)``
-        (from ``AppSession.offline.ica_component_labels()``), or ``None`` when
-        ICLabel is disabled — in which case titles are left untouched.
-
-        Two MNE internals (mne/viz/topomap.py, plot_ica_components) make this
-        safe rather than fragile:
-          • The title-click toggle recovers the component index by parsing the
-            title text — ``int(title.split(" ")[0][-3:])``. We append *after a
-            space* so the first token stays ``ICAxyz`` and the parse still
-            yields the right index.
-          • On toggle MNE re-*colours* the title (gray = reject) but never
-            re-sets its text, so the appended category survives reject/keep
-            clicks. We mutate the Text in place (``set_text``) to preserve
-            MNE's existing colour/size rather than reset them via set_title.
+        Keeping the label out of the title stops the two from crowding one
+        wide line, and leaves MNE's title-click toggle intact: it recovers the
+        index by parsing the title (``int(title.split(" ")[0][-3:])``) and
+        greys it on reject, both of which rely on the title staying ``ICAxyz``.
         """
         if not component_labels:
             return
@@ -234,7 +228,7 @@ class PreprocessingView(QWidget):
                     continue
                 if 0 <= idx < len(component_labels):
                     label, proba = component_labels[idx]
-                    ax.title.set_text(f"{title} - {label} {proba:.0%}")
+                    ax.set_xlabel(f"{label} {proba:.0%}", fontsize=8)
             try:
                 fig.canvas.draw_idle()
             except Exception:
@@ -303,8 +297,8 @@ class PreprocessingView(QWidget):
             #   • click the topomap     → open ica.plot_properties
             # We rely on those native interactions and wait for the
             # operator to close every figure to signal "done".
-            # ICLabel's per-component category + confidence are appended to
-            # each subplot title below (after plot_components builds them) via
+            # ICLabel's per-component category + confidence are rendered below
+            # each topomap (after plot_components builds them) via
             # _annotate_ica_titles, so the operator sees what ICLabel thought
             # each component was — not just the implicit greyed-out reject.
             # TODO(ui): we deliberately do NOT show ica.plot_sources(epochs)
@@ -315,14 +309,14 @@ class PreprocessingView(QWidget):
             # another window. Revisit once we have UX feedback.
             # sources_fig = ica.plot_sources(epochs, block=False, precompute=False)
             # _WaitForClose(sources_fig).wait()
-            # Single-figure layout: pack all components into one near-square
-            # grid (ncols = ceil(sqrt(n)), nrows fills the rest). size=1.2
-            # makes each topomap ~1.2 inch so a 61-component grid lands
-            # around 10×10 inches — readable on a 1080p workspace without
-            # multiple windows. Operator interactions (title click → toggle
-            # exclude, topomap click → properties) work identically.
+            # Pack all components into one grid whose column/row split matches
+            # the screen aspect ratio (ncols/nrows ≈ screenW/screenH), so
+            # showMaximized() yields near-square cells on any monitor. A fixed
+            # near-square grid ignored screen shape and crowded the titles.
             n = int(ica.n_components_)
-            ncols = max(1, math.ceil(math.sqrt(n)))
+            screen = QApplication.primaryScreen().availableGeometry()
+            aspect = screen.width() / max(1, screen.height())
+            ncols = max(1, min(n, round(math.sqrt(n * aspect))))
             nrows = max(1, math.ceil(n / ncols))
             topomap_figs = ica.plot_components(
                 inst=epochs, ncols=ncols, nrows=nrows, size=1.2,

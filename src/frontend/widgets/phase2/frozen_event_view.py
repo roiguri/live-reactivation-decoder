@@ -243,6 +243,9 @@ class FrozenEventView(QWidget):
     def append_markers(self, markers: list[tuple[float, int]]) -> None:
         self._chart.append_markers(markers)
 
+    def set_threshold(self, value: float) -> None:
+        self._chart.set_threshold(value)
+
     def set_task_visible(self, name: str, visible: bool) -> None:
         self._chart.set_task_visible(name, visible)
 

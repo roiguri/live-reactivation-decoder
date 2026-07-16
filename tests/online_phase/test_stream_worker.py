@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 
 import numpy as np
+import pytest
 from PyQt6.QtCore import QObject, pyqtSlot
 
 from backend.online_phase.online_preprocessor import OnlinePreprocessor
@@ -320,6 +321,79 @@ def test_latency_diagnostics_emit_for_processed_batch(qtbot):
     for key in timing_keys:
         assert isinstance(payload[key], float)
         assert payload[key] >= 0.0
+
+    # total_ms folds in pull_ms + accumulation_ms (once per outer-loop pass,
+    # attributed to every batch that pass produced) on top of this batch's own
+    # preprocess/infer/emit time, so it must be at least their sum.
+    assert payload["total_ms"] >= payload["pull_ms"] + payload["accumulation_ms"]
+
+    # FakeReceiver has no time_correction()/local_clock() — sample_to_decision_ms
+    # must degrade to None rather than crash the batch.
+    assert payload["sample_to_decision_ms"] is None
+
+
+class ClockAwareReceiver(FakeReceiver):
+    """A FakeReceiver that also implements the clock-correction contract, so
+    sample_to_decision_ms can be computed on the happy path."""
+
+    def __init__(self, chunks, *, correction: float = 0.25, now: float = 100.0) -> None:
+        super().__init__(chunks)
+        self._correction = correction
+        self._now = now
+
+    def time_correction(self):
+        return self._correction
+
+    def local_clock(self):
+        return self._now
+
+
+def test_sample_to_decision_latency_computed_when_receiver_supports_clock_sync(qtbot):
+    timestamps, eeg = _make_data(40)  # last timestamp = 39/1000 = 0.039s
+    receiver = ClockAwareReceiver([(timestamps, eeg, [])], correction=0.25, now=100.0)
+    worker = _make_simple_worker(
+        receiver=receiver,
+        preprocessor=PassThroughPreprocessor(),
+        inference_engine=FakeInferenceEngine(),
+    )
+
+    with qtbot.waitSignal(worker.latency_ready, timeout=3000) as blocker:
+        worker.start()
+    _stop_worker(worker)
+
+    (payload,) = blocker.args
+    expected_ms = (100.0 - (float(timestamps[-1]) + 0.25)) * 1000.0
+    assert payload["sample_to_decision_ms"] == pytest.approx(expected_ms)
+    assert payload["total_ms"] >= payload["pull_ms"] + payload["accumulation_ms"]
+
+
+class RaisingTimeCorrectionReceiver(FakeReceiver):
+    """time_correction() raises (e.g. TimeoutError/LostError from pylsl) —
+    the batch must still be processed and emitted normally."""
+
+    def time_correction(self):
+        raise TimeoutError("clock sync unavailable")
+
+    def local_clock(self):
+        return 100.0
+
+
+def test_sample_to_decision_latency_none_when_time_correction_raises(qtbot):
+    timestamps, eeg = _make_data(40)
+    receiver = RaisingTimeCorrectionReceiver([(timestamps, eeg, [])])
+    worker = _make_simple_worker(
+        receiver=receiver,
+        preprocessor=PassThroughPreprocessor(),
+        inference_engine=FakeInferenceEngine(),
+    )
+
+    with qtbot.waitSignal(worker.latency_ready, timeout=3000) as blocker:
+        worker.start()
+    _stop_worker(worker)
+
+    (payload,) = blocker.args
+    assert payload["sample_to_decision_ms"] is None
+    assert payload["emitted_rows"] == 40
 
 
 def test_latency_diagnostics_can_drive_fake_ui_panel(qtbot, capsys):
