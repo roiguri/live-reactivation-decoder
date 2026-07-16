@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
+from PyQt6.QtWidgets import QApplication
 
 from backend.core.preprocessing_constants import FINAL_RESAMPLE_RATE
 from backend.core.session_paths import SessionPaths
 from backend.online_phase.artifact_loader import DecoderPipelineArtifact
 from backend.session import AppSession, LiveStreamSession
+
+
+@pytest.fixture(autouse=True)
+def qapp() -> QApplication:
+    # A QApplication must exist for the DecisionBinding's Qt signals.
+    return QApplication.instance() or QApplication(sys.argv)
 
 
 class FakeReceiver:
@@ -342,7 +350,7 @@ def test_stop_stream_source_stops_and_clears(sample_config_path, monkeypatch):
     assert proxy.stop_calls == 1
 
 
-def test_build_live_stream_session_without_log_has_no_logger_slot(
+def test_build_live_stream_session_without_log_still_wires_decisions(
     sample_config_path,
     monkeypatch,
 ):
@@ -351,7 +359,10 @@ def test_build_live_stream_session_without_log_has_no_logger_slot(
 
     live = session.build_live_stream_session(Path("decoder_pipeline.joblib"))
 
-    assert live.prediction_ready.slots == []
+    # No logger, but the decision binding is always a consumer of prediction_ready
+    # (decisions are computed and surfaced even when the run is not logged).
+    assert len(live.prediction_ready.slots) == 1
+    assert live.decision_ready is not None
 
 
 def test_build_live_stream_session_with_log_connects_logger(
@@ -377,7 +388,8 @@ def test_build_live_stream_session_with_log_connects_logger(
     )
     live.stop()
 
-    assert len(live.prediction_ready.slots) == 1
+    # Two consumers of prediction_ready now: the logger and the decision binding.
+    assert len(live.prediction_ready.slots) == 2
     predictions = (log_dir / "predictions.csv").read_text().splitlines()
     assert predictions == [
         "lsl_timestamp,t_sec,object,scene",
@@ -387,6 +399,117 @@ def test_build_live_stream_session_with_log_connects_logger(
     assert (log_dir / "markers.csv").exists()
     assert (log_dir / "manifest.json").exists()
     assert (log_dir / "predictions.npz").exists()
+
+
+# ── decision wiring (Phase B) ────────────────────────────────────────────────
+
+
+def _emit(live, obj, scene, ts):
+    live.prediction_ready.emit(
+        {"object": np.array([obj]), "scene": np.array([scene])},
+        np.array([ts]),
+        [],
+    )
+
+
+def test_decisions_logged_alongside_predictions(sample_config_path, tmp_path, monkeypatch):
+    _patch_runtime(monkeypatch)
+    session = AppSession(sample_config_path)
+    log_dir = tmp_path / "run"
+
+    live = session.build_live_stream_session(
+        Path("decoder_pipeline.joblib"), log_dir=log_dir
+    )
+    _emit(live, 0.2, 0.9, 1.0)
+    live.stop()
+
+    decisions = (log_dir / "decisions.csv").read_text().splitlines()
+    assert decisions[0] == "lsl_timestamp,t_sec,object,scene,config_version"
+    # Default threshold 0.85, sustain 10 timepoints → neither latches on one sample.
+    assert decisions[1] == "1.0,0.0,False,False,0"
+    # Timeline seeded with version 0 (the hardcoded defaults).
+    assert (log_dir / "decision_config.jsonl").exists()
+
+
+def test_decision_ready_emitted_even_without_logger(sample_config_path, monkeypatch):
+    _patch_runtime(monkeypatch)
+    session = AppSession(sample_config_path)
+
+    live = session.build_live_stream_session(Path("decoder_pipeline.joblib"))
+    received = []
+    live.decision_ready.connect(received.append)
+
+    _emit(live, 0.9, 0.1, 1.0)
+
+    assert len(received) == 1
+    assert set(received[0].active) == {"object", "scene"}
+
+
+def test_update_decision_config_applies_on_next_batch(sample_config_path, monkeypatch):
+    _patch_runtime(monkeypatch)
+    session = AppSession(sample_config_path)
+
+    live = session.build_live_stream_session(Path("decoder_pipeline.joblib"))
+    received = []
+    live.decision_ready.connect(received.append)
+
+    _emit(live, 0.9, 0.0, 1.0)  # still the default config
+    assert received[-1].config_version == 0
+
+    # Lower the threshold, sustain 1 timepoint: 'object' now latches at once.
+    live.update_decision_config(
+        {"threshold": 0.5, "sustain_timepoints": 1, "release_timepoints": 100}
+    )
+    _emit(live, 0.6, 0.0, 2.0)
+    assert received[-1].config_version == 1
+    assert received[-1].active["object"][0]
+
+
+def test_decision_config_defaults_are_plain_values(sample_config_path, monkeypatch):
+    _patch_runtime(monkeypatch)
+    session = AppSession(sample_config_path)
+    defaults = session.decision_config_defaults()
+    assert set(defaults) == {"threshold", "sustain_timepoints"}
+    assert 0.0 <= defaults["threshold"] <= 1.0
+
+
+def test_build_seeds_engine_with_decision_params(sample_config_path, monkeypatch):
+    _patch_runtime(monkeypatch)
+    session = AppSession(sample_config_path)
+
+    # Seed a run with threshold 0.5 / sustain 1 timepoint so 'object' latches at once.
+    live = session.build_live_stream_session(
+        Path("decoder_pipeline.joblib"),
+        decision_params={"threshold": 0.5, "sustain_timepoints": 1},
+    )
+    received = []
+    live.decision_ready.connect(received.append)
+
+    _emit(live, 0.6, 0.0, 1.0)
+    assert received[-1].config_version == 0  # applied at construction, not a change
+    assert received[-1].active["object"][0]
+
+
+def test_start_resets_decision_latches(sample_config_path, monkeypatch):
+    _patch_runtime(monkeypatch)
+    session = AppSession(sample_config_path)
+
+    live = session.build_live_stream_session(Path("decoder_pipeline.joblib"))
+    received = []
+    live.decision_ready.connect(received.append)
+
+    # Latch 'object' (sustain 1 timepoint); generous release so a miss won't drop it.
+    live.update_decision_config(
+        {"threshold": 0.5, "sustain_timepoints": 1, "release_timepoints": 100}
+    )
+    _emit(live, 0.9, 0.0, 1.0)
+    assert received[-1].active["object"][0]
+
+    live.start()  # a fresh run must clear latch state
+    _emit(live, 0.0, 0.0, 2.0)
+    # Without the reset the decoder would still be latched (release not reached);
+    # the reset is what makes it off here.
+    assert not received[-1].active["object"][0]
 
 
 def test_new_phase2_log_dir_uses_workspace(sample_config_path, tmp_path):

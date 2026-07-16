@@ -14,6 +14,7 @@ Sub-widgets composed by :class:`Phase2Screen`:
 * :class:`~frontend.widgets.phase2.frozen_event_view.FrozenEventView`
   — the chart plus a dropdown to browse past event snapshots.
 """
+from frontend.widgets.phase2.decision_panel import DecisionPanel
 from frontend.widgets.phase2.frozen_event_chart import FrozenEventChart
 from frontend.widgets.phase2.frozen_event_view import FrozenEventView
 from frontend.widgets.phase2.header import Phase2Header
@@ -22,6 +23,7 @@ from frontend.widgets.phase2.start_halt_button import StartHaltButton
 from frontend.widgets.phase2.target_dialog import TargetSelectionDialog
 
 __all__ = [
+    "DecisionPanel",
     "FrozenEventChart",
     "FrozenEventView",
     "Phase2Header",

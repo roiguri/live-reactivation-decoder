@@ -131,7 +131,11 @@ class LiveProbabilityChart(pg.PlotWidget):
 
         self._configure_axes()
         self._add_h_line(y=_CHANCE_LEVEL, color=TEXT_MUTED, dashed=True, width=1.0)
-        self._add_h_line(y=self._threshold, color=ALERT_RED, dashed=True, width=1.2)
+        # Kept as a handle so the decision threshold can move at runtime
+        # (set_threshold), driven by the applied decision config.
+        self._threshold_line = self._add_h_line(
+            y=self._threshold, color=ALERT_RED, dashed=True, width=1.2
+        )
         # Vertical line at x = 0 marking the present. Paired with the
         # right-side gap (``_NOW_GAP_SECONDS``) so the operator reads it
         # unambiguously as "this is now" rather than "this is the edge
@@ -238,6 +242,16 @@ class LiveProbabilityChart(pg.PlotWidget):
             stale = self._markers.pop(0)
             if stale["line"] is not None:
                 self.removeItem(stale["line"])
+
+    @property
+    def threshold(self) -> float:
+        """The current decision-threshold guide position."""
+        return self._threshold
+
+    def set_threshold(self, value: float) -> None:
+        """Move the threshold guide line (driven by the applied decision config)."""
+        self._threshold = float(value)
+        self._threshold_line.setPos(self._threshold)
 
     def set_task_visible(self, name: str, visible: bool) -> None:
         """Show or hide a single decoder's curve at runtime.
