@@ -105,6 +105,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Play the recording once instead of looping forever.",
     )
+    parser.add_argument(
+        "--start-sec",
+        type=float,
+        default=0.0,
+        help="Skip this many seconds into the recording before streaming "
+        "(and loop back to it), e.g. to jump past a long rest block.",
+    )
     return parser
 
 
@@ -138,7 +145,10 @@ def main(argv: list[str] | None = None) -> int:
         f"chunk={chunk} samples. Press Ctrl+C to stop."
     )
 
-    i = 0
+    start_i = min(max(0, int(round(args.start_sec * sfreq))), max(0, n_times - 1))
+    if start_i:
+        print(f"Starting at {args.start_sec:g} s (sample {start_i}).")
+    i = start_i
     next_t = time.perf_counter()
     try:
         while True:
@@ -148,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
             if i >= n_times:
                 if args.no_repeat:
                     break
-                i = 0
+                i = start_i
             next_t += period
             sleep = next_t - time.perf_counter()
             if sleep > 0:
