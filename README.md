@@ -77,7 +77,7 @@ is structured so decoders can be trained offline and then run live:
 1. **A functional-localizer (training) phase.** The classes you want to decode
    must be presented as tagged stimuli in a dedicated phase, so Phase 1 can train
    one decoder per class from that recording. In the example above, animate vs.
-   inanimate images are shown and labeled during the localizer; the trained
+   inanimate images are shown and labeled during the localizer. The trained
    decoders are then read out live during encoding and retrieval.
 2. **64 EEG channels + 1 trigger channel, recorded at 1000 Hz.**
 3. **Parallel-port triggers.** Events are emitted as parallel-port codes, which
@@ -100,9 +100,9 @@ codes, and decode targets all live here, so no code changes are needed. You pick
 the file on the app's Settings screen.
 
 The file is validated on load against the Pydantic schema in
-[`src/backend/core/config_models.py`](src/backend/core/config_models.py); unknown
-keys are rejected. It holds only the experiment-specific settings below. The
-preprocessing parameters are fixed; see [preprocessing pipeline] for the recipe.
+[`src/backend/core/config_models.py`](src/backend/core/config_models.py), and
+unknown keys are rejected. It holds only the experiment-specific settings below.
+The preprocessing parameters are fixed. See [preprocessing pipeline] for the recipe.
 
 <!-- TODO (step: Preprocessing pipeline): replace the "[preprocessing pipeline]"
 reference above with a real link once the preprocessing pipeline doc is created. -->
@@ -124,7 +124,7 @@ markers_mapping:            # every trigger code the experiment emits, code -> n
 
 decoders:
   model: LDA                # LDA | Logistic | SVM
-  params:                   # model-dependent; validated per model (see config_models.py)
+  params:                   # model-dependent, validated per model (see config_models.py)
     solver: lsqr
     shrinkage: auto
   scale_method: standard    # standard | median | null
@@ -156,7 +156,7 @@ decoders:
   - `scale_method`: `standard`, `median`, or `null` (no scaling).
   - `cv.k`: number of cross-validation folds (minimum 2).
   - `tasks`: one entry per decoder. Each names a `pos_labels` group and a
-    `neg_labels` group; the two must not overlap, and every label must be a name
+    `neg_labels` group. The two must not overlap, and every label must be a name
     from `markers_mapping.events` (or an interval, below).
 
 **Optional: `intervals`.** A class can also be defined by the span between two
@@ -223,9 +223,9 @@ pytest -q --deselect tests/online_phase/test_stream_worker.py
 Expected: `322 passed, 1 skipped, 11 deselected`.
 
 - The 1 skip is `test_lsl_receiver_integration.py`, gated behind
-  `RUN_LSL_INTEGRATION=1`; runs only against a real LSL stream.
+  `RUN_LSL_INTEGRATION=1`, and runs only against a real LSL stream.
 - The 11 deselections are `test_stream_worker.py`, which needs
-  `pytest-qt`/`qtbot` and a live LSL outlet; it's not a regression.
+  `pytest-qt`/`qtbot` and a live LSL outlet. It's not a regression.
 
 ### Hardware
 
