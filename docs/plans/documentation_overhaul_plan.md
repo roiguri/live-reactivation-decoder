@@ -124,31 +124,39 @@ literal brackets until the doc exists. Likely lives in `docs/guide/`. Scope to
 be discussed (how much signal-processing detail, whether to show the constants,
 offline vs online ordering).
 
-### Output files documentation (needed)
+### User manual (done)
 
-Users need to know what a run produces and which files are relevant to them after
-an experiment: Phase 1 `models/decoder_pipeline.joblib`, `epochs/`, `evaluation/`,
-and the per-run Phase 2 `predictions.csv`, `markers.csv`, `decisions.csv`,
-`manifest.json`, `predictions.npz` under `phase2_live/<run>/`. Verified against
-`SessionPaths` and `session_logger.py`. Where this lives (user manual vs a
-dedicated page) and how much detail to give is to be decided.
+`docs/guide/user_manual.md` has been rebuilt into a full task-oriented operating
+manual, mechanics-only, verified against the code:
 
-### User manual specifics (separate problem)
+- Overview, Before you start, Launch.
+- Phase 1 (Pipeline Settings, Data Loading, Preprocessing, Model Evaluation,
+  Train & Save) with the Training Pipeline navigation and a sidebar close-up.
+- Phase 2 (the live screen, Select the stream, Live output, Controls).
+- Output files (corrected against `SessionPaths` + `session_logger.py`: `epochs/`
+  and `decision_config.jsonl` are written, `evaluation/` is not).
 
-The existing `docs/guide/user_manual.md` per-screen descriptions are thin. They
-need fleshing out into a true step-by-step operating manual. This is tracked
-separately from the output-files documentation above.
+Troubleshooting was intentionally left out for now (see below).
 
 ### Optional troubleshooting items (undecided)
 
 Candidate troubleshooting entries whose inclusion in the user manual is not yet
-decided. Draft kept here so it is ready if we choose to show it.
+decided. Notes kept here so they are ready if we choose to add them. Several are
+data-side or environment issues, arguably out of scope for operators.
 
+- **No LSL stream found.** The Select Target dialog lists nothing or the stream is
+  missing. Fix: press Refresh, ensure the source (hardware + LSLProxy, or a
+  replay) is publishing.
+- **Live inference is Windows-only.** The hardware path uses `LSLProxy.exe`
+  (Windows). Phase 1 and replay-based testing work elsewhere.
+- **Stream rejected on connect.** `LSLReceiver` validates the stream (expects
+  1000 Hz and 65 channels); a mismatch fails to start.
+- **Open Live from Existing Output finds no decoder.** The chosen folder must
+  contain `models/decoder_pipeline.joblib`.
 - **BrainVision header/filename mismatch.** A BrainVision recording is three
   cross-referencing files (`.vhdr` names its `.vmrk` and `.eeg`; `.vmrk` names
   the `.eeg`). If the internal names do not match the files on disk, loading
   fails with a file-not-found error. It is a data defect, not an app bug. Fix:
   rename the files to the stem the header expects, or edit the
   `DataFile=`/`MarkerFile=` lines in the `.vhdr` and the `DataFile=` line in the
-  `.vmrk`. Decide whether this belongs in a user manual (it is a data-side issue,
-  arguably out of scope for operators).
+  `.vmrk`.

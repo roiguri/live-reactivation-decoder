@@ -94,10 +94,6 @@ Select the folder holding the recording, then load it.
   then summarizes what was loaded: the file, its channel count, sampling rate,
   duration, and the number of event markers found.
 
-<!-- TODO: consider a troubleshooting note here for load failures (the
-BrainVision header/filename mismatch, tracked as an optional item in the
-documentation plan). -->
-
 ### Preprocessing
 
 This step cleans the recording. You start it from a single control, and it runs
@@ -326,14 +322,3 @@ Each time you press Start, a new timestamped folder appears under `phase2_live/`
 `t_sec` is seconds since the first sample of the run. The CSVs are written
 continuously and are the source of truth, so a run interrupted before it closes
 still has usable data.
-
-## Troubleshooting
-
-<!-- TODO (Troubleshooting): fill with known gotchas -
-- no LSL stream found / the live path is Windows-only (LSLProxy)
-- replay vs hardware stream setup
-- optional: BrainVision header/filename mismatch (tracked in the documentation plan)
-- (add others as they come up)
--->
-
-_To be written._
