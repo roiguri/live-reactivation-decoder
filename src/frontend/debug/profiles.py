@@ -9,9 +9,12 @@ needed to reproduce and run one debug scenario:
   relative to the profile dir — the copied-in config), ``raw_data_dir``
   (a path *only*, recording which raw recording the snapshots were built
   from, for re-seeding and for replay via ``scripts/replay_vhdr_to_lsl.py``),
-  and optionally ``task_data_dir`` (a path *only*, same convention as
+  optionally ``task_data_dir`` (a path *only*, same convention as
   ``raw_data_dir`` — a second, held-out-task recording some analyses need
-  beyond the FL localizer; absent for profiles that don't have one).
+  beyond the FL localizer; absent for profiles that don't have one), and
+  optionally ``replay_start`` — where the debug Phase 2 replay should begin:
+  the string ``first_event`` (skip to the first marker) or a number of
+  seconds to skip in; absent/0 starts from the top.
 * ``experiment_config.yaml`` — the config, copied in so the profile is
   self-contained.
 * ``preproc_done.joblib`` / ``eval_done.joblib`` / ``train_done.joblib`` —
@@ -57,6 +60,10 @@ class DebugProfile:
     one) — a second, held-out-task recording some analyses need beyond the FL
     localizer, referenced the same way ``raw_data_dir`` is (a path only, never
     copied into the profile).
+
+    ``replay_start`` is optional — where the debug Phase 2 replay begins: the
+    string ``"first_event"``, or a number of seconds to skip in. ``None``
+    starts from the top.
     """
 
     name: str
@@ -66,6 +73,7 @@ class DebugProfile:
     pipeline_path: Path
     snapshot_paths: dict[str, Path]
     task_data_dir: Path | None = None
+    replay_start: float | str | None = None
 
 
 # ── discovery + load ─────────────────────────────────────────────────────────
@@ -116,6 +124,7 @@ def load_profile(name: str, root: Path = DEFAULT_ROOT) -> DebugProfile:
             for key, fn in SNAPSHOT_FILENAMES.items()
         },
         task_data_dir=Path(task_data_dir) if task_data_dir else None,
+        replay_start=raw.get("replay_start"),
     )
 
 
@@ -221,12 +230,16 @@ def prepare_profile(
     if config_src.resolve() != dest_config.resolve():
         shutil.copyfile(config_src, dest_config)
 
-    manifest: dict[str, str] = {
+    manifest: dict[str, object] = {
         "name": name,
         "config": CONFIG_NAME,
         "raw_data_dir": str(data_dir.resolve()),
     }
     if task_data_dir is not None:
         manifest["task_data_dir"] = str(task_data_dir.resolve())
+    # Preserve a hand-edited replay_start across re-seeds (the seeder doesn't
+    # set it, but shouldn't drop it either).
+    if existing.get("replay_start") is not None:
+        manifest["replay_start"] = existing["replay_start"]
     manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False))
     return load_profile(name, root)

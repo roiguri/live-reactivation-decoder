@@ -84,6 +84,25 @@ def test_load_profile_task_data_dir_present(tmp_path: Path) -> None:
     assert load_profile("alpha", tmp_path).task_data_dir == Path("/data/alpha/task")
 
 
+def test_load_profile_replay_start_absent_is_none(tmp_path: Path) -> None:
+    _seed_profile(tmp_path, "alpha")  # no replay_start key
+    assert load_profile("alpha", tmp_path).replay_start is None
+
+
+def test_load_profile_replay_start_first_event(tmp_path: Path) -> None:
+    pdir = _seed_profile(tmp_path, "alpha")
+    manifest = pdir / MANIFEST_NAME
+    manifest.write_text(manifest.read_text() + "replay_start: first_event\n")
+    assert load_profile("alpha", tmp_path).replay_start == "first_event"
+
+
+def test_load_profile_replay_start_seconds(tmp_path: Path) -> None:
+    pdir = _seed_profile(tmp_path, "alpha")
+    manifest = pdir / MANIFEST_NAME
+    manifest.write_text(manifest.read_text() + "replay_start: 42.5\n")
+    assert load_profile("alpha", tmp_path).replay_start == 42.5
+
+
 def test_load_profile_missing_raises(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         load_profile("ghost", tmp_path)
@@ -202,3 +221,15 @@ def test_prepare_bootstrap_with_task_data(tmp_path: Path) -> None:
     # Re-seed with no task_data override: keeps the recorded value.
     reseeded = prepare_profile("p", root=tmp_path)
     assert reseeded.task_data_dir == task_data.resolve()
+
+
+def test_prepare_reseed_preserves_hand_edited_replay_start(tmp_path: Path) -> None:
+    src_cfg = _write_config(tmp_path / "src_config.yaml")
+    data = tmp_path / "rec"
+    data.mkdir()
+    prepare_profile("p", root=tmp_path, config=src_cfg, data=data)
+
+    # Hand-add replay_start (the seeder never writes it), then re-seed.
+    manifest = tmp_path / "p" / MANIFEST_NAME
+    manifest.write_text(manifest.read_text() + "replay_start: first_event\n")
+    assert prepare_profile("p", root=tmp_path).replay_start == "first_event"

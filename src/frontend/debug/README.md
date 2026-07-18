@@ -7,7 +7,7 @@ imports anything from this package.
 
 Both entry points are driven by a **debug profile** — a named,
 self-contained scenario under `debug_snapshots/`. See
-[docs/features/debug_profiles.md](../../../docs/features/debug_profiles.md)
+[docs/reference/debug_profiles.md](../../../docs/reference/debug_profiles.md)
 for the design; this README is the day-to-day usage guide.
 
 The default entry point **boots on the welcome hub** (the production
@@ -56,12 +56,25 @@ debug_snapshots/<name>/
 name: default
 config: experiment_config.yaml                     # relative to this dir
 raw_data_dir: C:/dev/.../data/split/functional_localizer   # path only
+replay_start: first_event                          # optional — see below
 ```
 
 `raw_data_dir` is a **path only** (not the data) — enough to re-seed, or
 to know what to replay via `scripts/replay_vhdr_to_lsl.py`. Profiles are
 **discovered** by listing subdirectories that contain a `manifest.yaml`;
 there is no central registry.
+
+`replay_start` is **optional** and only affects the Phase 2 in-app replay
+button (see [Phase 2 quick-jump](#phase-2-quick-jump)). It sets where the
+replay begins:
+
+- `first_event` — skip to the first marker in the recording (`--start-at-first-event`).
+- a number (seconds) — skip that many seconds in (`--start-sec N`), e.g. to
+  jump past a leading rest block to the first *non-rest* stimulus.
+- absent / `0` — start from the top.
+
+The seeder never writes `replay_start`; hand-edit it into the manifest. A
+re-seed preserves it.
 
 **Profile selection** when `--profile` is omitted: a profile literally
 named `default`, else the sole profile if only one exists, else an error
@@ -194,6 +207,26 @@ The pipeline file is written by the seeder's train step. If it's missing,
 the shell still opens — the artifact is loaded later by
 `build_live_stream_session(...)` when live inference starts.
 
+### Replay a recording (VHDR → LSL) without hardware
+
+The Phase 2 debug bar carries a **replay control cluster** (just right of the
+`DEBUG` chip) so you can feed the live screen from the profile's recording,
+no NeurOne needed:
+
+- **`Start replay ▶`** launches `scripts/replay_vhdr_to_lsl.py` on the
+  profile's `raw_data_dir` as a background subprocess, publishing a
+  NeurOne-like `NeuroneStream` (type `EEG`) onto the network. The button
+  toggles to **`Stop replay ■`**; it's also torn down on Reset / screen close.
+- A **status pill** next to the button reflects state: amber
+  **`● replay starting…`** while the stream spins up, green **`● replay live`**
+  once the child advertises the outlet (detected from its `Streaming '…'`
+  console line). The child's output is echoed to the debug console.
+- **Where it starts** comes from the manifest's `replay_start` field (see
+  [Profiles](#profiles)): `first_event`, a number of seconds, or the top.
+
+Once the pill is green, pick the stream in the live screen (Start → target
+picker) and run inference against the replayed data.
+
 ## Troubleshooting
 
 - **"No debug profiles" / "No profile '<name>'"** → run the seeder (see
@@ -217,7 +250,7 @@ the shell still opens — the artifact is loaded later by
 - **Granular preprocessing steps** — split the single "Skip preprocessing"
   step into per-stage snapshots (1A filter → 1B ICA fit/review → 2 apply).
   See the deferred bonus in
-  [docs/features/debug_profiles.md](../../../docs/features/debug_profiles.md).
+  [docs/reference/debug_profiles.md](../../../docs/reference/debug_profiles.md).
 
 ## Production unaffected
 

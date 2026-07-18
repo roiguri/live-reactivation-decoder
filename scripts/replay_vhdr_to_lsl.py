@@ -112,6 +112,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Skip this many seconds into the recording before streaming "
         "(and loop back to it), e.g. to jump past a long rest block.",
     )
+    parser.add_argument(
+        "--start-at-first-event",
+        action="store_true",
+        help="Start at the first marker/event (and loop back to it), "
+        "overriding --start-sec — skips a leading rest block automatically.",
+    )
     return parser
 
 
@@ -145,9 +151,19 @@ def main(argv: list[str] | None = None) -> int:
         f"chunk={chunk} samples. Press Ctrl+C to stop."
     )
 
-    start_i = min(max(0, int(round(args.start_sec * sfreq))), max(0, n_times - 1))
-    if start_i:
-        print(f"Starting at {args.start_sec:g} s (sample {start_i}).")
+    if args.start_at_first_event:
+        # The trigger channel (col 64) is nonzero exactly at the packed events,
+        # so its first nonzero sample is the first marker.
+        nonzero = np.flatnonzero(samples[:, TRIGGER_CHANNEL_INDEX])
+        start_i = int(nonzero[0]) if nonzero.size else 0
+        if start_i:
+            print(f"Starting at first event (sample {start_i}, {start_i / sfreq:.1f} s).")
+        else:
+            print("No events found; starting at 0.")
+    else:
+        start_i = min(max(0, int(round(args.start_sec * sfreq))), max(0, n_times - 1))
+        if start_i:
+            print(f"Starting at {args.start_sec:g} s (sample {start_i}).")
     i = start_i
     next_t = time.perf_counter()
     try:

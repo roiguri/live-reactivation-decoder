@@ -84,6 +84,9 @@ class DebugBar(QFrame):
         tag.setStyleSheet(_TAG_QSS)
         tag.setFixedHeight(_BTN_HEIGHT)
         self._row.addWidget(tag)
+        # Next slot for left-group widgets (after the chip at index 0), so
+        # successive left inserts keep call order rather than reversing.
+        self._left_index = 1
 
         self._label = QLabel(label)
         self._label.setStyleSheet(
@@ -96,18 +99,29 @@ class DebugBar(QFrame):
     def set_label(self, text: str) -> None:
         self._label.setText(text)
 
+    def insert_left_widget(self, widget: QWidget) -> None:
+        """Add a widget to the left group, right of the ``DEBUG`` chip (left of
+        the centered label). Successive calls keep call order. Used for the
+        replay control cluster (button + status pill).
+        """
+        self._row.insertWidget(self._left_index, widget)
+        self._left_index += 1
+
     def add_button(
         self,
         text: str,
         *,
         kind: str = "default",
         enabled: bool = True,
+        side: str = "right",
         on_click: Callable[[], object] | None = None,
     ) -> QPushButton:
-        """Append a right-side action button and return it.
+        """Add an action button and return it.
 
         ``kind`` is ``"outline"`` (bordered blue, e.g. "Live →") or ``"default"``
-        (neutral, used for both Reset and Next). All buttons share one height.
+        (neutral, used for both Reset and Next). ``side`` is ``"right"`` (the
+        default action cluster) or ``"left"`` (grouped after the DEBUG chip, in
+        call order). All buttons share one height.
         """
         btn = QPushButton(text)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -116,5 +130,8 @@ class DebugBar(QFrame):
         btn.setEnabled(enabled)
         if on_click is not None:
             btn.clicked.connect(on_click)
-        self._row.addWidget(btn)
+        if side == "left":
+            self.insert_left_widget(btn)
+        else:
+            self._row.addWidget(btn)
         return btn
