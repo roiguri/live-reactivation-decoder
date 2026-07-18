@@ -10,7 +10,14 @@ self-contained scenario under `debug_snapshots/`. See
 [docs/features/debug_profiles.md](../../../docs/features/debug_profiles.md)
 for the design; this README is the day-to-day usage guide.
 
-| Command                                                       | Opens                                  |
+Every entry point below **boots on the production welcome screen** first
+(reused verbatim from `frontend.screens.launch_screen.LaunchScreen`). The
+welcome screen gets a **debug toolbar** with a `Next →` button (and the
+`Ctrl+Right` shortcut) — the canonical way to move forward. Debug has **no
+branching**: `Next` (or clicking either of the welcome screen's two entry
+buttons) continues straight to the CLI-selected debug screen in the table.
+
+| Command                                                       | Continues to                           |
 |---------------------------------------------------------------|----------------------------------------|
 | `python -m frontend.debug.main`                               | Phase 1 walkthrough (default profile)  |
 | `python -m frontend.debug.main --profile <name>`              | Phase 1 walkthrough for `<name>`       |

@@ -4,11 +4,16 @@ Builds the production app with :class:`DebugPhase1Screen` instead of
 :class:`Phase1Screen`. Production ``frontend.main`` is **byte-for-byte
 unaffected** and imports nothing from this package.
 
+The app always boots on the production welcome screen (via
+:class:`DebugLaunchScreen`); pressing either entry button continues to the
+CLI-selected debug screen below (debug has no branching).
+
 CLI flags:
-* (no flag) — opens the Phase 1 debug walkthrough for the default profile.
-* ``--phase2`` — opens :class:`Phase2Screen` directly with a session built
-  from the profile's config + its ``models/decoder_pipeline.joblib``. Skips
-  the whole Phase 1 click-through.
+* (no flag) — welcome screen → Phase 1 debug walkthrough for the default
+  profile.
+* ``--phase2`` — welcome screen → :class:`Phase2Screen` directly with a
+  session built from the profile's config + its
+  ``models/decoder_pipeline.joblib``. Skips the whole Phase 1 click-through.
 * ``--profile <name>`` — selects a debug profile (see
   ``frontend.debug.profiles``); applies to both entry points. Defaults to a
   profile named ``default``, or the sole profile if only one exists.
@@ -25,6 +30,7 @@ import mne
 from PyQt6.QtWidgets import QApplication
 
 from backend.core.logging_setup import configure_logging
+from frontend.debug.launch_screen_debug import DebugLaunchScreen
 from frontend.debug.phase1_screen_debug import DebugPhase1Screen
 from frontend.debug.phase2_screen_debug import build_debug_phase2
 from frontend.debug.profiles import list_profiles, resolve_profile
@@ -95,10 +101,13 @@ def main() -> None:
     app.setStyleSheet(GLOBAL_QSS)
 
     window = MainWindow()
+    # Boot on the welcome screen, then continue into the CLI-selected debug
+    # screen. The factory is called lazily on continue (see DebugLaunchScreen).
     if args.phase2:
-        window.show_screen(build_debug_phase2(profile))
+        build_next = lambda: build_debug_phase2(profile)  # noqa: E731
     else:
-        window.show_screen(DebugPhase1Screen(profile))
+        build_next = lambda: DebugPhase1Screen(profile)  # noqa: E731
+    window.show_screen(DebugLaunchScreen(build_next))
     window.show()
 
     sys.exit(app.exec())

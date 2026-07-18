@@ -34,7 +34,8 @@ from typing import Callable
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QWidget,
+    QApplication, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton,
+    QVBoxLayout, QWidget,
 )
 
 from backend.session import AppSession
@@ -90,12 +91,26 @@ class DebugPhase1Screen(Phase1Screen):
         # Always-visible mode indicator, even for the initial node.
         self._header_title.setText(_DEBUG_PREFIX + _NODE_TITLES[0])
 
-        # Toolbar sits between the workspace header bar and the
-        # QStackedWidget (relies on phase1_screen.py's card layout
-        # being [header_bar, workspace], a dev-mode-acceptable coupling).
+        # Debug toolbar pinned full-width to the very top of the window —
+        # above BOTH the workspace card and the journey (flow) side panel —
+        # matching the welcome screen's debug bar
+        # (frontend.debug.launch_screen_debug).
+        #
+        # Phase1Screen installs a horizontal root layout on ``self``
+        # ([card area, journey panel]). To seat the bar above that whole row we
+        # steal that layout onto a content widget and give ``self`` a fresh
+        # vertical root of [toolbar, content]. Qt's setLayout() reparents an
+        # existing layout (and its child widgets) off its old widget, so no
+        # manual child juggling is needed. Dev-mode-acceptable coupling to the
+        # parent's layout shape.
         toolbar = self._build_debug_toolbar()
-        card = self._workspace.parentWidget()
-        card.layout().insertWidget(1, toolbar)
+        content = QWidget()
+        content.setLayout(self.layout())
+        new_root = QVBoxLayout(self)
+        new_root.setContentsMargins(0, 0, 0, 0)
+        new_root.setSpacing(0)
+        new_root.addWidget(toolbar)
+        new_root.addWidget(content, 1)
 
         self._install_shortcuts()
         self._update_toolbar()
@@ -130,6 +145,12 @@ class DebugPhase1Screen(Phase1Screen):
         self._step_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._step_lbl, 1)
 
+        # Reset sits left of Next; Next stays pinned to the far right.
+        self._reset_btn = QPushButton("Reset")
+        self._reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._reset_btn.clicked.connect(self._on_reset)
+        layout.addWidget(self._reset_btn)
+
         self._next_btn = QPushButton("Next →")
         self._next_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._next_btn.setStyleSheet(
@@ -141,11 +162,6 @@ class DebugPhase1Screen(Phase1Screen):
         self._next_btn.clicked.connect(self._on_next)
         layout.addWidget(self._next_btn)
 
-        self._reset_btn = QPushButton("Reset")
-        self._reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._reset_btn.clicked.connect(self._on_reset)
-        layout.addWidget(self._reset_btn)
-
         return bar
 
     def _install_shortcuts(self) -> None:
@@ -156,10 +172,10 @@ class DebugPhase1Screen(Phase1Screen):
     def _update_toolbar(self) -> None:
         total = len(self._steps)
         if self._step_idx == 0:
-            label = f"Step 0/{total}: (press Next to start)"
+            label = f"{_DEBUG_PREFIX}Step 0/{total}: (press Next to start)"
         elif self._step_idx <= total:
             done_step = self._steps[self._step_idx - 1]
-            label = f"Step {self._step_idx}/{total}: {done_step.name} ✓"
+            label = f"{_DEBUG_PREFIX}Step {self._step_idx}/{total}: {done_step.name} ✓"
         self._step_lbl.setText(label)
         self._next_btn.setEnabled(self._step_idx < total)
 
