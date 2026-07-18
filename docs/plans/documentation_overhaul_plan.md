@@ -77,18 +77,42 @@ The README is a hub. Deep detail lives in `docs/` and `knowledge_base/`.
 
 ### Developer Guide
 
-Needs a general scaffolding pass first (agree on the subsections and their
-depth), then fill:
+Structure decided: **Debug Mode** and **Testing** nest under **Software
+Architecture** (both are "how to work in the repo" concerns). Sections to fill:
 
-- **Software Architecture**: short overview prose (decoupled UI/backend model,
-  Phase 1 to artifact to Phase 2 data flow) over the existing
-  `docs/architecture/*` links.
+- **Software Architecture**: a **self-contained** overview written from
+  `CLAUDE.md` + current code (decoupled UI/backend, Phase 1 to
+  `decoder_pipeline.joblib` to Phase 2, `AppSession` entry point, `SessionPaths`
+  layout). Do **not** hub-link the stale architecture docs (see verdicts below).
+  Link only `logging.md`, `CLAUDE.md`, and `src/`. Add a TODO for deeper docs if
+  a topic needs more than the overview. Nested under it:
+  - **Helper scripts** (`scripts/`), useful groups only: replay
+    (`replay_vhdr_to_lsl`, `replay_xdf_to_lsl`), LSL diagnostics / smoke tests
+    (`characterize_lsl`, `smoke_test_lsl_receiver`, `smoke_stream_worker`,
+    `inspect_xdf`), dev setup / fixtures (`demo_seed_debug_snapshots`,
+    `create_test_eeg`, `split_subject_by_phase`). Omit benchmarks / one-offs.
+  - **Debug Mode** and **Testing**: already have content in the README.
 - **Hardware**: write from the confirmed facts (NeurOne 64 EEG + 1 trigger at
   1000 Hz, µV wire units, LSLProxy bridge, parallel-port trigger decoding). New
   page candidate: `docs/guide/hardware.md`.
 - **Analysis**: short section on reproducing results, pointing at
   `tests/notebooks/analysis/`.
-- **Debug Mode** and **Testing**: already have content in the README.
+
+### Architecture docs status (reviewed 2026-07-18)
+
+Policy: **fix or archive** each stale doc as we work the section that touches it.
+
+- `logging.md` (65L): current and concise. **Link as-is.**
+- `frontend_layout.md` (191L): shell/widget/styling parts are good, but it says
+  "only Phase 1 is wired up" and nodes 2-5 are "stubs" (both false now) and has
+  no Phase 2. **Stale**, handle when we touch the frontend.
+- `stream_worker_design.md` (681L): a pre-implementation PR design plan
+  (`PredictionLogger` since replaced by `LiveSessionLogger`, wrong
+  `build_live_stream_session` signature, no decision layer). **Archive.**
+- `backend_architecture.md` (1546L): heavily stale (pre-migration config dump,
+  wrong constructors, missing decision layer, claims `src/frontend/` uncommitted).
+  **Archive.** Note: `CLAUDE.md` currently points to it as "the maintained backend
+  summary", so archiving means updating `CLAUDE.md` and `docs/README.md` too.
 
 ### Pipeline description doc (reframed, was "preprocessing")
 
@@ -100,8 +124,17 @@ literal brackets until the doc exists. Likely lives in `docs/guide/`. Scope to
 be discussed (how much signal-processing detail, whether to show the constants,
 offline vs online ordering).
 
-### User manual expansion (needed, not yet discussed)
+### Output files documentation (needed)
 
-The existing `docs/guide/user_manual.md` is thin (short captions per screen). It
-needs more descriptive work so it truly functions as a step-by-step operating
-manual. Scope to be discussed.
+Users need to know what a run produces and which files are relevant to them after
+an experiment: Phase 1 `models/decoder_pipeline.joblib`, `epochs/`, `evaluation/`,
+and the per-run Phase 2 `predictions.csv`, `markers.csv`, `decisions.csv`,
+`manifest.json`, `predictions.npz` under `phase2_live/<run>/`. Verified against
+`SessionPaths` and `session_logger.py`. Where this lives (user manual vs a
+dedicated page) and how much detail to give is to be decided.
+
+### User manual specifics (separate problem)
+
+The existing `docs/guide/user_manual.md` per-screen descriptions are thin. They
+need fleshing out into a true step-by-step operating manual. This is tracked
+separately from the output-files documentation above.
