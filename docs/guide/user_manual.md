@@ -1,4 +1,8 @@
-# App Walkthrough
+# Application User Manual
+
+A screen-by-screen walkthrough of the two phases: **Phase 1 (offline)** trains a
+decoder from a recording, and **Phase 2 (online)** runs it live against an LSL
+stream. For install/run instructions see the [README](../../README.md).
 
 ## Launch
 
