@@ -22,14 +22,20 @@ The app runs an experiment in two phases:
 
 ## Before you start
 
-<!-- TODO (Before you start): the prerequisites a user needs in hand:
-- a valid experiment_config.yaml (link to README Configuration)
-- a BrainVision functional-localizer recording (.vhdr + .vmrk + .eeg) for training
-- for live: either the hardware LSL stream (Windows + LSLProxy) or a replay source
-- where output goes (the output directory chosen on Settings)
-Point to the README for install/run rather than repeating it. -->
+You will need:
 
-_To be written._
+- **An experiment configuration** (`experiment_config.yaml`) describing your
+  decoders, trigger mapping, and seed. See the README
+  [Configuration](../../README.md#configuration) section for the schema.
+- **A functional-localizer recording** in BrainVision format (`.vhdr` + `.vmrk` +
+  `.eeg`), used to train the decoder in Phase 1.
+- **An LSL stream** for the live phase. This is either the hardware stream
+  published by LSLProxy (Windows only) or a replayed recording used for testing.
+- **An output directory** where the run's results are written. You choose it on
+  the Settings screen.
+
+The app must be installed and running first. See the README for
+[install and run instructions](../../README.md#getting-started).
 
 ## Launch
 
