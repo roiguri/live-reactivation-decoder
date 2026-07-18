@@ -58,13 +58,20 @@ decoder artifact. -->
 
 ### Pipeline Settings
 
-*Loads the experiment configuration and output directory, then displays the fixed preprocessing and model-evaluation settings for review before the run begins.*
+The first screen loads your experiment and shows the settings the run will use.
 
 ![Pipeline Settings](../assets/walkthrough/02-settings.png)
 
-<!-- TODO: action (load config + choose output dir), what to review (the fixed
-preprocessing recipe and the decoder/eval settings read from config), and how to
-proceed (Continue enables once both paths are set). -->
+- **Load the config file** and **choose an output directory** with the two
+  pickers at the top. Both must be set before you can continue. The output
+  directory is where all of this run's data is written, see
+  [Output files](#output-files).
+- The screen then lists, read-only, every setting this run will use: the fixed
+  preprocessing recipe and the model-evaluation settings (model,
+  cross-validation folds, and the decoders) read from your config. Review them
+  carefully. Settings cannot be edited here, so if anything needs changing, edit
+  the config file and load it again.
+- When the settings are correct, press **Continue** to move on to Data Loading.
 
 ### Data Loading
 
