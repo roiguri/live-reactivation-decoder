@@ -44,6 +44,7 @@ Each profile is a self-contained directory under `debug_snapshots/`. A minimal
 name: subject102_quarter
 config: experiment_config.yaml                            # copied INTO the dir (self-contained)
 raw_data_dir: C:/dev/.../data/subject_102/split/quarter   # path only — for re-seed + replay
+replay_start: first_event                                 # optional — Phase 2 replay start point
 ```
 
 ```
@@ -60,10 +61,17 @@ debug_snapshots/<name>/
 `raw_data_dir` is **path-only**: enough to re-seed, or to know what to replay via
 `scripts/replay_vhdr_to_lsl.py`, without bloating the dir with raw EEG.
 
+`replay_start` is the one **optional** field. It only affects the Phase 2 debug screen's
+in-app replay button (`DebugPhase2Screen`), which runs `scripts/replay_vhdr_to_lsl.py` on
+`raw_data_dir`. Values: `first_event` (skip to the first marker, `--start-at-first-event`),
+a number of seconds (`--start-sec N` — e.g. to skip a leading rest block to the first
+non-rest stimulus), or absent/`0` (start from the top). The seeder never writes it but
+preserves a hand-edited value across re-seeds.
+
 The snapshot filenames, `models/decoder_pipeline.joblib`, and `epochs/` are **conventions**
-resolved by the loader — not manifest fields. Speculative fields (`stream_name`, `notes`,
-`created_at`, an explicit `pipeline:` pointer) are intentionally **omitted**; add them only
-when a concrete need appears.
+resolved by the loader — not manifest fields. Other speculative fields (`stream_name`,
+`notes`, `created_at`, an explicit `pipeline:` pointer) are intentionally **omitted**; add
+them only when a concrete need appears.
 
 ## Implementation
 

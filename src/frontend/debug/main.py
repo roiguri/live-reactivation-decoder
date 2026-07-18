@@ -4,11 +4,13 @@ Builds the production app with :class:`DebugPhase1Screen` instead of
 :class:`Phase1Screen`. Production ``frontend.main`` is **byte-for-byte
 unaffected** and imports nothing from this package.
 
-CLI flags:
-* (no flag) — opens the Phase 1 debug walkthrough for the default profile.
-* ``--phase2`` — opens :class:`Phase2Screen` directly with a session built
-  from the profile's config + its ``models/decoder_pipeline.joblib``. Skips
-  the whole Phase 1 click-through.
+Entry points:
+* (no flag) — boots on the welcome hub (:class:`DebugLaunchScreen`):
+  **Next →** opens the Phase 1 debug walkthrough, **Live →** opens the Phase 2
+  live screen. Both use the selected profile.
+* ``--phase2`` — the direct/separate access: opens the Phase 2 live screen
+  immediately, skipping the welcome hub (its Reset returns to the hub). Builds
+  a session from the profile's config + its ``models/decoder_pipeline.joblib``.
 * ``--profile <name>`` — selects a debug profile (see
   ``frontend.debug.profiles``); applies to both entry points. Defaults to a
   profile named ``default``, or the sole profile if only one exists.
@@ -25,7 +27,7 @@ import mne
 from PyQt6.QtWidgets import QApplication
 
 from backend.core.logging_setup import configure_logging
-from frontend.debug.phase1_screen_debug import DebugPhase1Screen
+from frontend.debug.launch_screen_debug import DebugLaunchScreen
 from frontend.debug.phase2_screen_debug import build_debug_phase2
 from frontend.debug.profiles import list_profiles, resolve_profile
 from frontend.main_window import MainWindow
@@ -95,10 +97,12 @@ def main() -> None:
     app.setStyleSheet(GLOBAL_QSS)
 
     window = MainWindow()
+    # --phase2 is the direct/separate access straight into the live screen;
+    # otherwise boot on the welcome hub (Next → Phase 1, Live → Phase 2).
     if args.phase2:
         window.show_screen(build_debug_phase2(profile))
     else:
-        window.show_screen(DebugPhase1Screen(profile))
+        window.show_screen(DebugLaunchScreen(profile))
     window.show()
 
     sys.exit(app.exec())
