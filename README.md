@@ -69,12 +69,28 @@ PYTHONPATH=src python -m frontend.main
 
 ### Compatibility
 
-<!-- TODO (step: Compatibility): which experiments and stimulus sets the app
-supports: the functional-localizer + binding-memory task, the shipped
-`experiment_config*.yaml` presets, and the BrainVision recording format Phase 1
-expects. Drafted from code + configs. -->
+The app is not tied to a single experiment. A study is compatible as long as it
+is structured so decoders can be trained offline and then run live:
 
-_To be written._
+![Experiment structure: a functional-localizer training phase, then live decoding of the same classes](docs/assets/experiment_paradigm.png)
+
+1. **A functional-localizer (training) phase.** The classes you want to decode
+   must be presented as tagged stimuli in a dedicated phase, so Phase 1 can train
+   one decoder per class from that recording. In the example above, animate vs.
+   inanimate images are shown and labeled during the localizer; the trained
+   decoders are then read out live during encoding and retrieval.
+2. **64 EEG channels + 1 trigger channel, recorded at 1000 Hz.**
+3. **Parallel-port triggers.** Events are emitted as parallel-port codes, which
+   land in the recording's markers offline and in the trigger channel live.
+4. **A BrainVision recording** (`.vhdr` + `.vmrk` + `.eeg`) of the localizer for
+   offline training.
+5. **A decodable contrast.** Each decoding target must be expressible as a
+   positive-vs-negative grouping of trigger labels (see
+   [Configuration](#configuration)).
+
+Everything experiment-specific (stimuli, trigger codes, decode targets) is
+declared in `experiment_config.yaml`, so adapting the app to a new compatible
+study needs no code changes.
 
 ### Configuration
 
