@@ -131,22 +131,38 @@ data: the epochs retained per class and the number of ICA components removed.
 
 ### Model Evaluation
 
-*Cross-validation runs across the decoders one at a time - here the animate decoder is complete and the inanimate decoder is running.*
+This step runs cross-validation to measure how each decoder performs across the
+epoch, and it is where you set the timepoint each decoder will use for live
+inference.
+
+<!-- TODO (asset): add a "Run Evaluation" ready-state screenshot here (like the
+preprocessing and train ready screens), numbered to sort before
+05a-eval-progress. -->
+
+Press **Run Evaluation** in the sidebar to start. Cross-validation runs across
+the decoders one at a time. The progress bar advances in one jump per decoder
+completed rather than filling smoothly, and an estimated time remaining appears
+after the first decoder finishes.
 
 ![Evaluation - progress](../assets/walkthrough/05a-eval-progress.png)
 
-*The summary tab: AUC across epoch time for all decoders, where clicking the curve selects the timepoint used for inference.*
+When it finishes, the **Summary tab** shows an overlay of every decoder's AUC
+across epoch time, plus a roster with one row per decoder. Each row has its own
+timepoint field (pre-filled with that decoder's suggested peak), a readout of its
+AUC at that timepoint, and a **Confirm** button.
 
 ![Evaluation - AUC](../assets/walkthrough/05b-eval-auc.png)
 
-*Each trained decoder also gets its own tab, presenting that decoder's AUC-over-time curve alongside its temporal-generalization matrix (train × test).*
+Each decoder also has its own tab, showing its AUC-over-time curve alongside its
+temporal-generalization matrix (train time by test time). You set a decoder's
+timepoint either by typing it in its field on the Summary tab or by clicking the
+curve on that decoder's own tab. The two stay in sync, so a selection made on an
+individual tab updates the Summary roster.
 
 ![Evaluation - per-decoder AUC and TGM](../assets/walkthrough/05c-eval-tgm.png)
 
-<!-- TODO (mechanics only): the operator picks the inference timepoint by clicking
-the AUC curve on the summary tab, and confirms it before training. Describe what
-the plots show (per-decoder AUC-over-time and the TGM) and the click-to-select
-mechanic, not how to judge which timepoint is best. -->
+Confirm each decoder from the Summary tab. Once every decoder is confirmed, you
+can continue to Train & Save.
 
 ### Train & Save
 
