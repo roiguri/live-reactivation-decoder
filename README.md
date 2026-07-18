@@ -94,12 +94,82 @@ study needs no code changes.
 
 ### Configuration
 
-<!-- TODO (step: Configuration): the `experiment_config.yaml` schema
-(decoder definitions, trigger→event `markers_mapping`, `random_state` seed, and
-optional `intervals`), and how to define a new experiment or stimulus set
-without touching code. Schema source: `src/backend/core/config_models.py`. -->
+A single file, `experiment_config.yaml`, describes the experiment. It is the
+only thing you edit to adapt the app to a new compatible study: stimuli, trigger
+codes, and decode targets all live here, so no code changes are needed. You pick
+the file on the app's Settings screen.
 
-_To be written._
+The file is validated on load against the Pydantic schema in
+[`src/backend/core/config_models.py`](src/backend/core/config_models.py); unknown
+keys are rejected. It holds only the experiment-specific settings below. The
+preprocessing parameters are fixed; see [preprocessing pipeline] for the recipe.
+
+<!-- TODO (step: Preprocessing pipeline): replace the "[preprocessing pipeline]"
+reference above with a real link once the preprocessing pipeline doc is created. -->
+
+
+A minimal, complete config:
+
+```yaml
+experiment_info:
+  name: My_Study            # free-text label for the run
+
+random_state: 42            # seed for ICA, CV splits, and training (top level only)
+
+markers_mapping:            # every trigger code the experiment emits, code -> name
+  events:
+    - {id: 11, name: red}
+    - {id: 12, name: green}
+    - {id: 13, name: yellow}
+
+decoders:
+  model: LDA                # LDA | Logistic | SVM
+  params:                   # model-dependent; validated per model (see config_models.py)
+    solver: lsqr
+    shrinkage: auto
+  scale_method: standard    # standard | median | null
+  cv:
+    k: 5                    # cross-validation folds (minimum 2)
+  tasks:                    # one binary decoder is trained per task
+    - name: red decoder
+      pos_labels: [red]
+      neg_labels: [green, yellow]
+    - name: yellow decoder
+      pos_labels: [yellow]
+      neg_labels: [green, red]
+```
+
+**The keys:**
+
+- **`experiment_info.name`**: a label for the run.
+- **`random_state`**: one integer seed, set at the top level only (setting it under
+  `decoders` is an error). Drives the ICA fit, CV splits, and training.
+- **`markers_mapping.events`**: the trigger-to-event mapping. Each entry maps a
+  parallel-port `id` to a `name`. Names are what the decoders refer to.
+- **`decoders`**:
+  - `model`: `LDA`, `Logistic`, or `SVM`.
+  - `params`: model-specific hyperparameters, validated against the allowed keys
+    for the chosen model (unknown keys are rejected). See `_VALID_PARAMS_BY_MODEL`
+    and the defaults in
+    [`config_models.py`](src/backend/core/config_models.py) for the authoritative
+    list.
+  - `scale_method`: `standard`, `median`, or `null` (no scaling).
+  - `cv.k`: number of cross-validation folds (minimum 2).
+  - `tasks`: one entry per decoder. Each names a `pos_labels` group and a
+    `neg_labels` group; the two must not overlap, and every label must be a name
+    from `markers_mapping.events` (or an interval, below).
+
+**Optional: `intervals`.** A class can also be defined by the span between two
+markers, rather than a single stimulus. Inside every `[start, stop]` occurrence,
+epoch-sized windows are tiled and labeled, and that name becomes usable as a task
+label, for example a resting baseline to contrast against stimuli:
+
+```yaml
+intervals:
+  - name: rest
+    start: trial_start      # both must be names mapped in markers_mapping.events
+    stop: trial_end
+```
 
 ### Application User Manual
 
