@@ -138,3 +138,17 @@ dedicated page) and how much detail to give is to be decided.
 The existing `docs/guide/user_manual.md` per-screen descriptions are thin. They
 need fleshing out into a true step-by-step operating manual. This is tracked
 separately from the output-files documentation above.
+
+### Optional troubleshooting items (undecided)
+
+Candidate troubleshooting entries whose inclusion in the user manual is not yet
+decided. Draft kept here so it is ready if we choose to show it.
+
+- **BrainVision header/filename mismatch.** A BrainVision recording is three
+  cross-referencing files (`.vhdr` names its `.vmrk` and `.eeg`; `.vmrk` names
+  the `.eeg`). If the internal names do not match the files on disk, loading
+  fails with a file-not-found error. It is a data defect, not an app bug. Fix:
+  rename the files to the stem the header expects, or edit the
+  `DataFile=`/`MarkerFile=` lines in the `.vhdr` and the `DataFile=` line in the
+  `.vmrk`. Decide whether this belongs in a user manual (it is a data-side issue,
+  arguably out of scope for operators).

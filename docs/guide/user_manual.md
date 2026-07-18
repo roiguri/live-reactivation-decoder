@@ -83,13 +83,20 @@ The first screen loads your experiment and shows the settings the run will use.
 
 ### Data Loading
 
-*Selects the recording folder and loads the BrainVision `.vhdr` file into the session.*
+Select the folder holding the recording, then load it.
 
 ![Load Data](../assets/walkthrough/03-load-data.png)
 
-<!-- TODO: action (pick the recording folder), what is loaded (BrainVision triplet,
-markers from .vmrk), and the known BrainVision header/filename mismatch gotcha
-(cross-link Troubleshooting). -->
+- **Pick the recording folder** with the file picker. The app reads the
+  BrainVision recording from it (the `.vhdr` header together with its `.vmrk`
+  markers and `.eeg` data).
+- Press **Load & Continue** to load the recording into the session. The sidebar
+  then summarizes what was loaded: the file, its channel count, sampling rate,
+  duration, and the number of event markers found.
+
+<!-- TODO: consider a troubleshooting note here for load failures (the
+BrainVision header/filename mismatch, tracked as an optional item in the
+documentation plan). -->
 
 ### Preprocessing
 
@@ -220,10 +227,10 @@ _To be written._
 
 ## Troubleshooting
 
-<!-- TODO (Troubleshooting): the known gotchas -
-- BrainVision header/filename mismatch (data defect, surfaces as FileNotFoundError)
+<!-- TODO (Troubleshooting): fill with known gotchas -
 - no LSL stream found / the live path is Windows-only (LSLProxy)
 - replay vs hardware stream setup
+- optional: BrainVision header/filename mismatch (tracked in the documentation plan)
 - (add others as they come up)
 -->
 
