@@ -173,9 +173,15 @@ intervals:
 
 ### Application User Manual
 
-The **[Application User Manual](docs/guide/user_manual.md)** is a
-screen-by-screen walkthrough of operating the app: launch, Phase 1 training
-(settings → load → preprocess → evaluate → train), and Phase 2 live inference.
+The app opens on a welcome screen with two entry points: **Start New Training**,
+which runs the full offline pipeline from a config and recording, or **Open Live
+from Existing Output**, which jumps straight to live inference from a folder a
+previous run already trained into.
+
+![The welcome screen](docs/assets/welcome_screen.png)
+
+For the full walkthrough of both phases, see the
+**[Application User Manual](docs/guide/user_manual.md)**.
 
 ---
 
