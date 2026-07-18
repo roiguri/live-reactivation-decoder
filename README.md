@@ -180,8 +180,16 @@ previous run already trained into.
 
 ![The welcome screen](docs/assets/welcome_screen.png)
 
-For the full walkthrough of both phases, see the
-**[Application User Manual](docs/guide/user_manual.md)**.
+The **[Application User Manual](docs/guide/user_manual.md)** is a step-by-step,
+screenshot-driven guide to operating the app end to end. It covers:
+
+- what you need before starting
+- the Phase 1 training sequence: settings, data loading, preprocessing (with the
+  interactive bad-channel and ICA reviews), evaluation and timepoint selection,
+  and training
+- the Phase 2 live screen: selecting a stream, and reading the probabilities,
+  decisions, frozen events, and latency, plus the controls
+- the output files a run produces and how to use them
 
 ---
 
