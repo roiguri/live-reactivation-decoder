@@ -199,6 +199,73 @@ def perm_band(
     return obs, lo, hi, null.mean(0)
 
 
+def permutation_auc_pvalue(
+    X: np.ndarray,
+    y: np.ndarray,
+    classifier,
+    cv,
+    n_perm: int = 1000,
+    rng: Optional[np.random.Generator] = None,
+    on_progress=None,
+) -> tuple[float, np.ndarray, float]:
+    """Label-permutation p-value for one classifier/CV's mean AUC on ``X, y``.
+
+    ``observed`` is the real mean CV-AUC; the null is built by shuffling ``y``
+    ``n_perm`` times and recomputing CV-AUC each time under the same
+    classifier/folds. ``p_value`` uses the Efron-Tibshirani ``(k+1)/(n_perm+1)``
+    correction, so it can never read exactly 0. Pure numeric core — callers own
+    extracting ``X``/``y`` at whatever timepoint and building the classifier/cv
+    (see :func:`auc_perm_pvalue` for the epochs-backed version).
+
+    ``on_progress``, if given, is called as ``on_progress(completed, total)``
+    after every permutation (``total == n_perm``) — this loop refits a
+    classifier per fold per permutation, which can run considerably slower
+    than the real fit if permuted (near-chance) labels take a classifier
+    longer to converge, so callers should throttle their own printing (e.g.
+    every 25th call) rather than assume a fixed runtime.
+    """
+    from sklearn.model_selection import cross_val_score
+
+    rng = rng or np.random.default_rng(0)
+    observed = float(cross_val_score(classifier, X, y, scoring="roc_auc", cv=cv).mean())
+    null = np.empty(n_perm)
+    for i in range(n_perm):
+        null[i] = cross_val_score(classifier, X, rng.permutation(y), scoring="roc_auc", cv=cv).mean()
+        if on_progress is not None:
+            on_progress(i + 1, n_perm)
+    p_value = (int(np.sum(null >= observed)) + 1) / (n_perm + 1)
+    return observed, null, p_value
+
+
+def auc_perm_pvalue(
+    epochs, settings: dict, task: str, peak_timepoint: float,
+    n_perm: int = 1000, rng: Optional[np.random.Generator] = None,
+    on_progress=None,
+) -> tuple[float, np.ndarray, float]:
+    """Permutation-test p-value for one decoder's CV-AUC at its peak timepoint.
+
+    Extracts features the same way :func:`diag_auc` does, but at a single
+    timepoint (the CV-established peak) instead of sweeping every timepoint —
+    cheap enough to refit under ``n_perm`` label shuffles. Delegates the null
+    construction (and ``on_progress`` forwarding) to
+    :func:`permutation_auc_pvalue`.
+    """
+    from sklearn.model_selection import StratifiedKFold
+
+    from backend.offline_phase.utils import build_classifier, get_task_data
+
+    cfg = next(t for t in settings["tasks"] if t["name"] == task)
+    X, y = get_task_data(epochs, cfg)
+    t_idx = int(np.argmin(np.abs(epochs.times - peak_timepoint)))
+    X_t = X[:, :, t_idx]
+    cv = StratifiedKFold(
+        n_splits=settings["cv"]["k"], shuffle=True, random_state=settings["random_state"]
+    )
+    return permutation_auc_pvalue(
+        X_t, y, build_classifier(settings), cv, n_perm=n_perm, rng=rng, on_progress=on_progress
+    )
+
+
 def diag_auc(epochs, settings: dict, task: str) -> np.ndarray:
     """Diagonal-only cross-validated AUC for one task (train/test per timepoint).
 

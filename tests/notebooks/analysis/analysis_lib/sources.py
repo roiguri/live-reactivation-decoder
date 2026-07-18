@@ -26,6 +26,8 @@ from __future__ import annotations
 
 from collections import Counter
 
+import numpy as np
+
 from analysis_lib import streaming, task_labels
 
 
@@ -85,6 +87,19 @@ def _extract_task_markers(ctx, raw, *, n_times=None) -> list[task_labels.Marker]
     """
     pairs = streaming.extract_markers(raw, ctx.event_mapping, list(ctx.event_mapping), n_times=n_times)
     return [task_labels.Marker(t=s, code=c, name=ctx.name_by_code[c]) for s, c in pairs]
+
+
+def task_block_starts(ctx, raw, *, n_times=None) -> list[float]:
+    """Raw-sample onset of each block (couple-learning phase) for block-based filtering.
+
+    Thin wrapper: pulls the recording's markers the same way the ``build_*``
+    builders do and delegates to :func:`analysis_lib.task_labels.block_starts`.
+    Trial records from those builders carry a raw-sample ``"t"``, so a trial is
+    in block ``searchsorted(starts, t, side="right") - 1`` — subset trials to the
+    later blocks by comparing against these starts.
+    """
+    markers = _extract_task_markers(ctx, raw, n_times=n_times)
+    return task_labels.block_starts(markers)
 
 
 def _epoch_by_group(out_samples, sfreq, fs_out, dc, trials, preds, *, tmin, tmax):
@@ -153,3 +168,82 @@ def build_retrieval_epochs(ctx, raw, dc, out_samples, sfreq, fs_out, preds, *, t
     info = (f"[retrieval] {len(trials)} cued trials, {n_recalled} with a recall key-press | "
             f"by true category {dict(Counter(t['true_label'] for t in trials))}")
     return t_grid, epoched, trials, info
+
+
+# ── multi-channel feature epochs (step 3: cross-domain generalization) ────────
+# Unlike the ``*_epochs`` builders above (which epoch a decoder's *probability*
+# output), these epoch the raw **multi-channel feature stream** so a fresh
+# ``GeneralizingEstimator`` can be fit/tested on it. Category labeling is
+# identical; only the epoched signal differs (features, not preds).
+
+
+def _epoch_features_by_trial(features, out_samples, sfreq, fs_out, trials, *, tmin, tmax):
+    """Epoch the online feature stream around each labeled trial, preserving order.
+
+    ``trials`` are ``{"t": <raw sample index>, "true_label": <category>, ...}``
+    records (from :mod:`analysis_lib.task_labels`). Returns
+    ``(t_grid, X_all, cat_labels, kept)`` where ``X_all`` is
+    ``(n_trials, n_ch, n_grid)``, ``cat_labels`` the per-row category, and
+    ``kept`` the surviving trial records in row order. Trials with no ground-truth
+    label (``true_label is None`` — e.g. a retrieval verb never seen at encoding)
+    or too few stream samples in-window (recording edge) are dropped from all three.
+    """
+    t_grid, epoch_features = streaming.make_epocher_multichannel(
+        out_samples, sfreq, fs_out, tmin, tmax
+    )
+    rows, kept = [], []
+    for tr in trials:
+        if tr.get("true_label") is None:
+            continue
+        arr, _ = epoch_features(features, [int(tr["t"])])
+        if arr.shape[0]:
+            rows.append(arr[0])
+            kept.append(tr)
+    X_all = np.array(rows) if rows else np.empty((0, features.shape[1], len(t_grid)))
+    cat_labels = np.array([tr["true_label"] for tr in kept])
+    return t_grid, X_all, cat_labels, kept
+
+
+def build_encoding_features(ctx, raw, features, out_samples, sfreq, fs_out, *, tmin, tmax, n_times=None):
+    """Return ``(t_grid, X_all, cat_labels, trials, info)`` for the encoding phase.
+
+    ``features``/``out_samples``/``fs_out`` come from a single
+    ``streaming.run_online_stream(ctx.preproc, eeg, ...)`` replay of ``raw`` (same
+    contract as :func:`build_encoding_epochs`). Each ``learning_<category>_NN``
+    image onset becomes one multi-channel feature epoch, labeled by the shown
+    category — the same-modality positive control for cross-domain generalization.
+    ``trials`` are the surviving records (row-aligned with ``X_all``).
+    """
+    _check_encoding_markers(ctx.event_mapping)
+    markers = _extract_task_markers(ctx, raw, n_times=n_times)
+    trials = task_labels.encoding_trials(markers)
+    t_grid, X_all, cat_labels, kept = _epoch_features_by_trial(
+        features, out_samples, sfreq, fs_out, trials, tmin=tmin, tmax=tmax
+    )
+    info = (f"[encoding features] {len(kept)}/{len(trials)} image onsets epoched | "
+            f"by true category {dict(Counter(cat_labels.tolist()))}")
+    return t_grid, X_all, cat_labels, kept, info
+
+
+def build_retrieval_features(ctx, raw, features, out_samples, sfreq, fs_out, *, tmin, tmax, n_times=None):
+    """Return ``(t_grid, X_all, cat_labels, trials, info)`` for the retrieval phase.
+
+    Same replay contract as :func:`build_encoding_features`. Each retrieval cue
+    becomes one feature epoch (locked to cue onset), labeled by the *encoded*
+    category the cued verb was paired with — the real reactivation-from-memory
+    test. ``trials`` are the surviving records (row-aligned with ``X_all``); each
+    carries a ``recalled`` flag so the caller can subset to successful-recall
+    trials as a secondary check.
+    """
+    _check_retrieval_markers(ctx.event_mapping)
+    markers = _extract_task_markers(ctx, raw, n_times=n_times)
+    couples = task_labels.group_couple_trials(markers)
+    verb_category = task_labels.verb_categories(couples)
+    trials = task_labels.retrieval_trials(markers, verb_category)
+    t_grid, X_all, cat_labels, kept = _epoch_features_by_trial(
+        features, out_samples, sfreq, fs_out, trials, tmin=tmin, tmax=tmax
+    )
+    n_recalled = sum(t["recalled"] for t in kept)
+    info = (f"[retrieval features] {len(kept)}/{len(trials)} cued trials epoched, "
+            f"{n_recalled} recalled | by true category {dict(Counter(cat_labels.tolist()))}")
+    return t_grid, X_all, cat_labels, kept, info

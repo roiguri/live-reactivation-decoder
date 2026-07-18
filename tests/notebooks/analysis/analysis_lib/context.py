@@ -171,6 +171,48 @@ def save_run_summary(ctx, dc, epoched, t_grid, preds, eval_results, *, source, m
     return out_path
 
 
+@dataclass
+class OfflineContext:
+    """Settings + paths only -- no trained decoder artifact required.
+
+    Unlike :class:`AnalysisContext`, this never touches
+    ``models/decoder_pipeline.joblib`` or builds an ``OnlinePreprocessor`` --
+    for analyses (pure offline CV, permutation tests, spatial patterns) that
+    only need the config and saved epochs and refit everything from scratch,
+    so they shouldn't require a subject to have already been through Phase 1
+    training just to be analyzed.
+    """
+
+    repo_root: Path
+    paths: Any                        # backend.core.session_paths.SessionPaths
+    settings: Any                     # SettingsManager
+
+    def task_tp(self, task: str) -> Optional[float]:
+        """Always ``None`` -- there is no frozen decoder here, so no 'trained
+        timepoint' to mark (only the CV-established peak makes sense)."""
+        return None
+
+
+def load_offline_context(root: str | Path) -> OfflineContext:
+    """Resolve settings + paths only, skipping the trained-decoder artifact.
+
+    Still compatible with anything that only needs ``ctx.paths``,
+    ``ctx.settings``, and ``ctx.task_tp`` (e.g. :func:`plots.cv_auc`).
+    """
+    repo_root = bootstrap()
+
+    from backend.core.session_paths import SessionPaths
+    from backend.core.settings_manager import SettingsManager
+
+    root = Path(root)
+    if not root.is_absolute():
+        root = (repo_root / root).resolve()
+    paths = SessionPaths(root)
+    settings = SettingsManager(paths.experiment_config_path)
+
+    return OfflineContext(repo_root=repo_root, paths=paths, settings=settings)
+
+
 def load_context(root: str | Path, *, live_run: str | Path | None = None) -> AnalysisContext:
     """Resolve an analysis root (a ``SessionPaths``-shaped output dir) into an :class:`AnalysisContext`."""
     repo_root = bootstrap()

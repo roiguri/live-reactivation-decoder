@@ -145,14 +145,92 @@ def plot_cv_auc(ctx, eval_results, *, custom_tp=None):
                xlabel="time (s)", ylabel="CV AUC")
         ax.legend(fontsize=7, loc="lower right")
     _blank(axes, len(items), nrows, ncols)
-    fig.suptitle(f"Cross-validated diagonal AUC per decoder — '{ctx.paths.root.name}'", y=1.02)
+    fig.suptitle(f"Cross-validated diagonal AUC per decoder - '{ctx.paths.root.name}'", y=1.02)
     plt.tight_layout(); plt.show()
     print(f"average peak AUC: {ev['average_peak_auc']:.3f} | "
           f"suggested timepoint: {ev['suggested_timepoint']:.3f}s")
 
 
-def per_decoder(ctx, dc, epoched, t_grid, preds):
-    """Single-trial (faint) + mean (navy) P(t) over each decoder's own positive group(s)."""
+def plot_tgm_matrix(tgm, times, title, ax=None):
+    """Test-time x train-time AUC heatmap - the full generalization matrix.
+
+    ``tgm[i, j]`` = AUC training on ``times[i]``, testing on ``times[j]``, drawn
+    with x reading test time and y reading train time, so one row is a single
+    trained timepoint scored across the test window. Note this is the transpose
+    of :class:`frontend.widgets.charts.tgm_chart.TGMChart`'s layout (the GUI puts
+    train on x); the ``RdBu_r`` / 0-1 scale still matches, so chance (0.5) sits
+    near-white.
+    """
+    own_fig = ax is None
+    if own_fig:
+        fig, ax = plt.subplots(figsize=(5, 4.5))
+    t0, t1 = float(times[0]), float(times[-1])
+    im = ax.imshow(np.asarray(tgm), vmin=0.0, vmax=1.0, cmap="RdBu_r",
+                    origin="lower", extent=[t0, t1, t0, t1], aspect="equal")
+    ax.axvline(0.0, color="k", ls=":", lw=0.8)
+    ax.axhline(0.0, color="k", ls=":", lw=0.8)
+    ax.set(title=title, xlabel="test time (s)", ylabel="train time (s)")
+    if own_fig:
+        fig.colorbar(im, ax=ax, fraction=0.046, label="AUC")
+        plt.tight_layout()
+    return im
+
+
+def plot_tgm_rect(tgm, train_times, test_times, title, ax=None):
+    """Rectangular test-time x train-time AUC heatmap (test axis longer than train).
+
+    Same convention and colour scale as :func:`plot_tgm_matrix` - ``tgm[i, j]`` =
+    AUC training on ``train_times[i]``, testing on ``test_times[j]``, x reads
+    test time and y reads train time - but the recall-test and FL-train axes have
+    different spans/lengths, so it uses ``aspect="auto"`` (the axes box, hence the
+    caller's figsize, sets the rectangle's shape) and draws no diagonal: there is
+    no shared time axis.
+    """
+    own_fig = ax is None
+    if own_fig:
+        fig, ax = plt.subplots(figsize=(7, 3))
+    x0, x1 = float(test_times[0]), float(test_times[-1])
+    y0, y1 = float(train_times[0]), float(train_times[-1])
+    im = ax.imshow(np.asarray(tgm), vmin=0.0, vmax=1.0, cmap="RdBu_r",
+                   origin="lower", extent=[x0, x1, y0, y1], aspect="auto")
+    ax.axvline(0.0, color="k", ls=":", lw=0.8)
+    ax.axhline(0.0, color="k", ls=":", lw=0.8)
+    ax.set(title=title, xlabel="recall test time (s)", ylabel="FL train time (s)")
+    if own_fig:
+        fig.colorbar(im, ax=ax, fraction=0.046, label="AUC")
+        plt.tight_layout()
+    return im
+
+
+def plot_topomap_grid(patterns_by_task, info, *, ncols=2):
+    """One topomap panel per task's spatial pattern, mirroring ``TopomapWidget``.
+
+    ``patterns_by_task`` is ``{task_name: pattern}`` with each ``pattern``
+    shaped ``(n_channels,)`` (a Haufe activation pattern), aligned with
+    ``info["chs"]`` — same ``mne.viz.plot_topomap`` call shape as the GUI's
+    ``TopomapWidget.set_pattern``.
+    """
+    import mne
+
+    items = list(patterns_by_task.items())
+    fig, axes, nrows, ncols = _grid(len(items), ncols=ncols)
+    for idx, (task, pattern) in enumerate(items):
+        ax = axes[idx // ncols][idx % ncols]
+        mne.viz.plot_topomap(
+            np.asarray(pattern, dtype=float), info,
+            axes=ax, show=False, cmap="RdBu_r", sensors=True, contours=4, sphere="auto",
+        )
+        ax.set_title(task, fontsize=10, pad=6)
+    _blank(axes, len(items), nrows, ncols)
+    plt.tight_layout()
+    return fig
+
+
+def per_decoder(ctx, dc, epoched, t_grid, preds, *, save_path=None):
+    """Single-trial (faint) + mean (navy) P(t) over each decoder's own positive group(s).
+
+    ``save_path`` (optional) writes the figure with a tight bbox before showing.
+    """
     tasks = list(preds)
     fig, axes, nrows, ncols = _grid(len(tasks))
     for idx, task in enumerate(tasks):
@@ -170,15 +248,21 @@ def per_decoder(ctx, dc, epoched, t_grid, preds):
         if tp is not None:
             ax.axvline(tp, color="crimson", ls="--", lw=1)
         ax.axhline(0.5, color="gray", lw=0.6)
-        ax.set(title=f"{task} — '{'/'.join(groups)}'" + (f"  (tp {tp:.2f}s)" if tp is not None else ""),
+        ax.set(title=f"{task} - '{'/'.join(groups)}'" + (f"  (tp {tp:.2f}s)" if tp is not None else ""),
                ylim=(0, 1), xlabel="time from marker (s)", ylabel="P(positive)")
         ax.legend(fontsize=7, loc="upper right")
     _blank(axes, len(tasks), nrows, ncols)
-    plt.tight_layout(); plt.show()
+    plt.tight_layout()
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.show()
 
 
-def selectivity(ctx, dc, epoched, t_grid, preds):
-    """Per decoder, mean ± SEM P(t) for every display group overlaid."""
+def selectivity(ctx, dc, epoched, t_grid, preds, *, save_path=None):
+    """Per decoder, mean ± SEM P(t) for every display group overlaid.
+
+    ``save_path`` (optional) writes the figure with a tight bbox before showing.
+    """
     tasks = list(preds)
     fig, axes, nrows, ncols = _grid(len(tasks))
     for idx, task in enumerate(tasks):
@@ -200,7 +284,10 @@ def selectivity(ctx, dc, epoched, t_grid, preds):
                ylim=(0, 1), xlabel="time from marker (s)", ylabel="P(positive)")
         ax.legend(fontsize=6, loc="upper right")
     _blank(axes, len(tasks), nrows, ncols)
-    plt.tight_layout(); plt.show()
+    plt.tight_layout()
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.show()
 
 
 def competition(ctx, dc, epoched, t_grid, preds):
@@ -229,7 +316,7 @@ def competition(ctx, dc, epoched, t_grid, preds):
                         ax.axvline(tp, color=c, ls="--", lw=1)
             ax.axvline(0, color="k", ls=":", lw=1)
             ax.axhline(ref, color="gray", lw=0.6)
-            ax.set(title=f"group '{group}' — which decoder fires? {suffix}", ylim=ylim,
+            ax.set(title=f"group '{group}' - which decoder fires? {suffix}", ylim=ylim,
                    xlabel="time from marker (s)", ylabel=ylabel)
             ax.legend(fontsize=6, loc="upper right")
         _blank(axes, len(dc.display_markers), nrows, ncols)
@@ -260,7 +347,7 @@ def confusion_and_perm(ctx, dc, epoched, t_grid, preds, decoder_tasks,
         for ax, (gmarkers, gtasks) in zip(axes[0], groups):
             conf = metrics.winner_confusion(ep_dict, gmarkers, gtasks, marker_of_task, t_grid,
                                             mode=mode, task_tps=task_tps, sigma=sigma)
-            metrics.plot_confusion(conf, ax, gmarkers, f"{'/'.join(gmarkers)} — {tag}")
+            metrics.plot_confusion(conf, ax, gmarkers, f"{'/'.join(gmarkers)} - {tag}")
             sc = metrics.confusion_scores(conf)
             print(f"[{tag}] {'/'.join(gmarkers)}: accuracy={sc['accuracy']:.3f} "
                   f"(chance {1/len(gtasks):.2f}) | macro precision {sc['precision'].mean():.3f}, "
@@ -343,7 +430,7 @@ def parity(ctx, dc, epoched, t_grid, preds, *, models=None):
         if tp is not None:
             ax.axvline(tp, color="crimson", ls="--", lw=1)
         ax.axhline(0.5, color="gray", lw=0.6)
-        ax.set(title=f"{task} — '{'/'.join(on_groups)}'", ylim=(0, 1),
+        ax.set(title=f"{task} - '{'/'.join(on_groups)}'", ylim=(0, 1),
                xlabel="time from marker (s)", ylabel="P(positive)")
         ax.legend(fontsize=7, loc="upper right")
     _blank(axes, len(tasks), nrows, ncols)
@@ -396,7 +483,7 @@ def marker_order_diagnostic(times, labels, *, n_perm=2000, title_prefix="Marker"
     fig, ax = plt.subplots(figsize=(12, 3))
     for name, ts in times_by_label.items():
         ax.scatter(ts, [name] * len(ts), s=12)
-    ax.set(xlabel="time in recording (s)", title=f"{title_prefix} timeline — blocked or interleaved?")
+    ax.set(xlabel="time in recording (s)", title=f"{title_prefix} timeline - blocked or interleaved?")
     ax.grid(axis="x", alpha=0.3)
     plt.tight_layout(); plt.show()
 

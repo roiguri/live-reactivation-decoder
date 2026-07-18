@@ -7,7 +7,13 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from analysis_lib import metrics, streaming, task_labels  # noqa: E402
+from analysis_lib import (  # noqa: E402
+    cross_domain,
+    metrics,
+    online_validation,
+    streaming,
+    task_labels,
+)
 
 
 def test_imports_without_backend_on_path():
@@ -226,6 +232,36 @@ def test_retrieval_trials_with_animate_inanimate_verb_names():
     ]
 
 
+def test_block_starts_opens_a_block_per_learning_phase():
+    """Two learning->retrieval cycles: a block opens at the first learning_verb
+    of each learning phase (the first one, and the first after any retrieval)."""
+    markers = _mk([
+        # block 0 — learning phase (two study cues), then retrieval phase
+        (0.0, 201, "learning_verb_1"),
+        (2.0, 211, "learning_animate_01"),
+        (4.0, 205, "learning_verb_5"),
+        (6.0, 215, "learning_inanimate_02"),
+        (10.0, 221, "retrieval_verb_1"),
+        (16.0, 85, "retrieval_end"),
+        (17.0, 225, "retrieval_verb_5"),
+        (23.0, 85, "retrieval_end"),
+        # block 1 — new learning phase, then retrieval
+        (30.0, 201, "learning_verb_1"),
+        (32.0, 211, "learning_animate_01"),
+        (36.0, 221, "retrieval_verb_1"),
+        (42.0, 85, "retrieval_end"),
+    ])
+    assert task_labels.block_starts(markers) == [0.0, 30.0]
+
+
+def test_block_starts_empty_when_no_learning_cues():
+    markers = _mk([
+        (0.0, 221, "retrieval_verb_1"),
+        (6.0, 85, "retrieval_end"),
+    ])
+    assert task_labels.block_starts(markers) == []
+
+
 def test_display_config_identity_and_targets():
     from analysis_lib import plots
 
@@ -255,3 +291,251 @@ def test_perm_band_shapes():
     obs, lo, hi, nmean = metrics.perm_band(ep, "red decoder", "red", markers, n_perm=50)
     assert obs.shape == lo.shape == hi.shape == nmean.shape == (20,)
     assert np.all(lo <= hi)
+
+
+def test_permutation_auc_pvalue_separable_signal():
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import StratifiedKFold
+
+    rng = np.random.default_rng(0)
+    n = 40
+    X = np.concatenate([rng.normal(-2, 0.5, (n, 3)), rng.normal(2, 0.5, (n, 3))])
+    y = np.array([0] * n + [1] * n)
+    cv = StratifiedKFold(n_splits=4, shuffle=True, random_state=0)
+
+    observed, null, p_value = metrics.permutation_auc_pvalue(
+        X, y, LogisticRegression(), cv, n_perm=100, rng=np.random.default_rng(1))
+
+    assert null.shape == (100,)
+    assert 0.0 <= p_value <= 1.0
+    assert observed > 0.9
+    assert p_value < 0.05
+
+
+def test_permutation_auc_pvalue_reports_progress():
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import StratifiedKFold
+
+    rng = np.random.default_rng(0)
+    n = 20
+    X = np.concatenate([rng.normal(-2, 0.5, (n, 3)), rng.normal(2, 0.5, (n, 3))])
+    y = np.array([0] * n + [1] * n)
+    cv = StratifiedKFold(n_splits=4, shuffle=True, random_state=0)
+
+    calls = []
+    metrics.permutation_auc_pvalue(
+        X, y, LogisticRegression(), cv, n_perm=10, rng=np.random.default_rng(1),
+        on_progress=lambda done, total: calls.append((done, total)))
+
+    assert calls == [(i, 10) for i in range(1, 11)]
+
+
+# ── step 2: online-pipeline validation ──────────────────────────────────────
+
+_SETTINGS = {
+    "model": "Logistic", "scale_method": "standard", "params": {},
+    "random_state": 0, "cv": {"k": 3},
+}
+
+
+def _separable_timeseries(rng, *, n=30, n_ch=3, n_t=5, sep=3.0):
+    """Two-class Gaussian blobs decodable at every timepoint: (2n, n_ch, n_t), y."""
+    X = np.concatenate([rng.normal(-sep, 0.5, (n, n_ch, n_t)),
+                        rng.normal(sep, 0.5, (n, n_ch, n_t))])
+    y = np.array([0] * n + [1] * n)
+    return X, y
+
+
+def test_make_epocher_multichannel_shape_and_interp():
+    out = np.arange(0, 300)
+    t_grid, epoch = streaming.make_epocher_multichannel(
+        out, sfreq=100.0, fs_out=100.0, tmin=-0.1, tmax=0.5)
+    assert len(t_grid) == 61
+    feats = np.stack([np.linspace(0, 1, 300), np.linspace(1, 2, 300)], axis=1)  # (300, 2)
+    arr, kept = epoch(feats, [100, 200])
+    assert arr.shape == (2, 2, 61)  # (n_trials, n_ch, n_grid)
+    assert kept == [100, 200]
+    # t=0 lands exactly on the marker sample -> interpolated value == raw sample
+    zero_idx = int(np.argmin(np.abs(t_grid)))
+    assert np.isclose(arr[0, 0, zero_idx], feats[100, 0])
+    assert np.isclose(arr[0, 1, zero_idx], feats[100, 1])
+
+
+def test_make_epocher_multichannel_skips_uncovered_marker():
+    out = np.arange(0, 120)
+    _, epoch = streaming.make_epocher_multichannel(
+        out, sfreq=100.0, fs_out=100.0, tmin=-0.1, tmax=0.5)
+    feats = np.stack([np.linspace(0, 1, 120)] * 2, axis=1)
+    arr, kept = epoch(feats, [1000])  # no surrounding samples -> dropped
+    assert arr.shape == (0, 2, 61)
+    assert kept == []
+
+
+def test_pair_by_onset_drops_unmatched():
+    pairs = online_validation._pair_by_onset([0.0, 1.0, 2.0], [0.0, 2.0], tol=0.02)
+    assert pairs == [(0, 0), (2, 1)]  # the 1.0s offline trial has no online partner
+
+
+def test_cross_pipeline_tgm_identical_pipelines_match():
+    rng = np.random.default_rng(0)
+    X, y = _separable_timeseries(rng)
+    res = online_validation.cross_pipeline_tgm(X, X, y, _SETTINGS)
+    n_t = X.shape[2]
+    assert res["tgm_off"].shape == (n_t, n_t)
+    # same fits, same test data -> offline and online branches are identical
+    assert np.allclose(res["diag_off"], res["diag_on"])
+    assert res["diag_off"].max() > 0.9
+    assert (res["tgm_on"] >= 0.0).all() and (res["tgm_on"] <= 1.0).all()
+
+
+def test_cross_pipeline_tgm_degraded_online_loses_auc():
+    rng = np.random.default_rng(1)
+    X_off, y = _separable_timeseries(rng)
+    X_on = X_off + rng.normal(0, 8.0, X_off.shape)  # heavy noise wrecks separability
+    res = online_validation.cross_pipeline_tgm(X_off, X_on, y, _SETTINGS)
+    assert res["diag_on"].mean() < res["diag_off"].mean()
+
+
+def test_operating_point_degradation_identical_pipelines_pass():
+    rng = np.random.default_rng(2)
+    X, y = _separable_timeseries(rng)
+    res = online_validation.operating_point_degradation(
+        X, X, y, _SETTINGS, timepoint_idx=2, n_boot=200,
+        rng=np.random.default_rng(0))
+    assert np.isclose(res["auc_off"], res["auc_on"])
+    assert abs(res["delta"]) < 1e-9
+    assert res["passed"] is True
+
+
+def test_operating_point_degradation_degraded_online_drops():
+    rng = np.random.default_rng(3)
+    X_off, y = _separable_timeseries(rng)
+    X_on = X_off + rng.normal(0, 8.0, X_off.shape)
+    res = online_validation.operating_point_degradation(
+        X_off, X_on, y, _SETTINGS, timepoint_idx=2, n_boot=200,
+        rng=np.random.default_rng(0))
+    assert res["auc_on"] < res["auc_off"]
+    assert res["pct_drop"] > 0.0
+    assert 0.0 <= res["auc_on"] <= 1.0
+
+
+# ── step 3: cross-domain generalization ──────────────────────────────────────
+
+def test_binary_test_set_maps_categories_and_drops_irrelevant():
+    task_cfg = {
+        "name": "animate decoder",
+        "pos_labels": ["animate_01", "animate_02"],
+        "neg_labels": ["inanimate_01", "rest_fixation"],  # rest -> None, dropped
+    }
+    X_all = np.arange(4 * 2 * 3).reshape(4, 2, 3)  # (n_trials, n_ch, n_grid)
+    cat_labels = ["animate", "inanimate", "scene", "animate"]  # "scene" in neither
+    X_test, y_test = cross_domain.binary_test_set(X_all, cat_labels, task_cfg)
+    assert X_test.shape == (3, 2, 3)  # the "scene" trial dropped
+    assert y_test.tolist() == [1, 0, 1]
+    np.testing.assert_array_equal(X_test, X_all[[0, 1, 3]])
+
+
+def test_binary_test_set_rejects_overlapping_polarity():
+    import pytest
+    task_cfg = {"name": "bad", "pos_labels": ["animate_01"], "neg_labels": ["animate_02"]}
+    with pytest.raises(ValueError, match="both pos and neg"):
+        cross_domain.binary_test_set(np.zeros((2, 1, 1)), ["animate", "animate"], task_cfg)
+
+
+def test_binary_test_set_single_class_raises():
+    import pytest
+    task_cfg = {"name": "animate decoder", "pos_labels": ["animate_01"],
+                "neg_labels": ["inanimate_01"]}
+    with pytest.raises(ValueError, match="single class"):
+        cross_domain.binary_test_set(np.zeros((2, 1, 1)), ["animate", "animate"], task_cfg)
+
+
+def test_tgm_auc_matches_roc_auc_score_per_cell_with_ties():
+    from sklearn.metrics import roc_auc_score
+
+    rng = np.random.default_rng(0)
+    n, n_fl, n_test = 30, 4, 5
+    # integer scores force ties, exercising average-rank handling
+    scores = rng.integers(0, 6, size=(n, n_fl, n_test)).astype(float)
+    y = np.array([0] * (n // 2) + [1] * (n // 2))
+    tgm = cross_domain.tgm_auc(scores, y)
+    assert tgm.shape == (n_fl, n_test)
+    for i in range(n_fl):
+        for j in range(n_test):
+            assert np.isclose(tgm[i, j], roc_auc_score(y, scores[:, i, j]))
+
+
+def _scores_with_signal(rng, *, n=40, n_fl=4, n_test=5, fl_row=1, test_col=3, sep=4.0):
+    """Noise everywhere except one (fl_row, test_col) cell that separates the classes."""
+    scores = rng.normal(0, 1.0, (n, n_fl, n_test))
+    y = np.array([0] * (n // 2) + [1] * (n // 2))
+    scores[y == 1, fl_row, test_col] += sep
+    return scores, y, fl_row, test_col
+
+
+def test_row_permutation_finds_signal_latency_and_is_significant():
+    rng = np.random.default_rng(1)
+    scores, y, fl_row, test_col = _scores_with_signal(rng)
+    res = cross_domain.row_permutation(scores, y, fl_row, n_perm=500,
+                                       rng=np.random.default_rng(0))
+    assert res["obs_row"].shape == (scores.shape[2],)
+    assert res["null_max"].shape == (500,)
+    assert res["argmax_test_idx"] == test_col   # latency of the planted effect
+    assert res["max_auc"] > 0.9
+    assert 0.0 <= res["p_value"] <= 1.0
+    assert res["p_value"] < 0.05
+
+
+def test_matrix_permutation_locates_cell_both_axes():
+    rng = np.random.default_rng(4)
+    scores, y, fl_row, test_col = _scores_with_signal(rng, sep=4.0)
+    res = cross_domain.matrix_permutation(scores, y, n_perm=500,
+                                          rng=np.random.default_rng(0))
+    assert res["tgm"].shape == scores.shape[1:]
+    assert res["null_max"].shape == (500,)
+    assert (res["fl_idx"], res["test_idx"]) == (fl_row, test_col)  # 2-D search finds it
+    assert res["max_auc"] > 0.9
+    assert res["p_value"] < 0.05
+    # whole-map max is >= any single row's max (searches strictly more cells)
+    row = cross_domain.row_permutation(scores, y, fl_row, n_perm=1,
+                                       rng=np.random.default_rng(0))
+    assert res["max_auc"] >= row["max_auc"] - 1e-12
+
+
+def test_row_permutation_pure_noise_pbounds():
+    rng = np.random.default_rng(2)
+    n, n_fl, n_test = 40, 3, 4
+    scores = rng.normal(0, 1.0, (n, n_fl, n_test))
+    y = np.array([0] * (n // 2) + [1] * (n // 2))
+    res = cross_domain.row_permutation(scores, y, 1, n_perm=300,
+                                       rng=np.random.default_rng(0))
+    # Efron-Tibshirani floor: never exactly 0
+    assert 1 / (300 + 1) <= res["p_value"] <= 1.0
+
+
+def test_cell_bootstrap_orders_and_brackets_observed():
+    from sklearn.metrics import roc_auc_score
+
+    rng = np.random.default_rng(3)
+    scores, y, fl_row, test_col = _scores_with_signal(rng)
+    observed = roc_auc_score(y, scores[:, fl_row, test_col])
+    lo, hi = cross_domain.cell_bootstrap(scores, y, fl_row, test_col, n_boot=400,
+                                         rng=np.random.default_rng(0))
+    assert lo <= hi
+    assert lo <= observed <= hi
+
+
+def test_stouffer_combines_and_sharpens():
+    z1, p1 = cross_domain.stouffer([0.05, 0.05, 0.05])
+    # three concordant results are jointly more significant than any one
+    assert p1 < 0.05
+    assert z1 > 0.0
+    # monotone: smaller inputs -> smaller combined p
+    _, p2 = cross_domain.stouffer([0.2, 0.2, 0.2])
+    assert p1 < p2 < 1.0
+
+
+def test_stouffer_rejects_zero_pvalue():
+    import pytest
+    with pytest.raises(ValueError, match="must be in"):
+        cross_domain.stouffer([0.0, 0.1, 0.1])
