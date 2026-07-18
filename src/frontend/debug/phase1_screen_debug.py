@@ -34,10 +34,11 @@ from typing import Callable
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QWidget,
+    QApplication, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton, QWidget,
 )
 
 from backend.session import AppSession
+from frontend.debug.mne_review import review_bad_channels, review_ica_components
 from frontend.debug.profiles import DebugProfile, resolve_profile
 from frontend.debug.snapshots import load_snapshot
 from frontend.screens.phase1_screen import Phase1Screen, _NODE_TITLES
@@ -48,6 +49,11 @@ from frontend.styles.theme import (
 logger = logging.getLogger(__name__)
 
 _DEBUG_PREFIX = "[DEBUG] "
+
+# The bad-channel step loads + filters the raw synchronously on the GUI
+# thread (production runs it in a worker); crop to this many seconds first so
+# the walkthrough stays responsive. Set to ``None`` to review the full raw.
+_BADCHAN_PREVIEW_SECONDS: float | None = 120.0
 
 
 @dataclass
@@ -72,6 +78,8 @@ class DebugPhase1Screen(Phase1Screen):
             _Step("Continue → Load Data",     self._step_continue_settings),
             _Step("Pick demo data folder",    self._step_pick_data),
             _Step("Skip data load",           self._step_skip_load),
+            _Step("Bad-channel review (MNE)",  self._step_bad_channels),
+            _Step("ICA component review (MNE)", self._step_ica_review),
             _Step("Skip preprocessing",       self._step_skip_preproc),
             _Step("Continue → Evaluation",    self._step_continue_preproc),
             _Step("Skip evaluation",          self._step_skip_eval),
@@ -270,8 +278,67 @@ class DebugPhase1Screen(Phase1Screen):
         self._load_data_view._picker.setEnabled(False)
         self._load_data_view.data_loaded.emit()
 
+    def _step_bad_channels(self) -> bool | None:
+        """Pop MNE's interactive bad-channel window — the real production screen.
+
+        The raw is loaded live from the profile's original recording folder
+        (``manifest.raw_data_dir``), not a stored snapshot, so no raw is baked
+        into ``debug_snapshots/``. It's cropped to ``_BADCHAN_PREVIEW_SECONDS``
+        before filtering to keep this (main-thread) step responsive. The bads
+        the operator marks are logged but not persisted — the seeded snapshot
+        already carries the finished pipeline; this step just demonstrates the
+        screen.
+        """
+        data_dir = self._profile.raw_data_dir
+        if not Path(data_dir).exists():
+            QMessageBox.warning(
+                self,
+                "Raw data missing",
+                f"{data_dir} not found.\n\nThe profile's original recording "
+                "folder is required for the bad-channel window (it is loaded "
+                "live, not from a snapshot).",
+            )
+            return False
+        orch = self.session.offline
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            orch.set_file_path(data_dir)
+            orch.load_raw_data()
+            if _BADCHAN_PREVIEW_SECONDS is not None and orch._raw is not None:
+                tmax = min(_BADCHAN_PREVIEW_SECONDS, float(orch._raw.times[-1]))
+                orch._raw.crop(tmax=tmax)
+            raw = orch.run_step1a_filter()
+        finally:
+            QApplication.restoreOverrideCursor()
+        review_bad_channels(raw)
+        return None
+
+    def _step_ica_review(self) -> bool | None:
+        """Pop MNE's interactive ICA topomap grid — the real production screen.
+
+        Uses the fitted ICA + cleaned epochs from ``preproc_done.joblib`` (both
+        already in the snapshot), so no recompute. Toggling reject/keep here is
+        cosmetic — the seeded pipeline's exclusions stand.
+        """
+        preproc_snap = self._profile.snapshot_paths["preproc"]
+        if not self._require_snapshot(preproc_snap):
+            return False
+        load_snapshot(self.session.offline, preproc_snap)
+        pre = self.session.offline._preprocessor
+        epochs = self.session.offline.epochs
+        if pre is None or pre.ica is None or epochs is None:
+            QMessageBox.warning(
+                self,
+                "Bad snapshot",
+                f"{preproc_snap} has no fitted ICA / epochs; re-run the seeder.",
+            )
+            return False
+        labels = self.session.offline.ica_component_labels()
+        review_ica_components(pre.ica, epochs, labels)
+        return None
+
     def _step_skip_preproc(self) -> bool | None:
-        """7: load preproc snapshot + force Preprocessing view into Complete state."""
+        """Load preproc snapshot + force Preprocessing view into Complete state."""
         preproc_snap = self._profile.snapshot_paths["preproc"]
         if not self._require_snapshot(preproc_snap):
             return False
