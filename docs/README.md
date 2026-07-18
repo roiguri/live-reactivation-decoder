@@ -1,5 +1,8 @@
 # Documentation
 
+- **[guide/](guide/)** — final, reader-facing documentation (the pages the top-level
+  [README](../README.md) links to):
+  - [user_manual.md](guide/user_manual.md) — screen-by-screen Phase 1 + Phase 2 walkthrough
 - **[architecture/](architecture/)** — how the system works now; the maintained,
   source-of-truth-adjacent references:
   - [backend_architecture.md](architecture/backend_architecture.md) — backend surface & contracts
