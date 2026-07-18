@@ -100,27 +100,34 @@ documentation plan). -->
 
 ### Preprocessing
 
-*The preprocessing step starts from a single control, then runs filtering, bad-channel marking, ICA, and epoching automatically.*
+This step cleans the recording. You start it from a single control, and it runs
+filtering, bad-channel handling, ICA, and epoching. It pauses twice for your
+input and takes a few minutes.
+
+> **Important:** closing an MNE window commits your selection and preprocessing
+> continues immediately. The window cannot be reopened, so finish marking or
+> toggling before you close it.
 
 ![Preprocessing - ready](../assets/walkthrough/04a-preprocessing-ready.png)
 
-*MNE's interactive browser, where the operator inspects the raw traces and marks noisy channels to exclude.*
+**Mark bad channels.** MNE's interactive browser opens and shows the raw traces.
+Click any channels you want to exclude to mark them, then close the window to
+continue.
 
 ![Preprocessing - bad channels](../assets/walkthrough/04b-preprocessing-badchannels.png)
 
-*The full set of ICA components shown as topomaps, each labelled with its ICLabel category and confidence; the operator toggles which components to remove.*
+**Review ICA components.** After ICA runs, its components open as a grid of
+topomaps, each labelled with its ICLabel category and confidence, with the likely
+artifacts already selected. Click a component's topomap to open its properties
+window for a closer look at its topography, power spectrum, and activity over
+time. Toggle which components to remove, then close the window to continue.
 
 ![Preprocessing - ICA components](../assets/walkthrough/04c-preprocessing-ica.png)
 
-*A summary of the cleaned data: epochs retained per class and the number of ICA components removed.*
+**Completion.** When preprocessing finishes, the screen summarizes the cleaned
+data: the epochs retained per class and the number of ICA components removed.
 
 ![Preprocessing - complete](../assets/walkthrough/04d-preprocessing-complete.png)
-
-<!-- TODO (mechanics only): the two operator actions - marking bad channels in
-MNE's browser, and reviewing/toggling the ICLabel-suggested ICA components. Note
-the ~5 min wait, that MNE windows pop modally and you close them to continue, and
-what the completion summary reports (epochs retained per class, components
-removed). Describe the mechanics, not how to judge a channel/component. -->
 
 ### Model Evaluation
 
