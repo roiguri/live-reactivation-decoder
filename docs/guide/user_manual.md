@@ -39,13 +39,16 @@ The app must be installed and running first. See the README for
 
 ## Launch
 
-*The launcher offers two entry points: start a new training run from scratch, or open live inference directly from a folder a previous run already trained into.*
+When you start the app it opens on a welcome screen with two entry points.
 
 ![Launch](../assets/walkthrough/01-launch.png)
 
-<!-- TODO (Launch): describe the two entry points as user choices - when to pick
-"Start New Training" vs "Open Live from Existing Output" (the latter needs a
-folder a prior run already trained into). -->
+- **Start New Training** runs the full Phase 1 pipeline from scratch. Choose this
+  when you have a new functional-localizer recording to train a decoder from.
+- **Open Live from Existing Output** skips straight to Phase 2 against a folder a
+  previous run already trained into (one that already holds a
+  `models/decoder_pipeline.joblib`). Choose this to run live inference again
+  without retraining.
 
 ## Phase 1: Training (offline)
 
