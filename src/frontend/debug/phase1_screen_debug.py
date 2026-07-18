@@ -38,7 +38,7 @@ from PyQt6.QtWidgets import (
 )
 
 from backend.session import AppSession
-from frontend.debug.debug_bar import DEBUG_PREFIX as _DEBUG_PREFIX, DebugBar
+from frontend.debug.debug_bar import DebugBar
 from frontend.debug.mne_review import review_bad_channels, review_ica_components
 from frontend.debug.phase2_screen_debug import build_debug_phase2
 from frontend.debug.profiles import DebugProfile, resolve_profile
@@ -46,6 +46,10 @@ from frontend.debug.snapshots import load_snapshot
 from frontend.screens.phase1_screen import Phase1Screen, _NODE_TITLES
 
 logger = logging.getLogger(__name__)
+
+# The workspace header keeps a text "[DEBUG] " prefix (a separate widget from
+# the debug bar, which now carries the amber DEBUG chip instead).
+_DEBUG_PREFIX = "[DEBUG] "
 
 # The bad-channel step loads + filters the raw synchronously on the GUI
 # thread (production runs it in a worker); crop to this many seconds first so
@@ -132,7 +136,7 @@ class DebugPhase1Screen(Phase1Screen):
         )
         self._reset_btn = self._debug_bar.add_button("Reset", on_click=self._on_reset)
         self._next_btn = self._debug_bar.add_button(
-            "Next →", kind="primary", on_click=self._on_next
+            "Next →", on_click=self._on_next
         )
         return self._debug_bar
 
@@ -170,10 +174,10 @@ class DebugPhase1Screen(Phase1Screen):
     def _update_toolbar(self) -> None:
         total = len(self._steps)
         if self._step_idx == 0:
-            label = f"{_DEBUG_PREFIX}Step 0/{total}: (press Next to start)"
+            label = f"Step 0/{total}: (press Next to start)"
         elif self._step_idx <= total:
             done_step = self._steps[self._step_idx - 1]
-            label = f"{_DEBUG_PREFIX}Step {self._step_idx}/{total}: {done_step.name} ✓"
+            label = f"Step {self._step_idx}/{total}: {done_step.name} ✓"
         self._debug_bar.set_label(label)
         self._next_btn.setEnabled(self._step_idx < total)
 

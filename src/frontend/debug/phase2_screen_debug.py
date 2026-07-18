@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import QWidget
 
 from backend.core.session_paths import SessionPaths
 from backend.session import AppSession
-from frontend.debug.debug_bar import DEBUG_PREFIX, DebugBar
+from frontend.debug.debug_bar import DebugBar
 from frontend.debug.launch_screen_debug import DebugLaunchScreen
 from frontend.debug.profiles import DebugProfile, resolve_profile
 from frontend.screens.phase2_screen import Phase2Screen
@@ -57,12 +57,12 @@ class DebugPhase2Screen(Phase2Screen):
     # ── toolbar ──────────────────────────────────────────────────────────────
 
     def _build_debug_toolbar(self) -> QWidget:
-        bar = DebugBar(f"{DEBUG_PREFIX}Live inference")
+        bar = DebugBar("Live inference")
         # Reset sits left of Next; Next stays pinned to the far right.
         self._reset_btn = bar.add_button("Reset", on_click=self._on_reset)
         # Next is kept for parity with the other debug bars, but there is no
         # step past live inference — so it is permanently disabled, not removed.
-        self._next_btn = bar.add_button("Next →", kind="primary", enabled=False)
+        self._next_btn = bar.add_button("Next →", enabled=False)
         return bar
 
     # ── navigation ───────────────────────────────────────────────────────────

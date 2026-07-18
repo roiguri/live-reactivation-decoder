@@ -23,7 +23,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import QWidget
 
-from frontend.debug.debug_bar import DEBUG_PREFIX, DebugBar
+from frontend.debug.debug_bar import DebugBar
 from frontend.debug.profiles import DebugProfile
 from frontend.screens.launch_screen import LaunchScreen
 
@@ -57,12 +57,10 @@ class DebugLaunchScreen(LaunchScreen):
     # ── toolbar + shortcuts ──────────────────────────────────────────────────
 
     def _build_debug_toolbar(self) -> QWidget:
-        bar = DebugBar(
-            f"{DEBUG_PREFIX}Welcome · Next: Phase 1 · Live: Phase 2"
-        )
+        bar = DebugBar("Welcome · Next: Phase 1 · Live: Phase 2")
         # Live sits left of Next; Next (the default walkthrough) stays far right.
         bar.add_button("Live →", kind="outline", on_click=self._go_phase2)
-        bar.add_button("Next →", kind="primary", on_click=self._go_phase1)
+        bar.add_button("Next →", on_click=self._go_phase1)
         return bar
 
     def _install_shortcuts(self) -> None:
