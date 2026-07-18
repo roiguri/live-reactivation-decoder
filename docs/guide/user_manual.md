@@ -117,7 +117,7 @@ continue.
 ![Preprocessing - bad channels](../assets/walkthrough/04b-preprocessing-badchannels.png)
 
 **Review ICA components.** After ICA runs, its components open as a grid of
-topomaps, each labelled with its ICLabel category and confidence, with the likely
+topomaps, each labeled with its ICLabel category and confidence, with the likely
 artifacts already selected. Click a component's topomap to open its properties
 window for a closer look at its topography, power spectrum, and activity over
 time. Toggle which components to remove, then close the window to continue.
@@ -201,51 +201,77 @@ There are two ways in:
 - **Open Live from Existing Output** on the welcome screen loads a decoder from a
   folder a previous run already trained into.
 
-### Discover and select the stream
+### The live screen
 
-*Available LSL streams on the network are discovered automatically and presented to choose from (here the replayed `NeuroneStream`).*
+When you enter live, the screen is laid out but stays empty until a stream is
+running. It has:
 
-![Live - target dialog](../assets/walkthrough/08-live-target-dialog.png)
-
-<!-- TODO: action (streams are discovered, pick one), the DECISION of the decode
-target, and the replay-vs-hardware distinction (cross-link Before you start /
-Troubleshooting). -->
-
-### Reading the live screen
-
-*The full live screen before inference starts: status header, decoder and decision-settings sidebar, and the empty decision, probability, and event-locked regions awaiting a stream.*
+- a **header** across the top (inference status, the selected stream, and a
+  latency readout)
+- **decision tiles** and a streaming **probability chart** in the center
+- an **event-locked view** for frozen events
+- a **control sidebar** on the right
 
 ![Live - idle](../assets/walkthrough/07-live-idle.png)
 
-*The full live screen during inference - everything together: status and latency header, decision tiles, streaming probability chart, and event-locked view.*
+Each part is described below, starting with selecting the stream.
+
+### Select the stream
+
+Open the **Select Target** dialog with the **Select Target** button, or by
+starting inference. The app then scans the network for available LSL streams.
+
+![Live - target dialog](../assets/walkthrough/08-live-target-dialog.png)
+
+Pick the stream from the **Live stream (LSL)** dropdown and press **OK** to
+connect. If your stream is not listed yet, press **Refresh** to scan again. The
+stream is either the hardware stream published by LSLProxy or a replayed
+recording used for testing (see [Before you start](#before-you-start)).
+
+### Live output
+
+Once the stream is running, the regions populate. Everything below appears only
+after a stream is connected and started.
 
 ![Live - running](../assets/walkthrough/09-live-running.png)
 
-*The live header shows the inference status, the selected decode target, and a latency readout (rolling ~1 s average): Pipeline is the compute time to process one micro-batch (preprocessing plus inference), while E2E is the end-to-end latency from a sample arriving to its prediction.*
-
-![Live - header](../assets/walkthrough/10-live-topbar.png)
-
-*The decision tiles above the live probability chart: each decoder's class probability streams in real time, and a tile lights up in the decoder's colour when it latches over threshold.*
+**Probabilities and decisions:** Each decoder's class probability streams on the
+chart, and its decision tile above lights up in the decoder's color once the
+probability stays above the threshold for the configured sustain length.
 
 ![Live - decisions and probabilities](../assets/walkthrough/11-live-decision-probability.png)
 
-*An event-locked view that freezes the decoder outputs around each trigger event, with controls to browse the captured history.*
+**Frozen events:** The event-locked view freezes the decoder outputs around a
+trigger event. Open the dropdown to pick from all captured events, or use the
+arrows to step through them. The **Latest** button keeps the view pinned to the
+most recent event as new ones arrive, and you can filter the list to show only
+specific event types.
 
 ![Live - event-locked view](../assets/walkthrough/12-live-frozen-event.png)
 
-<!-- TODO: walk through reading each region - header (status, target, the two
-latency numbers), decision tiles (latch over threshold), probability chart, and
-the event-locked view. Keep it about interpretation, not internals. -->
+**Latency:** The header shows a latency readout, a rolling ~1 s average, as two
+numbers:
+
+- **Pipeline:** the time to process one micro-batch (preprocessing plus
+  inference).
+- **E2E:** the end-to-end latency from a sample arriving to its prediction.
+
+![Live - header](../assets/walkthrough/10-live-topbar.png)
 
 ### Controls
 
-*The live control sidebar: toggle each decoder's visibility and set the decision threshold and sustain length. The Start/Halt button sits at its foot.*
+The control sidebar on the right holds the decoder and decision settings, with
+the **Start/Halt** button at its foot.
 
 ![Live - settings](../assets/walkthrough/13-live-settings.png)
 
-<!-- TODO: the operator controls - decoder visibility, decision threshold, sustain
-length, and Start/Halt. Explain what threshold and sustain length do to the
-decision tiles. -->
+- **Decoders:** toggle each decoder's visibility. This only shows or hides a
+  decoder on screen. Its output is still logged either way.
+- **Decision settings:** set the decision threshold and sustain length. Changes
+  take effect only after you press **Apply**.
+
+> **Note:** **Reset** restores the decision settings to the last applied state,
+> not to the app's initial defaults.
 
 ## Output files
 
