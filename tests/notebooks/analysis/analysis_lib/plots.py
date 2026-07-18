@@ -226,8 +226,11 @@ def plot_topomap_grid(patterns_by_task, info, *, ncols=2):
     return fig
 
 
-def per_decoder(ctx, dc, epoched, t_grid, preds):
-    """Single-trial (faint) + mean (navy) P(t) over each decoder's own positive group(s)."""
+def per_decoder(ctx, dc, epoched, t_grid, preds, *, save_path=None):
+    """Single-trial (faint) + mean (navy) P(t) over each decoder's own positive group(s).
+
+    ``save_path`` (optional) writes the figure with a tight bbox before showing.
+    """
     tasks = list(preds)
     fig, axes, nrows, ncols = _grid(len(tasks))
     for idx, task in enumerate(tasks):
@@ -249,11 +252,17 @@ def per_decoder(ctx, dc, epoched, t_grid, preds):
                ylim=(0, 1), xlabel="time from marker (s)", ylabel="P(positive)")
         ax.legend(fontsize=7, loc="upper right")
     _blank(axes, len(tasks), nrows, ncols)
-    plt.tight_layout(); plt.show()
+    plt.tight_layout()
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.show()
 
 
-def selectivity(ctx, dc, epoched, t_grid, preds):
-    """Per decoder, mean ± SEM P(t) for every display group overlaid."""
+def selectivity(ctx, dc, epoched, t_grid, preds, *, save_path=None):
+    """Per decoder, mean ± SEM P(t) for every display group overlaid.
+
+    ``save_path`` (optional) writes the figure with a tight bbox before showing.
+    """
     tasks = list(preds)
     fig, axes, nrows, ncols = _grid(len(tasks))
     for idx, task in enumerate(tasks):
@@ -275,7 +284,10 @@ def selectivity(ctx, dc, epoched, t_grid, preds):
                ylim=(0, 1), xlabel="time from marker (s)", ylabel="P(positive)")
         ax.legend(fontsize=6, loc="upper right")
     _blank(axes, len(tasks), nrows, ncols)
-    plt.tight_layout(); plt.show()
+    plt.tight_layout()
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.show()
 
 
 def competition(ctx, dc, epoched, t_grid, preds):
