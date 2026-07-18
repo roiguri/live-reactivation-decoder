@@ -166,17 +166,26 @@ can continue to Train & Save.
 
 ### Train & Save
 
-*The train step ready to run, before the final decoders are fit at the confirmed timepoints.*
+This final step fits each decoder at its confirmed timepoint and saves the
+result. Press the play button to run it.
 
 ![Train & Save - ready](../assets/walkthrough/06a-train-ready.png)
 
-*Trains the final decoders at the selected timepoint and saves the pipeline artifact, with a spatial topomap for each decoder.*
+Training fits one classifier per decoder at its confirmed timepoint and writes
+the decoder bundle to `models/decoder_pipeline.joblib` in your output directory
+(see [Output files](#output-files)). When it finishes, the screen shows a spatial
+topomap for each decoder.
 
 ![Train & Save - topomaps](../assets/walkthrough/06b-train.png)
 
-<!-- TODO: action (train), what is produced (decoder_pipeline.joblib, cross-link
-Output files), and how to read the spatial topomaps as a sanity check. Note the
-handoff to Phase 2 (Go Live). -->
+The saved bundle carries not only the trained decoders but the preprocessing used
+to train them (the fixed filtering recipe, the channels you marked bad, and the
+ICA solution), frozen together. Phase 2 loads this bundle and cleans the live
+stream exactly as the training data was cleaned, so the two cannot diverge. This
+preprocessing is fixed at training time and cannot be changed during the live
+phase.
+
+From here you can go live to run it against a stream.
 
 ## Phase 2: Live inference (online)
 
