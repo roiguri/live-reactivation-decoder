@@ -34,22 +34,18 @@ from typing import Callable
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton,
-    QVBoxLayout, QWidget,
+    QApplication, QMessageBox, QVBoxLayout, QWidget,
 )
 
 from backend.session import AppSession
+from frontend.debug.debug_bar import DEBUG_PREFIX as _DEBUG_PREFIX, DebugBar
 from frontend.debug.mne_review import review_bad_channels, review_ica_components
+from frontend.debug.phase2_screen_debug import build_debug_phase2
 from frontend.debug.profiles import DebugProfile, resolve_profile
 from frontend.debug.snapshots import load_snapshot
 from frontend.screens.phase1_screen import Phase1Screen, _NODE_TITLES
-from frontend.styles.theme import (
-    BORDER_GRAY, PRIMARY_BLUE, TEXT_MUTED, TEXT_PRIMARY,
-)
 
 logger = logging.getLogger(__name__)
-
-_DEBUG_PREFIX = "[DEBUG] "
 
 # The bad-channel step loads + filters the raw synchronously on the GUI
 # thread (production runs it in a worker); crop to this many seconds first so
@@ -127,47 +123,49 @@ class DebugPhase1Screen(Phase1Screen):
     # ── toolbar + shortcuts ──────────────────────────────────────────────────
 
     def _build_debug_toolbar(self) -> QWidget:
-        bar = QFrame()
-        bar.setObjectName("debug_toolbar")
-        bar.setStyleSheet(
-            f"QFrame#debug_toolbar {{ background: #F5F3FF; "
-            f"border-bottom: 1px solid {BORDER_GRAY}; }}"
+        self._debug_bar = DebugBar()
+        # Left-to-right: Live jump, Reset, then Next pinned to the far right.
+        # "Live →" is a direct hop to Phase 2 for this profile, available at
+        # any point in the walkthrough (see _jump_to_phase2).
+        self._phase2_btn = self._debug_bar.add_button(
+            "Live →", kind="outline", on_click=self._jump_to_phase2
         )
-        bar.setFixedHeight(40)
-        layout = QHBoxLayout(bar)
-        layout.setContentsMargins(16, 4, 16, 4)
-        layout.setSpacing(8)
-
-        self._step_lbl = QLabel("")
-        self._step_lbl.setStyleSheet(
-            f"color: {TEXT_PRIMARY}; font-size: 12px; font-weight: 600;"
+        self._reset_btn = self._debug_bar.add_button("Reset", on_click=self._on_reset)
+        self._next_btn = self._debug_bar.add_button(
+            "Next →", kind="primary", on_click=self._on_next
         )
-        self._step_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self._step_lbl, 1)
-
-        # Reset sits left of Next; Next stays pinned to the far right.
-        self._reset_btn = QPushButton("Reset")
-        self._reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._reset_btn.clicked.connect(self._on_reset)
-        layout.addWidget(self._reset_btn)
-
-        self._next_btn = QPushButton("Next →")
-        self._next_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._next_btn.setStyleSheet(
-            f"QPushButton {{ background: {PRIMARY_BLUE}; color: white; "
-            f"border: none; border-radius: 4px; padding: 4px 12px; "
-            f"font-weight: 600; }}"
-            f"QPushButton:disabled {{ background: #C7D2FE; }}"
-        )
-        self._next_btn.clicked.connect(self._on_next)
-        layout.addWidget(self._next_btn)
-
-        return bar
+        return self._debug_bar
 
     def _install_shortcuts(self) -> None:
         sc = QShortcut(QKeySequence("Ctrl+Right"), self)
         sc.setContext(Qt.ShortcutContext.WindowShortcut)
         sc.activated.connect(self._on_next)
+
+    def _jump_to_phase2(self) -> None:
+        """Hop straight to the live (Phase 2) screen for this profile.
+
+        Reuses the same builder as the ``--phase2`` entry point
+        (:func:`build_debug_phase2`), so it works at any point in the
+        walkthrough regardless of how far the operator has clicked — it
+        builds a fresh session from the profile's config + pipeline rather
+        than depending on the walkthrough's trained-in session. The
+        ``--phase2`` CLI access stays as-is; this is an in-app shortcut to
+        the same destination.
+        """
+        mw = self.window()
+        if mw is None or not hasattr(mw, "show_screen"):
+            return
+        try:
+            phase2 = build_debug_phase2(self._profile)
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.exception("Debug jump to Phase 2 failed")
+            QMessageBox.critical(
+                self, "Could not open Phase 2",
+                f"Failed to build the live screen for profile "
+                f"'{self._profile.name}':\n\n{exc}",
+            )
+            return
+        mw.show_screen(phase2)
 
     def _update_toolbar(self) -> None:
         total = len(self._steps)
@@ -176,7 +174,7 @@ class DebugPhase1Screen(Phase1Screen):
         elif self._step_idx <= total:
             done_step = self._steps[self._step_idx - 1]
             label = f"{_DEBUG_PREFIX}Step {self._step_idx}/{total}: {done_step.name} ✓"
-        self._step_lbl.setText(label)
+        self._debug_bar.set_label(label)
         self._next_btn.setEnabled(self._step_idx < total)
 
     # ── Next / Reset ─────────────────────────────────────────────────────────

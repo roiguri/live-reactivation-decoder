@@ -10,19 +10,25 @@ self-contained scenario under `debug_snapshots/`. See
 [docs/features/debug_profiles.md](../../../docs/features/debug_profiles.md)
 for the design; this README is the day-to-day usage guide.
 
-Every entry point below **boots on the production welcome screen** first
-(reused verbatim from `frontend.screens.launch_screen.LaunchScreen`). The
-welcome screen gets a **debug toolbar** with a `Next →` button (and the
-`Ctrl+Right` shortcut) — the canonical way to move forward. Debug has **no
-branching**: `Next` (or clicking either of the welcome screen's two entry
-buttons) continues straight to the CLI-selected debug screen in the table.
+The default entry point **boots on the welcome hub** (the production
+`frontend.screens.launch_screen.LaunchScreen`, reused verbatim, plus a
+**debug toolbar**). The hub routes to both debug screens for the selected
+profile:
 
-| Command                                                       | Continues to                           |
+- **`Next →`** (also `Ctrl+Right`, and the "Start New Training" card) → the
+  Phase 1 walkthrough.
+- **`Live →`** (also the "Open Live from Existing Output" card) → the Phase 2
+  live screen.
+
+`--phase2` is the direct/separate access: it opens the Phase 2 live screen
+immediately, skipping the hub (its `Reset` returns to the hub).
+
+| Command                                                       | Opens                                  |
 |---------------------------------------------------------------|----------------------------------------|
-| `python -m frontend.debug.main`                               | Phase 1 walkthrough (default profile)  |
-| `python -m frontend.debug.main --profile <name>`              | Phase 1 walkthrough for `<name>`       |
-| `python -m frontend.debug.main --phase2`                      | Phase 2 screen directly (default)      |
-| `python -m frontend.debug.main --profile <name> --phase2`     | Phase 2 screen for `<name>`            |
+| `python -m frontend.debug.main`                               | Welcome hub (default profile)          |
+| `python -m frontend.debug.main --profile <name>`              | Welcome hub for `<name>`               |
+| `python -m frontend.debug.main --phase2`                      | Phase 2 live screen directly (default) |
+| `python -m frontend.debug.main --profile <name> --phase2`     | Phase 2 live screen for `<name>`       |
 | `python -m frontend.debug.main --list-profiles`               | Print discovered profiles and exit     |
 
 `--config` / `--data` override the profile's config / raw-data path for
@@ -157,6 +163,12 @@ profile's on-disk snapshots.
 There is no Prev — irreversible signal emissions can't be cleanly undone;
 relaunch the app for a fully clean state.
 
+**Live →** (in the debug toolbar) hops straight to the Phase 2 live screen
+for the current profile at any point in the walkthrough — no need to click
+to the end and Go Live. It reuses the same builder as `--phase2`
+(`build_debug_phase2`), building a fresh session from the profile's config +
+pipeline, so it works regardless of how far you've stepped.
+
 ## Phase 2 quick-jump
 
 ```bash
@@ -167,6 +179,12 @@ PYTHONPATH=src python -m frontend.debug.main --profile <name> --phase2
 Skips Phase 1 entirely. Builds a real `AppSession` from the profile's
 config and points `Phase2Screen` at the profile's
 `models/decoder_pipeline.joblib`.
+
+The live screen carries the same **debug bar** as the welcome / Phase 1
+screens. Its `Next →` is disabled (there's no step past live inference); its
+`Reset` returns to the welcome hub (tearing down the live session + stream
+source first), where you can head into Phase 1 (`Next →`) or back into a fresh
+live screen (`Live →`).
 
 Use this when iterating on Phase 2 layout, chart rendering, or the
 Start/Halt + latency wiring — the round-trip per change is ~1 s instead of
