@@ -102,10 +102,11 @@ the file on the app's Settings screen.
 The file is validated on load against the Pydantic schema in
 [`src/backend/core/config_models.py`](src/backend/core/config_models.py), and
 unknown keys are rejected. It holds only the experiment-specific settings below.
-The preprocessing parameters are fixed. See [preprocessing pipeline] for the recipe.
+The preprocessing parameters are fixed.
 
-<!-- TODO (step: Preprocessing pipeline): replace the "[preprocessing pipeline]"
-reference above with a real link once the preprocessing pipeline doc is created. -->
+<!-- TODO (Preprocessing pipeline doc): once the general pipeline description doc
+exists, add a "see <link> for the recipe" pointer here. Tracked in
+docs/plans/documentation_overhaul_plan.md. -->
 
 
 A minimal, complete config:

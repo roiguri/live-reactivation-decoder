@@ -118,11 +118,14 @@ Policy: **fix or archive** each stale doc as we work the section that touches it
 
 Not just a preprocessing explanation. It should be a **general pipeline
 description**: the offline training pipeline and the online inference pipeline
-end to end, with preprocessing as one part. Referenced today by a dangling
-`[preprocessing pipeline]` text in the Configuration section, which renders as
-literal brackets until the doc exists. Likely lives in `docs/guide/`. Scope to
-be discussed (how much signal-processing detail, whether to show the constants,
-offline vs online ordering).
+end to end, with preprocessing as one part. Likely lives in `docs/guide/`. Scope
+to be discussed (how much signal-processing detail, whether to show the
+constants, offline vs online ordering).
+
+When this doc exists, add a "see <link> for the recipe" pointer to the README
+**Configuration** section, where the spot is currently held by a hidden `TODO
+(Preprocessing pipeline doc)` comment (so nothing renders as a dangling
+reference in the meantime).
 
 ### User manual (done)
 
