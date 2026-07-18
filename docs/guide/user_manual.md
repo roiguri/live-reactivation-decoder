@@ -275,15 +275,57 @@ the **Start/Halt** button at its foot.
 
 ## Output files
 
-<!-- TODO (Output files): what a run produces and which files matter to the user.
-Verified against SessionPaths + session_logger.py:
-- Phase 1: models/decoder_pipeline.joblib (the artifact Phase 2 loads), epochs/,
-  evaluation/, experiment_config.yaml (copy of the run's config).
-- Phase 2, per run under phase2_live/<timestamp>/: predictions.csv, markers.csv,
-  decisions.csv, manifest.json, predictions.npz.
-Include the directory tree and a short "how to use it" per file. -->
+Everything a run produces lives under the output directory you chose on the
+Settings screen:
 
-_To be written._
+```text
+<output>/
+├── experiment_config.yaml        copy of the config this run used
+├── epochs/                       cleaned epochs
+├── models/
+│   └── decoder_pipeline.joblib   the trained decoder (Phase 2 loads this)
+└── phase2_live/
+    └── <timestamp>/              one folder per live Start
+        ├── predictions.csv
+        ├── markers.csv
+        ├── decisions.csv
+        ├── decision_config.jsonl
+        ├── manifest.json
+        └── predictions.npz
+```
+
+### After training (Phase 1)
+
+- **`models/decoder_pipeline.joblib`:** the trained decoder bundle. It is what
+  Phase 2 (and Open Live from Existing Output) loads to run live inference. Keep
+  it to run live sessions later without retraining.
+- **`epochs/`:** the cleaned epochs, for offline analysis.
+- **`experiment_config.yaml`:** a copy of the exact config this run used.
+
+### After a live session (Phase 2)
+
+Each time you press Start, a new timestamped folder appears under `phase2_live/`:
+
+- **`predictions.csv`:** one row per output sample, with `lsl_timestamp`,
+  `t_sec`, and one column per decoder holding its probability.
+- **`markers.csv`:** every trigger event, as `lsl_timestamp`, `t_sec`, `code`,
+  `name`. It shares the `lsl_timestamp` clock with `predictions.csv`, so markers
+  align to predictions.
+- **`decisions.csv`:** the thresholded per-decoder decisions (when decision
+  logging is active). Its `config_version` column points at the decision settings
+  in effect for each row.
+- **`decision_config.jsonl`:** the decision settings for each version (version 0
+  is the initial settings, with a new entry each time you Apply a change).
+- **`manifest.json`:** run metadata: schema version, wall-clock start, the LSL
+  `t0`, row counts, and the model metadata (plus the decision schema version and
+  initial settings when decision logging is active).
+- **`predictions.npz`:** the full-precision arrays plus an embedded copy of the
+  manifest, written when the run closes. This is the convenient input for
+  analysis in Python.
+
+`t_sec` is seconds since the first sample of the run. The CSVs are written
+continuously and are the source of truth, so a run interrupted before it closes
+still has usable data.
 
 ## Troubleshooting
 
