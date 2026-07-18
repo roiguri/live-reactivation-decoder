@@ -52,9 +52,17 @@ When you start the app it opens on a welcome screen with two entry points.
 
 ## Phase 1: Training (offline)
 
-<!-- TODO (Phase 1 intro): one line framing Phase 1 as the operator-driven
-sequence Settings -> Load Data -> Preprocess -> Evaluate -> Train, producing the
-decoder artifact. -->
+Training runs as a fixed five-step sequence: **Settings**, **Load Data**,
+**Preprocessing**, **Evaluation**, and **Train & Save**. Together they clean the
+recording and fit one decoder per task, producing the decoder artifact.
+
+The panel on the right side of every Phase 1 screen (the **Training Pipeline**)
+is the navigation for these steps. It highlights the step you are on and holds
+that step's action button (for example **Continue** or **Run Evaluation**). When
+a step finishes it is marked complete with a short summary of its result, and the
+panel advances to the next step. You move through the steps in order.
+
+![The Training Pipeline panel part-way through a run](../assets/walkthrough/01a-training-pipeline.png)
 
 ### Pipeline Settings
 
