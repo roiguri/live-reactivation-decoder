@@ -189,15 +189,17 @@ From here you can go live to run it against a stream.
 
 ## Phase 2: Live inference (online)
 
-<!-- TODO (Phase 2 intro): one line framing Phase 2 as running the trained decoder
-against a live LSL stream in real time. -->
+In this phase the trained decoder runs against a live LSL stream and shows its
+output in real time. It keeps running until you halt it.
 
 ### Entering live
 
-<!-- TODO: the two ways in - the Go Live handoff at the end of Phase 1, or "Open
-Live from Existing Output" from the welcome screen against a prior run's folder. -->
+There are two ways in:
 
-_To be written._
+- **Go Live** at the end of Phase 1 hands the decoder you just trained straight to
+  the live screen.
+- **Open Live from Existing Output** on the welcome screen loads a decoder from a
+  folder a previous run already trained into.
 
 ### Discover and select the stream
 
