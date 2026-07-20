@@ -10,7 +10,7 @@ This README has three parts:
 1. **[Getting Started](#getting-started)**: install and run.
 2. **[User Guide](#user-guide)**: what the app works with, how to configure an
    experiment, and how to operate it.
-3. **[Developer Guide](#developer-guide)**: architecture, hardware, and analysis.
+3. **[Developer Guide](#developer-guide)**: architecture, hardware, and testing.
 
 ---
 
@@ -198,23 +198,34 @@ screenshot-driven guide to operating the app end to end. It covers:
 
 ### Software Architecture
 
-<!-- TODO (step: Architecture): short overview of the decoupled UI/backend
-model and the Phase 1 → artifact → Phase 2 data flow, then links out for depth. -->
+The app is a PyQt6 frontend over a decoding backend, running in two phases:
+offline decoder training and live inference.
 
-_Overview to be written._ For now, the maintained references are:
+For the details:
 
-- [docs/architecture/backend_architecture.md](docs/architecture/backend_architecture.md): backend surface & contracts
-- [docs/architecture/frontend_layout.md](docs/architecture/frontend_layout.md): frontend structure
-- [docs/architecture/stream_worker_design.md](docs/architecture/stream_worker_design.md): live decoder loop design
-- [docs/architecture/logging.md](docs/architecture/logging.md): logging conventions
-- [CLAUDE.md](CLAUDE.md): repo conventions and how to work in this codebase
-- [docs/README.md](docs/README.md): full documentation map
+- [Backend architecture](docs/architecture/backend.md): the `AppSession` entry point, the two phases, the artifact, the live loop, and the decision layer.
+- [Frontend architecture](docs/architecture/frontend.md): the application window, the three screens, the Phase 1 views, and the Phase 2 live screen.
+- [Logging conventions](docs/architecture/logging.md).
+- [CLAUDE.md](CLAUDE.md): repo conventions and how to work in this codebase.
 
-#### Debug Mode
+### Hardware Architecture
 
-<!-- TODO (step: Architecture): expand on how the debug entry points and seeded
-snapshot profiles let you jump straight into any screen without a full pipeline
-run. -->
+Live inference reads EEG from a NeurOne amplifier, bridged onto an LSL stream the
+app consumes.
+
+See the [Hardware guide](docs/guide/hardware.md) for the full signal chain, setup,
+stream contract, and trigger decoding.
+
+### Helper scripts
+
+`scripts/` holds command-line helpers for development and lab work. The useful
+groups:
+
+- Replay a recording as a live LSL stream: `replay_vhdr_to_lsl.py`, `replay_xdf_to_lsl.py`.
+- Inspect and smoke-test the live path: `characterize_lsl.py`, `smoke_test_lsl_receiver.py`, `smoke_stream_worker.py`, `inspect_xdf.py`.
+- Set up dev data and fixtures: `demo_seed_debug_snapshots.py`, `create_test_eeg.py`, `split_subject_by_phase.py`.
+
+### Debug Mode
 
 Fast path for iterating on UI screens without sitting through ~5 min of real
 preprocessing each time. **One-time seed** from a real recording, then drive the
@@ -241,19 +252,3 @@ Expected: `322 passed, 1 skipped, 11 deselected`.
   `RUN_LSL_INTEGRATION=1`, and runs only against a real LSL stream.
 - The 11 deselections are `test_stream_worker.py`, which needs
   `pytest-qt`/`qtbot` and a live LSL outlet. It's not a regression.
-
-### Hardware
-
-<!-- TODO (step: Hardware): the EEG acquisition setup (NeurOne amplifier,
-64 EEG + 1 event channel at 1000 Hz, µV on the wire), the LSLProxy bridge, and
-the parallel-port trigger interface. New page: docs/guide/hardware.md. -->
-
-_To be written._
-
-### Analysis
-
-<!-- TODO (step: Analysis): how existing data was analyzed and how to reproduce
-the project's results (FL / encoding / retrieval replay). -->
-
-_To be written._ See
-[tests/notebooks/analysis/README.md](tests/notebooks/analysis/README.md).
