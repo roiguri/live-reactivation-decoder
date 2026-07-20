@@ -203,8 +203,8 @@ offline decoder training and live inference.
 
 For the details:
 
-- [Backend architecture](docs/architecture/backend.md): the `AppSession` entry point, the two phases, the artifact, the live loop, and the decision layer.
-- [Frontend architecture](docs/architecture/frontend.md): the application window, the three screens, the Phase 1 views, and the Phase 2 live screen.
+- [Backend architecture](docs/guide/backend.md): the `AppSession` entry point, the two phases, the artifact, the live loop, and the decision layer.
+- [Frontend architecture](docs/guide/frontend.md): the application window, the three screens, the Phase 1 views, and the Phase 2 live screen.
 - [Logging conventions](docs/architecture/logging.md).
 - [CLAUDE.md](CLAUDE.md): repo conventions and how to work in this codebase.
 

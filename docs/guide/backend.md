@@ -240,7 +240,7 @@ publishes. It validates the stream on `start()` (stream type `EEG`, name
 `NeuroneStream`, exactly 65 channels = 64 EEG + 1 trigger, 1000 Hz) and splits
 each pull into `(timestamps, eeg, markers)`, decoding trigger codes off the
 trigger channel and emitting one `(timestamp, code)` per rising edge. See
-[hardware.md](../guide/hardware.md) for the stream contract and trigger decoding.
+[hardware.md](hardware.md) for the stream contract and trigger decoding.
 
 ### `StreamSource` — making the stream appear
 
