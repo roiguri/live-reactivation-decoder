@@ -50,7 +50,7 @@ Two things the proxy does that the rest of the app depends on:
 
 - It applies the amplifier's AC scaling (**divides by 20**) before publishing, so
   the LSL stream carries values in **microvolts**.
-- It embeds **no channel metadata** — the stream has no channel names.
+- It embeds **no channel metadata**: the stream has no channel names.
 
 The app manages this process through `LslProxySource`
 (`src/backend/online_phase/stream_source.py`). It is **Windows-only** (the bundled
@@ -104,13 +104,13 @@ resolves the stream and pulls from it. It resolves by type `EEG` and name
 - exactly **1000 Hz**, and
 - exactly **65 channels** (64 EEG + 1 trigger).
 
-1000 Hz is the rate the app currently supports — the receiver enforces it. The
+1000 Hz is the rate the app currently supports: the receiver enforces it. The
 rate is set on the NeurOne side (the Packet Frequency in the Real-time Out
 settings, below); running at a different rate is possible on the hardware but
 would require matching changes in the app, so it is fixed at 1000 Hz for now.
 
 Because the stream carries no channel labels, the electrode-to-position mapping is
-**not** read from the stream — it is applied positionally in preprocessing
+**not** read from the stream: it is applied positionally in preprocessing
 (`src/backend/core/preprocessing_constants.py`): the `easycap-M1` montage, with
 the EMG channel dropped and `HEGOC` renamed to `HEOG`.
 
@@ -133,7 +133,7 @@ constant is the only thing that changes.
 ## Triggers
 
 Event markers are parallel-port codes emitted by the stimulus program. There is
-**no separate marker stream** — the codes ride inside the EEG stream on the
+**no separate marker stream**: the codes ride inside the EEG stream on the
 trigger channel (channel 65, index 64), one value per sample.
 
 NeurOne packs several trigger sources into that integer using a fixed bit layout;

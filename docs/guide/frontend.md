@@ -5,8 +5,8 @@ the three screens, the Phase 1 training journey, the Phase 2 live screen, and th
 shared machinery (background workers, loading idioms, styling).
 
 The frontend talks to exactly one backend object, `AppSession`. It never imports
-backend internals; everything it needs — the offline pipeline, live-stream
-composition, stream discovery — comes through that one handle. See
+backend internals; everything it needs (the offline pipeline, live-stream
+composition, stream discovery) comes through that one handle. See
 [backend.md](backend.md) for what sits behind it.
 
 ---
@@ -28,7 +28,7 @@ window.show_screen(LaunchScreen())
 `MainWindow` (`main_window.py`) is a single `QMainWindow` (1280×800, min
 960×600) whose central widget is a `QStackedWidget`. It holds one screen at a
 time; `show_screen(widget)` adds the widget if new and makes it current.
-Navigation is **one-way** — screens are pushed forward, and leaving Phase 2 means
+Navigation is **one-way**: screens are pushed forward, and leaving Phase 2 means
 restarting the app.
 
 ---
@@ -44,18 +44,18 @@ flowchart LR
     L -->|Open Live from<br/>Existing Output| P2
 ```
 
-- **`LaunchScreen`** — the startup pre-screen. Two mutually exclusive entries:
+- **`LaunchScreen`**: the startup pre-screen. Two mutually exclusive entries:
   *Start New Training* opens `Phase1Screen`; *Open Live from Existing Output*
   picks a prior run's output folder and jumps straight to `Phase2Screen`.
-- **`Phase1Screen`** — the offline training steps (below). Its final step hands
+- **`Phase1Screen`**: the offline training steps (below). Its final step hands
   off to Phase 2.
-- **`Phase2Screen`** — the live-inference screen (below).
+- **`Phase2Screen`**: the live-inference screen (below).
 
 The "Open Live" path is built by `screens/phase2_launch.py`:
 `missing_live_artifacts(output_dir)` checks the folder has the config and
 `models/decoder_pipeline.joblib`, and `build_phase2_from_output(output_dir)`
 constructs an `AppSession`, assigns `session.paths` directly (no
-`OfflineOrchestrator` — Phase 2 is live-only), and hands it to `Phase2Screen`.
+`OfflineOrchestrator`, Phase 2 is live-only), and hands it to `Phase2Screen`.
 
 ---
 
@@ -69,7 +69,7 @@ Pipeline" in the UI).
 Phase1Screen
 ├── workspace card
 │   ├── header bar (title tracks the active node)
-│   └── QStackedWidget — one view at a time:
+│   └── QStackedWidget, one view at a time:
 │       [0] SettingsView       Pipeline Settings
 │       [1] LoadDataView       Data Ingestion
 │       [2] PreprocessingView  Preprocessing
@@ -88,7 +88,7 @@ flowchart LR
 
 ### The step contract
 
-`Phase1Screen` owns no pipeline logic — it wires each view to its step in the
+`Phase1Screen` owns no pipeline logic: it wires each view to its step in the
 sidebar and relays results. Every view exposes the same small surface, so the
 wiring is uniform:
 
@@ -141,10 +141,10 @@ NeurOne is connected by the time the operator picks a target or clicks Start. Th
 `LiveStreamSession` itself is built **lazily on each Start** and is one-shot (a
 stopped session is discarded, a new one built next Start):
 
-1. **Choose target** — `TargetSelectionDialog` (from `session.discover_streams()`)
+1. **Choose target**: `TargetSelectionDialog` (from `session.discover_streams()`)
    picks the live LSL stream. Start doubles as "pick, then start" if no target is
    set.
-2. **Start** — reset the charts, ensure the source is up, allocate a log dir
+2. **Start**: reset the charts, ensure the source is up, allocate a log dir
    (`session.new_phase2_log_dir()`), call
    `session.build_live_stream_session(..., stream_name=..., decision_params=...)`,
    wire its signals, and `start()`.
@@ -190,10 +190,10 @@ worker (this is why the pipeline is split into operator-gated steps in
 
 ## Charts
 
-- **Phase 1 (matplotlib)** — `widgets/charts/`: `auc_chart.py`, `tgm_chart.py`
+- **Phase 1 (matplotlib)**, `widgets/charts/`: `auc_chart.py`, `tgm_chart.py`
   (temporal-generalization matrix), and `topomap_widget.py`, used by
   `EvaluationView` and `TrainView`.
-- **Phase 2 (pyqtgraph)** — `widgets/live_probability_chart.py`, a
+- **Phase 2 (pyqtgraph)**: `widgets/live_probability_chart.py`, a
   ring-buffered rolling trace built for the live update rate. `pyqtgraph` is a
   runtime dependency scoped to Phase 2; Phase 1 stays on matplotlib.
 
@@ -215,10 +215,10 @@ Styling lives in `styles/theme.py`:
 - Named colour constants (`BG_LIGHT`, `CARD_WHITE`, `BORDER_GRAY`,
   `PRIMARY_BLUE`, `SUCCESS_GREEN`, `TEXT_PRIMARY`, `TEXT_MUTED`, `ALERT_RED`,
   `AMBER`).
-- `CHART_LINE_COLORS` + `chart_line_color(index)` — the decoder-line palette,
+- `CHART_LINE_COLORS` + `chart_line_color(index)`: the decoder-line palette,
   deliberately avoiding red/green/blue/yellow so a decoder named "red" never gets
   a red line, and reserving blue for the selected-timepoint markers.
-- `GLOBAL_QSS` — the app stylesheet: `primary` / `secondary` button classes and
+- `GLOBAL_QSS`, the app stylesheet: `primary` / `secondary` button classes and
   the flat underline tab style.
 - `progress_bar_qss` and `build_app_palette` helpers.
 
