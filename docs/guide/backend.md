@@ -19,7 +19,7 @@ The frontend never touches these classes directly. It talks to one object,
 
 ## The `AppSession` entry point
 
-`src/backend/session.py` — `AppSession` is the single entry point the frontend
+`src/backend/session.py`: `AppSession` is the single entry point the frontend
 imports. It owns the `SettingsManager` lifetime and the session's on-disk layout,
 and it builds both phases.
 
@@ -34,18 +34,18 @@ Two-stage initialisation:
 
 Key members:
 
-- `session.offline` — the Phase 1 orchestrator (see below), available after
+- `session.offline`: the Phase 1 orchestrator (see below), available after
   `configure_output`.
-- `session.paths` — a `SessionPaths` (see below), the on-disk layout authority.
-- `session.settings` — all config sections as one dict.
-- `discover_streams(timeout_sec=3.0)` — ensure the stream source is publishing,
+- `session.paths`: a `SessionPaths` (see below), the on-disk layout authority.
+- `session.settings`: all config sections as one dict.
+- `discover_streams(timeout_sec=3.0)`: ensure the stream source is publishing,
   then return the visible LSL stream names.
-- `start_stream_source()` / `stop_stream_source()` — own the live stream source
+- `start_stream_source()` / `stop_stream_source()`: own the live stream source
   lifecycle (the proxy) so the frontend never launches it.
-- `build_live_stream_session(...)` — compose a Phase 2 run (below).
-- `new_phase2_log_dir()` — create and return a fresh live-log run directory, or
+- `build_live_stream_session(...)`: compose a Phase 2 run (below).
+- `new_phase2_log_dir()`: create and return a fresh live-log run directory, or
   `None` when no workspace is set (live inference then runs unlogged).
-- `decision_config_defaults()` — the initial decision settings as plain values,
+- `decision_config_defaults()`: the initial decision settings as plain values,
   to seed the UI controls.
 
 For a live-only jump (a debug Phase 2 launch or "Open Live from Existing Output"),
@@ -53,7 +53,7 @@ For a live-only jump (a debug Phase 2 launch or "Open Live from Existing Output"
 
 ### `LiveStreamSession`
 
-`build_live_stream_session` returns a `LiveStreamSession` — the lifecycle wrapper
+`build_live_stream_session` returns a `LiveStreamSession`, the lifecycle wrapper
 for one composed live run. It owns start/stop/cleanup of the receiver, worker,
 decision binding, and optional logger, and forwards their Qt signals without
 exposing internals:
@@ -78,7 +78,7 @@ decision settings (plain values, so the frontend never touches backend types);
 
 ## How files are laid out on disk
 
-`src/backend/core/session_paths.py` — a frozen dataclass rooted at the output
+`src/backend/core/session_paths.py`: a frozen dataclass rooted at the output
 directory. It is the **only** place the directory structure is defined; every
 phase derives its locations from it rather than composing path joins:
 
@@ -130,9 +130,9 @@ The config is how an experiment maps onto the decoders, with no code changes:
 
 ### The preprocessing recipe
 
-The **preprocessing recipe is not in the config**. The full recipe — channel
+The **preprocessing recipe is not in the config**. The full recipe (channel
 hygiene, high-pass, notch, low-pass, resample/decimate, epoching, and
-ICA + ICLabel — is fixed as named constants in
+ICA + ICLabel) is fixed as named constants in
 `src/backend/core/preprocessing_constants.py` and imported directly by both
 preprocessors. This is what keeps the online path from ever diverging from the
 training recipe.
@@ -149,7 +149,7 @@ the config and exposes it to the rest of the app:
 
 ## Phase 1: offline training
 
-`src/backend/offline_phase/orchestrator.py` — `OfflineOrchestrator` is the façade
+`src/backend/offline_phase/orchestrator.py`: `OfflineOrchestrator` is the façade
 over the Phase 1 backend and the single entry point for the Phase 1 UI. It owns
 raw file I/O, holds intermediate state between operator-gated steps, and bundles
 the final artifact export. Construction: `OfflineOrchestrator(settings_manager,
@@ -160,7 +160,7 @@ native interactive windows (which must run on the GUI main thread):
 
 ```python
 set_file_path(data_dir)
-load_raw_data()                                   # I/O — user clicks Load
+load_raw_data()                                   # I/O, user clicks Load
 raw = run_step1a_filter()                         # worker thread
 # UI: raw.plot(block=True) → operator marks bad channels
 set_bad_channels(raw.info["bads"])                # main thread
@@ -176,19 +176,19 @@ artifact = get_live_artifact_spec()
 The collaborators the orchestrator drives:
 
 - `OfflinePreprocessor(data_dir, random_state, raw=None)`
-  (`preprocessor.py`) — runs the recipe from the constants; the seed is the only
+  (`preprocessor.py`): runs the recipe from the constants; the seed is the only
   tunable. Produces the cleaned epochs saved under `epochs/`. Also builds
   interval epochs from the optional `intervals` block by tiling epoch-sized
   windows inside each `[start, stop]` span.
-- `ModelEvaluator` (`evaluator.py`) — temporal-generalization cross-validation.
+- `ModelEvaluator` (`evaluator.py`): temporal-generalization cross-validation.
   Each epoch is a stimulus-locked window, and a classifier is trained and scored
   at every timepoint in that window, producing a decodability-over-time curve per
   decoder. This is what the operator reads to choose the single timepoint each
   decoder will be trained and deployed at (the moment the class is most separable
   post-stimulus).
-- `ModelTrainer` (`trainer.py`) — trains one classifier per task at its
+- `ModelTrainer` (`trainer.py`): trains one classifier per task at its
   operator-chosen timepoint.
-- `utils.py` — shared `build_classifier` and `get_task_data`.
+- `utils.py`: shared `build_classifier` and `get_task_data`.
 
 `run_step2_apply_and_save` and `run_training` write to disk via `SessionPaths`.
 `get_live_artifact_spec()` returns the validated `DecoderPipelineArtifactSpec`
@@ -204,27 +204,30 @@ with three keys, defined producer-side by `DecoderPipelineArtifactSpec`
 (`core/artifact_models.py`) and read back by `load_decoder_pipeline_artifact`
 (`online_phase/artifact_loader.py`) into a `DecoderPipelineArtifact` dataclass.
 
-- **`models`** — `{decoder_name: sklearn.Pipeline}`, one fitted pipeline per
+- **`models`**: `{decoder_name: sklearn.Pipeline}`, one fitted pipeline per
   task, keyed by the task name. `LiveInferenceEngine` calls each directly.
-- **`metadata`** — a `DecoderPipelineMetadata`: `feature_width` (the number of
+- **`metadata`**: a `DecoderPipelineMetadata` holding `feature_width` (the number of
   EEG channels the models expect) and `decoding_timepoints`
   (`{task_name: seconds}`, each decoder's chosen timepoint). `feature_width` is
   cross-checked against `online_state` at export.
-- **`online_state`** — the frozen preprocessing state that lets the online
+- **`online_state`**: the frozen preprocessing state that lets the online
   pipeline reproduce the offline transforms **exactly**, so the features the
   live models see are the same shape and calibration they were trained on. Its
-  keys (all positional — no channel names):
-  - `eeg_chunk_indices` — which stream channels are the EEG channels.
-  - `bad_indices` + `interp_weights` — the bad channels marked offline and the
+  keys (all positional, no channel names):
+  - `eeg_chunk_indices`: which stream channels are the EEG channels.
+  - `bad_indices` + `interp_weights`: the bad channels marked offline and the
     precomputed interpolation weights to reconstruct them online.
   - `ica_unmixing` / `ica_mixing` / `ica_pca_components` / `ica_pca_mean` /
-    `ica_exclude` — the fitted ICA matrices and the components the operator
+    `ica_exclude`: the fitted ICA matrices and the components the operator
     excluded, applied online without re-fitting.
-  - `pre_whitener` — the pre-whitening applied before ICA.
+  - `pre_whitener`: the pre-whitening applied before ICA.
 
 Because both preprocessors read the *recipe* from the same constants and the
 online path reads the fitted *state* from this artifact, Phase 2 can never
 silently diverge from how the decoder was trained.
+
+To swap the decoder for a different model, or for a different decoding approach
+altogether, see [replacing_the_decoder.md](replacing_the_decoder.md).
 
 ---
 
@@ -233,7 +236,7 @@ silently diverge from how the decoder was trained.
 `build_live_stream_session` composes these pieces. Each is independently
 testable; the worker owns only the micro-batch loop.
 
-### `LSLReceiver` — pure consumer
+### `LSLReceiver`: pure consumer
 
 `online_phase/lsl_receiver.py`. Resolves and pulls from the LSL stream; it never
 publishes. It validates the stream on `start()` (stream type `EEG`, name
@@ -242,7 +245,7 @@ each pull into `(timestamps, eeg, markers)`, decoding trigger codes off the
 trigger channel and emitting one `(timestamp, code)` per rising edge. See
 [hardware.md](hardware.md) for the stream contract and trigger decoding.
 
-### `StreamSource` — making the stream appear
+### `StreamSource`: making the stream appear
 
 `online_phase/stream_source.py`. Publishing a stream onto the network is a
 separate responsibility from consuming it. `StreamSource` is a small protocol
@@ -251,7 +254,7 @@ separate responsibility from consuming it. `StreamSource` is a small protocol
 and reuses it between discovery and the run, so the hardware connection is not
 churned.
 
-### `OnlinePreprocessor` — config-independent
+### `OnlinePreprocessor`: config-independent
 
 `online_phase/online_preprocessor.py`. Constructed as
 `OnlinePreprocessor(online_state=artifact.online_state)`. It reads the recipe from
@@ -265,17 +268,17 @@ scaling the decoder expects) and returns the model-ready features.
 `LiveInferenceEngine(models=artifact.models, metadata=artifact.metadata)`.
 `predict(features)` returns a `{decoder_name: probability_vector}` dict.
 
-### `StreamWorker` — the micro-batch loop
+### `StreamWorker`: the micro-batch loop
 
 `online_phase/stream_worker.py`, a `QThread`. It owns only the loop: pull from the
 receiver, accumulate into fixed-size batches (default 40 samples), preprocess,
 infer, and emit. Signals:
 
-- `prediction_ready(dict, np.ndarray, list)` — per-decoder probabilities, their
+- `prediction_ready(dict, np.ndarray, list)`: per-decoder probabilities, their
   timestamps, and the batch's markers.
-- `latency_ready(dict)` — per-batch timing diagnostics (pull / preprocess /
+- `latency_ready(dict)`: per-batch timing diagnostics (pull / preprocess /
   inference / sample-to-decision latency, backlog).
-- `error_occurred(str)` — a stage failure that stops the loop.
+- `error_occurred(str)`: a stage failure that stops the loop.
 
 ### Decision layer
 
@@ -290,14 +293,14 @@ flowchart LR
     S --> A["active[decoder]"]
 ```
 
-- `DecisionConfig` — the immutable tunable rule: a global `threshold`, plus
+- `DecisionConfig`, the immutable tunable rule: a global `threshold`, plus
   `sustain_timepoints` / `release_timepoints` debounce counts (counted in
-  timepoints, one per prediction — no sampling frequency involved).
-- `DecisionEngine.process_batch(predictions, timestamps)` — threads the latch
+  timepoints, one per prediction, no sampling frequency involved).
+- `DecisionEngine.process_batch(predictions, timestamps)`: threads the latch
   state across batch boundaries and returns a `DecisionResult` (per-sample
   `active` booleans). Live config changes are staged via `set_pending_config`
   and applied at the next batch boundary.
-- `DecisionBinding` — the thin Qt layer: a sibling consumer of `prediction_ready`
+- `DecisionBinding`, the thin Qt layer: a sibling consumer of `prediction_ready`
   (like the logger, connected directly), emitting `decision_ready`. The engine
   itself is pure Python (no Qt, no I/O), so the logic stays unit-testable without
   an event loop.
@@ -327,36 +330,13 @@ bundle from the CSVs so a run that crashed before `close()` can still be exporte
 
 ## Live data flow
 
-```mermaid
-flowchart TB
-    HW[NeurOne amplifier] --> PX[LSLProxy] --> LSL[/"LSL stream · 65 ch · 1000 Hz"/]
-    LSL -->|pull_new_data| RX[LSLReceiver]
+<!-- Diagram source: ../assets/live_data_flow.mmd (rendered with the mermaid ELK
+     layout so edges route into the Consumers subgraph; edit it, then re-render
+     to ../assets/live_data_flow.png). -->
+![Live data flow: NeurOne to LSLProxy to the LSL stream, pulled by LSLReceiver into the StreamWorker loop (accumulate, preprocess, infer), which emits prediction_ready and derives decision_ready, both fanning out to the live chart, the decision panel, and the session logger.](../assets/live_data_flow.png)
 
-    subgraph WORKER["StreamWorker loop · QThread"]
-        direction LR
-        ACC["accumulate<br/>40-sample batch"] --> PRE["OnlinePreprocessor<br/>process_batch"] --> INF["LiveInferenceEngine<br/>predict"]
-    end
-    RX --> ACC
-
-    INF --> SIG1(["prediction_ready"])
-    SIG1 --> DB["DecisionBinding →<br/>DecisionEngine"]
-    DB --> SIG2(["decision_ready"])
-
-    subgraph OUT["Consumers"]
-        direction LR
-        CHART["LiveProbabilityChart<br/>live UI"]
-        PANEL["Decision panel<br/>live UI"]
-        LOG[("LiveSessionLogger<br/>CSV · npz")]
-    end
-
-    SIG1 --> CHART
-    SIG1 --> LOG
-    SIG2 --> PANEL
-    SIG2 --> LOG
-```
-
-The flow has a single spine — infer, emit `prediction_ready`, derive decisions,
-emit `decision_ready` — and every consumer hangs off one of those two signals.
+The flow has a single spine (infer, emit `prediction_ready`, derive decisions,
+emit `decision_ready`), and every consumer hangs off one of those two signals.
 `prediction_ready` feeds the chart, the logger, and the decision binding;
 `decision_ready` feeds the decision panel and the logger. The logger is the one
 node fed by both, since it records probabilities and decisions together. Each

@@ -1,0 +1,29 @@
+---
+config:
+  layout: elk
+---
+flowchart TB
+    HW[NeurOne amplifier] --> PX[LSLProxy] --> LSL[/"LSL stream · 65 ch · 1000 Hz"/]
+    LSL -->|pull_new_data| RX[LSLReceiver]
+
+    subgraph WORKER["StreamWorker loop · QThread"]
+        direction LR
+        ACC["accumulate<br/>40-sample batch"] --> PRE["OnlinePreprocessor<br/>process_batch"] --> INF["LiveInferenceEngine<br/>predict"]
+    end
+    RX --> ACC
+
+    INF --> SIG1(["prediction_ready"])
+    SIG1 --> DB["DecisionBinding →<br/>DecisionEngine"]
+    DB --> SIG2(["decision_ready"])
+
+    subgraph OUT["Consumers"]
+        direction LR
+        CHART["LiveProbabilityChart<br/>live UI"]
+        PANEL["Decision panel<br/>live UI"]
+        LOG[("LiveSessionLogger<br/>CSV · npz")]
+    end
+
+    SIG1 --> CHART
+    SIG1 --> LOG
+    SIG2 --> PANEL
+    SIG2 --> LOG

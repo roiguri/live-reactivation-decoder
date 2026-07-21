@@ -205,8 +205,8 @@ For the details:
 
 - [Backend architecture](docs/guide/backend.md): the `AppSession` entry point, the two phases, the artifact, the live loop, and the decision layer.
 - [Frontend architecture](docs/guide/frontend.md): the application window, the three screens, the Phase 1 views, and the Phase 2 live screen.
+- [Replacing the decoder](docs/guide/replacing_the_decoder.md): how to swap the models, or the whole decoding approach, while keeping the rest of the app.
 - [Logging conventions](docs/architecture/logging.md).
-- [CLAUDE.md](CLAUDE.md): repo conventions and how to work in this codebase.
 
 ### Hardware Architecture
 
@@ -237,18 +237,23 @@ python -m frontend.debug.main
 ```
 
 See [src/frontend/debug/README.md](src/frontend/debug/README.md) for the full
-walkthrough mechanics and [docs/reference/debug_profiles.md](docs/reference/debug_profiles.md)
-for the seeded snapshot profiles.
+walkthrough mechanics and the seeded snapshot profiles.
 
 ### Testing
 
+The suite lives under `tests/`, organized to mirror the source: `core/` for
+config and session-path validation, `offline_phase/` for the training pipeline
+(preprocessor, evaluator, trainer, orchestrator), `online_phase/` for the live
+path (LSL receiver, online preprocessor, inference, decision engine, session
+logger, stream worker), and `frontend/` for headless Qt tests of the screens,
+views, and widgets.
+
+Run it with:
+
 ```bash
-pytest -q --deselect tests/online_phase/test_stream_worker.py
+pytest tests/
 ```
 
-Expected: `322 passed, 1 skipped, 11 deselected`.
-
-- The 1 skip is `test_lsl_receiver_integration.py`, gated behind
-  `RUN_LSL_INTEGRATION=1`, and runs only against a real LSL stream.
-- The 11 deselections are `test_stream_worker.py`, which needs
-  `pytest-qt`/`qtbot` and a live LSL outlet. It's not a regression.
+Two things need extra setup. The Qt tests rely on `pytest-qt` (the `qtbot`
+fixture), which the dev requirements provide. And an LSL integration test is
+skipped unless `RUN_LSL_INTEGRATION=1` is set with a real stream present.
