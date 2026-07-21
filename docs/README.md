@@ -6,6 +6,7 @@
   - [backend.md](guide/backend.md): backend surface and contracts
   - [frontend.md](guide/frontend.md): frontend (PyQt6) structure
   - [hardware.md](guide/hardware.md): EEG acquisition, the LSLProxy bridge, and trigger decoding
+  - [replacing_the_decoder.md](guide/replacing_the_decoder.md): how to swap the decoder ("brain") while keeping the app ("hull")
 - **[architecture/](architecture/)**: how the system works now; the maintained,
   source-of-truth-adjacent references:
   - [logging.md](architecture/logging.md): logging conventions

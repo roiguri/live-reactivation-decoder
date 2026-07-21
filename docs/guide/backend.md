@@ -226,6 +226,9 @@ Because both preprocessors read the *recipe* from the same constants and the
 online path reads the fitted *state* from this artifact, Phase 2 can never
 silently diverge from how the decoder was trained.
 
+To swap the decoder for a different model, or for a different decoding approach
+altogether, see [replacing_the_decoder.md](replacing_the_decoder.md).
+
 ---
 
 ## Phase 2: online inference

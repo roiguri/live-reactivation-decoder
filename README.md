@@ -205,6 +205,7 @@ For the details:
 
 - [Backend architecture](docs/guide/backend.md): the `AppSession` entry point, the two phases, the artifact, the live loop, and the decision layer.
 - [Frontend architecture](docs/guide/frontend.md): the application window, the three screens, the Phase 1 views, and the Phase 2 live screen.
+- [Replacing the decoder](docs/guide/replacing_the_decoder.md): how to swap the models, or the whole decoding approach, while keeping the rest of the app.
 - [Logging conventions](docs/architecture/logging.md).
 
 ### Hardware Architecture
